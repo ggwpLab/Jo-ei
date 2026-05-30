@@ -9,13 +9,9 @@ import (
 	"github.com/sca-proxy/sca-proxy/internal/proxy"
 )
 
-// FilterResult describes the outcome of a supply chain age check.
-type FilterResult struct {
-	Allowed     bool
-	Reason      string    // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
-	PublishedAt time.Time
-	BlockUntil  time.Time // non-zero when Allowed=false
-}
+// FilterResult is an alias for proxy.FilterResult kept here for backward compatibility.
+// New code should use proxy.FilterResult directly.
+type FilterResult = proxy.FilterResult
 
 // Allowlist holds explicitly approved packages that bypass the age check.
 // Entry format: "ecosystem/name" (all versions) or "ecosystem/name@version" (specific).

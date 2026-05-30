@@ -55,3 +55,19 @@ type BlockedError struct {
 func (e *BlockedError) Error() string {
 	return fmt.Sprintf("package %s blocked: %s (by %v)", e.Package.Key(), e.Reason, e.BlockedBy)
 }
+
+// FilterResult describes the outcome of a supply chain check.
+// Defined here (in proxy) to avoid import cycles: supplychain imports proxy,
+// so proxy cannot import supplychain.
+type FilterResult struct {
+	Allowed     bool
+	Reason      string    // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
+	PublishedAt time.Time
+	BlockUntil  time.Time // non-zero when Allowed=false
+}
+
+// SCFilter is the interface the handler uses for supply chain checks.
+// supplychain.Filter satisfies this interface.
+type SCFilter interface {
+	Check(ctx context.Context, ref *PackageRef, meta *PackageMetadata) FilterResult
+}
