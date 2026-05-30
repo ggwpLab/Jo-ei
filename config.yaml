@@ -1,0 +1,44 @@
+server:
+  listen: ":8080"
+  tls:
+    enabled: false
+
+registries:
+  pypi:
+    upstream: "https://pypi.org"
+    enabled: true
+  npm:
+    upstream: "https://registry.npmjs.org"
+    enabled: false
+  maven:
+    upstream: "https://repo1.maven.org"
+    enabled: false
+
+supply_chain:
+  min_age_hours: 24
+  mode: "enforce"
+
+cache:
+  backend: "local"
+  local:
+    path: "/var/cache/sca-proxy"
+    max_size_gb: 100
+
+policy:
+  active_profile: "production"
+  profiles:
+    dev:
+      cve_block: false
+      supply_chain_block: false
+    staging:
+      cve_block: true
+      supply_chain_block: true
+    production:
+      cve_block: true
+      supply_chain_block: true
+      malware_block: true
+
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
