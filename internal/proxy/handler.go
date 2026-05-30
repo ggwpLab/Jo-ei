@@ -41,6 +41,13 @@ type HandlerConfig struct {
 	Upstream string
 }
 
+// hopByHopHeaders are connection-specific headers that must not be forwarded
+// by a proxy per RFC 7230 §6.1.
+var hopByHopHeaders = []string{
+	"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+	"TE", "Trailer", "Transfer-Encoding", "Upgrade",
+}
+
 // Handler is the main HTTP handler: intercepts downloads, applies SC filter, caches, proxies.
 type Handler struct {
 	cfg        HandlerConfig
@@ -80,6 +87,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache first
 	if entry, found := h.cfg.Cache.Get(ref); found {
+		if !entry.ScanClean {
+			// Fail-closed: cached entry has failed scan result
+			h.writeError(w, requestID, ref, http.StatusForbidden, "scan_failed")
+			return
+		}
 		log.Debug().Msg("cache hit")
 		h.serveFromCache(w, entry)
 		return
@@ -155,6 +167,9 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 			req.Header.Add(key, v)
 		}
 	}
+	for _, h := range hopByHopHeaders {
+		req.Header.Del(h)
+	}
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -169,7 +184,9 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
+	}
 }
 
 // downloadToTemp downloads url to a temporary file and returns its path.
@@ -216,7 +233,9 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-SCA-Proxy-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, f)
+	if _, err := io.Copy(w, f); err != nil {
+		h.cfg.Logger.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("error streaming cached artifact")
+	}
 }
 
 // writeBlockedResponse sends a 423 Locked response with structured JSON.

@@ -2,8 +2,11 @@ package proxy_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +20,8 @@ import (
 )
 
 // fakeCache is an in-memory ArtifactCache for handler tests.
+// Put copies the artifact to its own temp file so the entry survives
+// the handler's defer os.Remove(tmpPath) after the first request.
 type fakeCache struct {
 	entries map[string]*proxy.ArtifactEntry
 }
@@ -29,11 +34,35 @@ func (f *fakeCache) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
 	e, ok := f.entries[ref.Key()]
 	return e, ok
 }
+
 func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
-	f.entries[ref.Key()] = &proxy.ArtifactEntry{ArtifactPath: tmpPath, ScanClean: clean}
+	// Copy the artifact to a new temp file so the entry persists independently
+	// of the handler's defer os.Remove(tmpPath).
+	src, err := os.Open(tmpPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.CreateTemp("", "fakecache-*")
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		os.Remove(dst.Name())
+		return err
+	}
+
+	f.entries[ref.Key()] = &proxy.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean}
 	return nil
 }
+
 func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error {
+	if e, ok := f.entries[ref.Key()]; ok {
+		os.Remove(e.ArtifactPath)
+	}
 	delete(f.entries, ref.Key())
 	return nil
 }
@@ -148,4 +177,67 @@ func TestHandler_HealthEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if r.URL.Path == "/pypi/flask/3.0.0/json" {
+			publishedAt := time.Now().UTC().Add(-48 * time.Hour)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
+				"urls": []map[string]any{{
+					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
+					"url":                 "https://files.example.com/flask-3.0.0.whl",
+					"digests":             map[string]any{"sha256": "def456"},
+				}},
+			})
+			return
+		}
+		w.Write([]byte("flask-wheel"))
+	}))
+	defer upstream.Close()
+
+	srv := setupTestProxy(t, upstream, "enforce")
+	defer srv.Close()
+
+	url := srv.URL + "/packages/py3/f/flask/flask-3.0.0-py3-none-any.whl"
+
+	// First request: cache miss, hits upstream
+	resp1, err := http.Get(url)
+	require.NoError(t, err)
+	resp1.Body.Close()
+	assert.Equal(t, http.StatusOK, resp1.StatusCode)
+	countAfterFirst := callCount
+
+	// Second request: should use fakeCache (returns same entry)
+	// fakeCache.Get returns the entry stored in first Put
+	resp2, err := http.Get(url)
+	require.NoError(t, err)
+	resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+	assert.Equal(t, "HIT", resp2.Header.Get("X-SCA-Proxy-Cache"))
+	// Upstream call count should not increase on cache hit
+	assert.Equal(t, countAfterFirst, callCount)
+}
+
+func TestHandler_MetadataFailureReturns502(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pypi/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("content"))
+	}))
+	defer upstream.Close()
+
+	srv := setupTestProxy(t, upstream, "enforce")
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.31.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 }
