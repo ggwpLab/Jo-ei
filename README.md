@@ -100,8 +100,8 @@ Every package download goes through this pipeline:
 If any scanner is unreachable, the request is rejected (fail-closed). The proxy never serves
 an artifact that has not been approved.
 
-Index and metadata requests (e.g. `/simple/requests/` for pip, `/-/package/lodash` for npm)
-are proxied transparently to the upstream registry without scanning or caching.
+Index and metadata requests (e.g. `/simple/requests/` for pip) are proxied transparently
+to the upstream registry without scanning or caching.
 
 ## Configuration
 
@@ -197,7 +197,7 @@ in error, or use a different package.
 
 ## Building from Source
 
-**Prerequisites:** Go 1.21+ (see [go.dev/dl](https://go.dev/dl/) for downloads)
+**Prerequisites:** Go 1.25+ (see [go.dev/dl](https://go.dev/dl/) for downloads)
 
 ```bash
 # Download the latest stable Go from https://go.dev/dl/ and follow the install instructions.
@@ -215,6 +215,6 @@ go build -o bin/sca-proxy ./cmd/sca-proxy
 # Unit tests
 go test ./...
 
-# Integration tests (require Docker for ClamAV socket, or set up manually)
+# Integration tests (use in-process mocks; no external services required)
 go test ./integration/... -tags integration
 ```
