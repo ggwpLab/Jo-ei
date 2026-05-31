@@ -77,3 +77,24 @@ curl -s http://localhost:8080/health
 # Install a well-known package (should pass)
 pip install requests==2.31.0 --index-url http://localhost:8080/simple/ --trusted-host localhost
 ```
+
+## How it Works
+
+Every package download goes through this pipeline:
+
+1. **Cache lookup** — if the artifact was previously approved and cached, it is served
+   immediately with `X-SCA-Proxy-Cache: HIT`. No upstream contact.
+
+2. **Supply Chain Filter** — fetches version metadata from the upstream registry and checks
+   `upload_time`. Packages published less than `supply_chain.min_age_hours` ago are rejected
+   with HTTP **423 Locked**.
+
+3. **CVE Scan** — queries [osv.dev](https://osv.dev) with the package name and version.
+   If any finding meets or exceeds `cve.block_on` severity, the package is rejected with
+   HTTP **403 Forbidden**. Results are cached in memory for `cve.cache_ttl_minutes`.
+
+4. **Download + Cache** — the artifact is downloaded from the upstream registry, stored in
+   the local cache, and served to the client.
+
+If any scanner is unreachable, the request is rejected (fail-closed). The proxy never serves
+an artifact that has not been approved.
