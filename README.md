@@ -1,6 +1,7 @@
 # sca-proxy
 
-A transparent supply chain security proxy for package registries (PyPI, npm, Maven, Go).
+A transparent supply chain security proxy for package registries. Currently supports PyPI;
+npm, Maven, and Go support ships in Phase 3.
 Point your package manager at sca-proxy instead of the upstream registry — it intercepts
 every download and enforces three layers of protection before serving the artifact.
 
@@ -8,12 +9,12 @@ every download and enforces three layers of protection before serving the artifa
 Developer (pip/npm/mvn)
         │
         ▼
-  ┌─────────────────────────────────────┐
-  │           SCA Proxy :8080           │
-  │  1. Supply Chain Filter (24h rule)  │
-  │  2. CVE Scanner (osv.dev)           │
-  │  3. Local artifact cache            │
-  └─────────────────────────────────────┘
+  ┌─────────────────────────────────────────────┐
+  │               SCA Proxy :8080               │
+  │  1. Cache lookup (HIT served immediately)   │
+  │  2. Supply Chain Filter (24h rule)          │
+  │  3. CVE Scanner (osv.dev)                   │
+  └─────────────────────────────────────────────┘
         │
         ▼
    Upstream registry (PyPI / npm / …)
@@ -38,8 +39,8 @@ git clone <repo-url> && cd sca-proxy
 docker-compose up -d
 ```
 
-The proxy starts on `http://localhost:8080`. ClamAV initialises its signature database on
-first run — this takes ~60 seconds.
+The proxy starts on `http://localhost:8080`. ClamAV is included in the compose file but
+is not yet active (malware scanning ships in Phase 3).
 
 **2. Point your package manager at the proxy**
 
@@ -57,7 +58,7 @@ index-url = http://localhost:8080/simple/
 trusted-host = localhost
 ```
 
-npm:
+npm (not yet active in default config — PyPI only in the current release):
 ```bash
 npm install lodash --registry http://localhost:8080/
 ```
@@ -99,6 +100,9 @@ Every package download goes through this pipeline:
 If any scanner is unreachable, the request is rejected (fail-closed). The proxy never serves
 an artifact that has not been approved.
 
+Index and metadata requests (e.g. `/simple/requests/` for pip, `/-/package/lodash` for npm)
+are proxied transparently to the upstream registry without scanning or caching.
+
 ## Configuration
 
 The proxy reads `config.yaml` (default path, overridable with `--config`).
@@ -112,6 +116,7 @@ and `_` as separator (e.g. `SCAPROXY_SUPPLY_CHAIN_MODE=dry_run`).
 | `supply_chain.mode` | `enforce` | `enforce` blocks; `dry_run` logs only; `off` disables the filter |
 | `cve.enabled` | `true` | Enable CVE scanning via osv.dev |
 | `cve.block_on` | `HIGH` | Minimum severity to block: `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW` |
+| `cve.cache_ttl_minutes` | `1440` | How long CVE scan results are cached in memory (minutes) |
 | `policy.active_profile` | `production` | Name of the active policy profile |
 | `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks. Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
 | `policy.profiles.<name>.denylist` | `[]` | Packages always blocked regardless of scan results. Same format as `allowlist` |
@@ -182,7 +187,7 @@ A known vulnerability meets or exceeds the configured severity threshold.
   "reason": "denylisted",
   "package": "evil-pkg",
   "version": "1.0.0",
-  "blocked_by": ["cve_scanner"],
+  "blocked_by": ["policy_engine"],
   "request_id": "req_ghi789"
 }
 ```
@@ -192,13 +197,14 @@ in error, or use a different package.
 
 ## Building from Source
 
-**Prerequisites:** Go 1.25+
+**Prerequisites:** Go 1.21+ (see [go.dev/dl](https://go.dev/dl/) for downloads)
 
 ```bash
-# Install Go (if not present)
-curl -fsSL https://go.dev/dl/go1.25.10.linux-amd64.tar.gz -o /tmp/go.tar.gz
-mkdir -p ~/go-sdk && tar -C ~/go-sdk -xzf /tmp/go.tar.gz
-export PATH="$HOME/go-sdk/go/bin:$PATH"
+# Download the latest stable Go from https://go.dev/dl/ and follow the install instructions.
+# On Linux amd64 (adjust version as needed):
+#   curl -fsSL https://go.dev/dl/go1.25.10.linux-amd64.tar.gz -o /tmp/go.tar.gz
+#   mkdir -p ~/go-sdk && tar -C ~/go-sdk -xzf /tmp/go.tar.gz
+#   export PATH="$HOME/go-sdk/go/bin:$PATH"
 
 # Build
 go build -o bin/sca-proxy ./cmd/sca-proxy
