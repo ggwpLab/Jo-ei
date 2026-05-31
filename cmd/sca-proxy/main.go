@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -51,12 +52,18 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	level, _ := zerolog.ParseLevel(cfg.Logging.Level)
+	level, levelErr := zerolog.ParseLevel(cfg.Logging.Level)
+	if levelErr != nil {
+		level = zerolog.InfoLevel
+	}
 	zerolog.SetGlobalLevel(level)
 	logger := log.Logger
 	if cfg.Logging.Format == "text" {
 		logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 			With().Timestamp().Logger()
+	}
+	if levelErr != nil {
+		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
 	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{
@@ -68,7 +75,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	profile := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
+	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
+	if !ok {
+		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
+	}
 
 	shared := sharedDeps{
 		filter: supplychain.NewFilter(cfg.SupplyChain, nil),
@@ -98,6 +108,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			return err
 		}
 		shared.avScanner = av
+	} else if cfg.ClamAV.Enabled {
+		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
+			Msg("clamav.enabled is true but active profile has malware_block:false — AV scanner not attached")
 	}
 
 	// Build one handler per enabled registry, keyed by routing prefix.
@@ -113,6 +126,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if cfg.Registries.Maven.Enabled {
 		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstream),
 			cfg.Registries.Maven.Upstream, shared)
+	}
+
+	if len(handlers) == 0 {
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven}.enabled: true")
 	}
 
 	mux := proxy.NewMux(handlers, logger)
