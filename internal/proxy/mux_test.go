@@ -28,7 +28,7 @@ func buildHandlerFor(adapter proxy.RegistryAdapter, upstream string) *proxy.Hand
 func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 	// Upstream asserts it receives the prefix-stripped path.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/simple/requests/", r.URL.Path)
+		require.Equal(t, "/simple/requests/", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("<html>simple</html>"))
 	}))

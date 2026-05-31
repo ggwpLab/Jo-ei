@@ -32,6 +32,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	prefix, rest := splitPrefix(r.URL.Path)
 	h, ok := m.handlers[prefix]
 	if !ok {
+		m.logger.Warn().Str("prefix", prefix).Str("path", r.URL.Path).Msg("request to unknown registry prefix")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"unknown_registry"}`))
@@ -39,6 +40,8 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Strip the prefix so the downstream handler/adapter sees native paths.
+	// RawPath is cleared so RequestURI() re-encodes from Path; safe for the
+	// pypi/npm/maven path shapes (no encoded slashes in REST segments).
 	r.URL.Path = rest
 	r.URL.RawPath = ""
 	h.ServeHTTP(w, r)
