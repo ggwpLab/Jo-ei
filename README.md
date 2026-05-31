@@ -189,3 +189,26 @@ A known vulnerability meets or exceeds the configured severity threshold.
 
 **What to do:** Remove the package from `policy.profiles.<name>.denylist` if it was added
 in error, or use a different package.
+
+## Building from Source
+
+**Prerequisites:** Go 1.25+
+
+```bash
+# Install Go (if not present)
+curl -fsSL https://go.dev/dl/go1.25.10.linux-amd64.tar.gz -o /tmp/go.tar.gz
+mkdir -p ~/go-sdk && tar -C ~/go-sdk -xzf /tmp/go.tar.gz
+export PATH="$HOME/go-sdk/go/bin:$PATH"
+
+# Build
+go build -o bin/sca-proxy ./cmd/sca-proxy
+
+# Run
+./bin/sca-proxy --config config.yaml
+
+# Unit tests
+go test ./...
+
+# Integration tests (require Docker for ClamAV socket, or set up manually)
+go test ./integration/... -tags integration
+```
