@@ -41,6 +41,7 @@ type HandlerConfig struct {
 	Upstream   string
 	CVEScanner CVEScanner    // optional; nil disables CVE scanning
 	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
+	AVScanner  AVScanner     // optional; nil disables malware scanning
 }
 
 // hopByHopHeaders are connection-specific headers that must not be forwarded
@@ -157,9 +158,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(tmpPath)
 
-	// Cache the artifact.
-	// Phase 1: scanClean=true (no AV scanner yet).
-	// Phase 3 will run AVScanner here before caching.
+	// Antivirus scan — after download, before caching (fail-closed on error).
+	if h.cfg.AVScanner != nil {
+		avResult, err := h.cfg.AVScanner.Scan(ctx, tmpPath)
+		if err != nil {
+			log.Error().Err(err).Msg("AV scan failed")
+			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "av_scan_error")
+			return
+		}
+		if !avResult.Clean {
+			log.Warn().Str("signature", avResult.Signature).Msg("malware detected")
+			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Signature)
+			return
+		}
+	}
+
+	// Cache the artifact (scan passed).
 	if err := h.cfg.Cache.Put(ref, tmpPath, true, ""); err != nil {
 		log.Error().Err(err).Msg("failed to cache artifact")
 		// Fail-closed: don't serve if we cannot cache
@@ -295,6 +309,22 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *Packa
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
+}
+
+// writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
+func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, signature string) {
+	body := map[string]any{
+		"error":      "package_blocked",
+		"package":    ref.Name,
+		"version":    ref.Version,
+		"reason":     "malware_found",
+		"signature":  signature,
+		"blocked_by": []string{"malware_scanner"},
+		"request_id": requestID,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
 	json.NewEncoder(w).Encode(body)
 }
 

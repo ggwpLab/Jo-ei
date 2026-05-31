@@ -9,10 +9,10 @@ registries:
     enabled: true
   npm:
     upstream: "https://registry.npmjs.org"
-    enabled: false
+    enabled: true
   maven:
-    upstream: "https://repo1.maven.org"
-    enabled: false
+    upstream: "https://repo1.maven.org/maven2"
+    enabled: true
 
 supply_chain:
   min_age_hours: 24
@@ -23,6 +23,11 @@ cve:
   base_url: "https://api.osv.dev"
   block_on: "HIGH"
   cache_ttl_minutes: 1440
+
+clamav:
+  enabled: true
+  address: "unix:///var/run/clamav/clamd.sock"
+  timeout_seconds: 30
 
 cache:
   backend: "local"

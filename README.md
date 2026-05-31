@@ -1,9 +1,9 @@
 # sca-proxy
 
-A transparent supply chain security proxy for package registries. Currently supports PyPI;
-npm, Maven, and Go support ships in Phase 3.
+A transparent supply chain security proxy for package registries. Supports PyPI, npm, and
+Maven (Go support ships in a later phase).
 Point your package manager at sca-proxy instead of the upstream registry — it intercepts
-every download and enforces three layers of protection before serving the artifact.
+every download and enforces four layers of protection before serving the artifact.
 
 ```
 Developer (pip/npm/mvn)
@@ -14,15 +14,17 @@ Developer (pip/npm/mvn)
   │  1. Cache lookup (HIT served immediately)   │
   │  2. Supply Chain Filter (24h rule)          │
   │  3. CVE Scanner (osv.dev)                   │
+  │  4. Malware Scanner (ClamAV)                │
   └─────────────────────────────────────────────┘
         │
         ▼
-   Upstream registry (PyPI / npm / …)
+   Upstream registry (PyPI / npm / Maven)
 ```
 
 **What gets blocked:**
 - Packages published less than 24 hours ago (supply chain poisoning protection)
 - Packages with CVE severity ≥ configured threshold (`HIGH` by default)
+- Packages whose artifact matches a ClamAV malware signature
 - Packages on the explicit `denylist`
 
 **What gets cached:** Approved artifacts are stored locally; repeat requests are served
@@ -39,33 +41,33 @@ git clone <repo-url> && cd sca-proxy
 docker-compose up -d
 ```
 
-The proxy starts on `http://localhost:8080`. ClamAV is included in the compose file but
-is not yet active (malware scanning ships in Phase 3).
+The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
+malware scanning is active when the selected policy profile sets `malware_block: true`.
 
 **2. Point your package manager at the proxy**
 
 pip:
 ```bash
 pip install requests \
-  --index-url http://localhost:8080/simple/ \
+  --index-url http://localhost:8080/pypi/simple/ \
   --trusted-host localhost
 ```
 
 Or persist it in `~/.pip/pip.conf`:
 ```ini
 [global]
-index-url = http://localhost:8080/simple/
+index-url = http://localhost:8080/pypi/simple/
 trusted-host = localhost
 ```
 
-npm (not yet active in default config — PyPI only in the current release):
+npm:
 ```bash
-npm install lodash --registry http://localhost:8080/
+npm install lodash --registry http://localhost:8080/npm/
 ```
 
 Or persist it:
 ```bash
-npm config set registry http://localhost:8080/
+npm config set registry http://localhost:8080/npm/
 ```
 
 **3. Smoke test**
@@ -76,7 +78,7 @@ curl -s http://localhost:8080/health
 # Expected: {"status":"ok"}
 
 # Install a well-known package (should pass)
-pip install requests==2.31.0 --index-url http://localhost:8080/simple/ --trusted-host localhost
+pip install requests==2.31.0 --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```
 
 ## How it Works
@@ -94,8 +96,12 @@ Every package download goes through this pipeline:
    If any finding meets or exceeds `cve.block_on` severity, the package is rejected with
    HTTP **403 Forbidden**. Results are cached in memory for `cve.cache_ttl_minutes`.
 
-4. **Download + Cache** — the artifact is downloaded from the upstream registry, stored in
-   the local cache, and served to the client.
+4. **Malware Scan** — the artifact is downloaded to a temp file and streamed to
+   ClamAV (clamd `INSTREAM`). If a signature matches, the package is rejected with
+   HTTP **403 Forbidden** (`reason: malware_found`) and the artifact is not cached.
+
+5. **Cache + Serve** — a clean artifact is stored in the local cache and served to
+   the client.
 
 If any scanner is unreachable, the request is rejected (fail-closed). The proxy never serves
 an artifact that has not been approved.
@@ -194,6 +200,26 @@ A known vulnerability meets or exceeds the configured severity threshold.
 
 **What to do:** Remove the package from `policy.profiles.<name>.denylist` if it was added
 in error, or use a different package.
+
+### 403 Forbidden — Malware detected
+
+The downloaded artifact matched a ClamAV signature.
+
+```json
+{
+  "error": "package_blocked",
+  "reason": "malware_found",
+  "package": "evil-pkg",
+  "version": "1.0.0",
+  "signature": "Win.Trojan.Agent-123456",
+  "blocked_by": ["malware_scanner"],
+  "request_id": "req_jkl012"
+}
+```
+
+**What to do:** Do not install this artifact. If you believe it is a false
+positive, verify the package out-of-band and report the signature to your
+security team before adding an `allowlist` entry.
 
 ## Building from Source
 

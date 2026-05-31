@@ -1,18 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 	"github.com/sca-proxy/sca-proxy/internal/cache"
 	"github.com/sca-proxy/sca-proxy/internal/config"
+	"github.com/sca-proxy/sca-proxy/internal/policy"
 	"github.com/sca-proxy/sca-proxy/internal/proxy"
 	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
+	"github.com/sca-proxy/sca-proxy/internal/scanner"
 	"github.com/sca-proxy/sca-proxy/internal/supplychain"
+	"github.com/spf13/cobra"
 )
 
 var cfgFile string
@@ -33,23 +36,36 @@ func main() {
 	}
 }
 
+// sharedDeps groups dependencies shared across every per-registry handler.
+type sharedDeps struct {
+	filter     proxy.SCFilter
+	cache      proxy.ArtifactCache
+	logger     zerolog.Logger
+	cveScanner proxy.CVEScanner
+	policy     proxy.PolicyDecider
+	avScanner  proxy.AVScanner
+}
+
 func runProxy(_ *cobra.Command, _ []string) error {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
 	}
 
-	// Configure logger
-	level, _ := zerolog.ParseLevel(cfg.Logging.Level)
+	level, levelErr := zerolog.ParseLevel(cfg.Logging.Level)
+	if levelErr != nil {
+		level = zerolog.InfoLevel
+	}
 	zerolog.SetGlobalLevel(level)
 	logger := log.Logger
-
 	if cfg.Logging.Format == "text" {
 		logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 			With().Timestamp().Logger()
 	}
+	if levelErr != nil {
+		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
+	}
 
-	// Build local cache
 	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{
 		RootPath:  cfg.Cache.Local.Path,
 		MaxSizeGB: cfg.Cache.Local.MaxSizeGB,
@@ -59,41 +75,98 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Build SC filter. Allowlist file loading is added in Phase 2.
-	scFilter := supplychain.NewFilter(cfg.SupplyChain, nil)
+	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
+	if !ok {
+		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
+	}
 
-	// Build PyPI adapter (Phase 1 only; Phase 3 adds npm/Maven/Go)
-	pypiAdapter := adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstream)
+	shared := sharedDeps{
+		filter: supplychain.NewFilter(cfg.SupplyChain, nil),
+		cache:  &cacheAdapter{lc: localCache},
+		logger: logger,
+	}
 
-	// cacheAdapter bridges cache.LocalCache (returns *cache.CacheEntry) to
-	// proxy.ArtifactCache (returns *proxy.ArtifactEntry), avoiding import cycle.
-	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  pypiAdapter,
-		Filter:   scFilter,
-		Cache:    &cacheAdapter{lc: localCache},
-		Logger:   logger,
-		Upstream: cfg.Registries.PyPI.Upstream,
-	})
+	// CVE scanner + policy (optional).
+	if cfg.CVE.Enabled {
+		baseURL := cfg.CVE.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.osv.dev"
+		}
+		ttl := time.Duration(cfg.CVE.CacheTTLMinutes) * time.Minute
+		if ttl == 0 {
+			ttl = 24 * time.Hour
+		}
+		shared.cveScanner = scanner.NewOSVScanner(baseURL, ttl)
+		shared.policy = policy.NewEngine(cfg.CVE, profile)
+	}
+
+	// ClamAV scanner (optional; attached only when the profile blocks malware).
+	if cfg.ClamAV.Enabled && profile.MalwareBlock {
+		av, err := scanner.NewClamAVScanner(cfg.ClamAV.Address,
+			time.Duration(cfg.ClamAV.TimeoutSeconds)*time.Second)
+		if err != nil {
+			return err
+		}
+		shared.avScanner = av
+	} else if cfg.ClamAV.Enabled {
+		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
+			Msg("clamav.enabled is true but active profile has malware_block:false — AV scanner not attached")
+	}
+
+	// Build one handler per enabled registry, keyed by routing prefix.
+	handlers := map[string]*proxy.Handler{}
+	if cfg.Registries.PyPI.Enabled {
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstream),
+			cfg.Registries.PyPI.Upstream, shared)
+	}
+	if cfg.Registries.NPM.Enabled {
+		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstream),
+			cfg.Registries.NPM.Upstream, shared)
+	}
+	if cfg.Registries.Maven.Enabled {
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstream),
+			cfg.Registries.Maven.Upstream, shared)
+	}
+
+	if len(handlers) == 0 {
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven}.enabled: true")
+	}
+
+	mux := proxy.NewMux(handlers, logger)
 
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
-		Str("upstream", cfg.Registries.PyPI.Upstream).
+		Int("registries", len(handlers)).
+		Bool("clamav", shared.avScanner != nil).
+		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
 		Msg("SCA Proxy starting")
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
-		Handler:      handler,
+		Handler:      mux,
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
-
 	return srv.ListenAndServe()
 }
 
+// buildHandler constructs a proxy.Handler for one registry adapter with the
+// shared dependency set.
+func buildHandler(adapter proxy.RegistryAdapter, upstream string, shared sharedDeps) *proxy.Handler {
+	return proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:    adapter,
+		Filter:     shared.filter,
+		Cache:      shared.cache,
+		Logger:     shared.logger,
+		Upstream:   upstream,
+		CVEScanner: shared.cveScanner,
+		Policy:     shared.policy,
+		AVScanner:  shared.avScanner,
+	})
+}
+
 // cacheAdapter bridges cache.LocalCache to the proxy.ArtifactCache interface.
-// cache.LocalCache.Get returns *cache.CacheEntry; proxy.ArtifactCache.Get must
-// return *proxy.ArtifactEntry. Structural typing doesn't apply here.
 type cacheAdapter struct {
 	lc *cache.LocalCache
 }

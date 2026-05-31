@@ -74,6 +74,23 @@ func writeTempConfig(t *testing.T, content string) string {
 	return f.Name()
 }
 
+func TestLoadConfig_ClamAVSection(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+clamav:
+  enabled: true
+  address: "unix:///var/run/clamav/clamd.sock"
+  timeout_seconds: 45
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.ClamAV.Enabled)
+	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.ClamAV.Address)
+	assert.Equal(t, 45, cfg.ClamAV.TimeoutSeconds)
+}
+
 func TestLoadConfig_CVESection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
