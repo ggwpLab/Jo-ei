@@ -11,6 +11,7 @@ type Config struct {
 	Registries  RegistriesConfig  `mapstructure:"registries"`
 	SupplyChain SupplyChainConfig `mapstructure:"supply_chain"`
 	CVE         CVEConfig         `mapstructure:"cve"`
+	ClamAV      ClamAVConfig      `mapstructure:"clamav"`
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
 	Logging     LoggingConfig     `mapstructure:"logging"`
@@ -81,6 +82,13 @@ type CVEConfig struct {
 	BaseURL         string `mapstructure:"base_url"`          // default "https://api.osv.dev"
 	BlockOn         string `mapstructure:"block_on"`          // "CRITICAL"|"HIGH"|"MEDIUM"|"LOW"
 	CacheTTLMinutes int    `mapstructure:"cache_ttl_minutes"` // default 1440
+}
+
+// ClamAVConfig configures the ClamAV malware scanner (clamd).
+type ClamAVConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Address        string `mapstructure:"address"`         // "unix:///var/run/clamav/clamd.sock" or "tcp:host:3310"
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 30
 }
 
 type LoggingConfig struct {
