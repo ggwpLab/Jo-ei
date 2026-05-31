@@ -34,11 +34,13 @@ type ArtifactCache interface {
 
 // HandlerConfig groups dependencies for the ProxyHandler.
 type HandlerConfig struct {
-	Adapter  RegistryAdapter
-	Filter   SCFilter
-	Cache    ArtifactCache
-	Logger   zerolog.Logger
-	Upstream string
+	Adapter    RegistryAdapter
+	Filter     SCFilter
+	Cache      ArtifactCache
+	Logger     zerolog.Logger
+	Upstream   string
+	CVEScanner CVEScanner    // optional; nil disables CVE scanning
+	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
 }
 
 // hopByHopHeaders are connection-specific headers that must not be forwarded
@@ -124,6 +126,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Msg("dry_run: package would be blocked by supply chain filter")
 	}
 
+	// CVE scan — before downloading the artifact (fail-closed if scanner errors).
+	if h.cfg.CVEScanner != nil {
+		scanResult, err := h.cfg.CVEScanner.Scan(ctx, ref)
+		if err != nil {
+			log.Error().Err(err).Msg("CVE scan failed")
+			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "cve_scan_error")
+			return
+		}
+		if h.cfg.Policy != nil {
+			decision := h.cfg.Policy.Evaluate(ref, scanResult)
+			if !decision.Allowed {
+				log.Warn().
+					Str("reason", decision.Reason).
+					Int("findings", len(decision.Findings)).
+					Msg("CVE policy blocked package")
+				h.writeCVEBlockedResponse(w, requestID, ref, decision)
+				return
+			}
+		}
+	}
+
 	// Download artifact from upstream to a temp file
 	upstreamURL := h.cfg.Adapter.UpstreamURL(r)
 	tmpPath, err := h.downloadToTemp(ctx, upstreamURL)
@@ -135,8 +158,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tmpPath)
 
 	// Cache the artifact.
-	// Phase 1: scanClean=true (no CVE/AV scanner yet).
-	// Phase 2 will run CVEScanner + AVScanner here before caching.
+	// Phase 1: scanClean=true (no AV scanner yet).
+	// Phase 3 will run AVScanner here before caching.
 	if err := h.cfg.Cache.Put(ref, tmpPath, true, ""); err != nil {
 		log.Error().Err(err).Msg("failed to cache artifact")
 		// Fail-closed: don't serve if we cannot cache
@@ -272,5 +295,36 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *Packa
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
+}
+
+// writeCVEBlockedResponse sends a 403 Forbidden response with CVE details.
+func (h *Handler) writeCVEBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, d PolicyDecision) {
+	type findingJSON struct {
+		ID       string  `json:"id"`
+		Severity string  `json:"severity"`
+		Summary  string  `json:"summary"`
+		Score    float64 `json:"cvss_score,omitempty"`
+	}
+	var cves []findingJSON
+	for _, f := range d.Findings {
+		cves = append(cves, findingJSON{
+			ID:       f.ID,
+			Severity: f.Severity.String(),
+			Summary:  f.Summary,
+			Score:    f.Score,
+		})
+	}
+	body := map[string]any{
+		"error":      "package_blocked",
+		"package":    ref.Name,
+		"version":    ref.Version,
+		"reason":     d.Reason,
+		"cves":       cves,
+		"blocked_by": []string{"cve_scanner"},
+		"request_id": requestID,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
 	json.NewEncoder(w).Encode(body)
 }

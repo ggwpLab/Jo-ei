@@ -1,7 +1,9 @@
 package proxy_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -240,4 +242,98 @@ func TestHandler_MetadataFailureReturns502(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+// ─── mock CVE scanner / policy decider ────────────────────────────────────
+
+type mockScanner struct {
+	result *proxy.ScanResult
+	err    error
+}
+
+func (m *mockScanner) Scan(_ context.Context, _ *proxy.PackageRef) (*proxy.ScanResult, error) {
+	return m.result, m.err
+}
+
+type mockPolicy struct {
+	decision proxy.PolicyDecision
+}
+
+func (m *mockPolicy) Evaluate(_ *proxy.PackageRef, _ *proxy.ScanResult) proxy.PolicyDecision {
+	return m.decision
+}
+
+// setupTestProxyCVE creates a proxy handler with CVE scanner and policy decider wired in.
+func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc proxy.CVEScanner, pol proxy.PolicyDecider) *httptest.Server {
+	t.Helper()
+	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
+	handler := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:    adapters.NewPyPIAdapter(upstream.URL),
+		Filter:     filter,
+		Cache:      newFakeCache(),
+		Logger:     zerolog.Nop(),
+		Upstream:   upstream.URL,
+		CVEScanner: sc,
+		Policy:     pol,
+	})
+	return httptest.NewServer(handler)
+}
+
+func TestHandler_CVEFoundReturns403(t *testing.T) {
+	upstream := makeUpstream(t, "requests", "2.28.0", 48)
+	defer upstream.Close()
+
+	sc := &mockScanner{result: &proxy.ScanResult{
+		Clean:    false,
+		Findings: []proxy.CVEFinding{{ID: "CVE-2024-001", Severity: proxy.SeverityHigh, Summary: "RCE"}},
+	}}
+	pol := &mockPolicy{decision: proxy.PolicyDecision{
+		Allowed:  false,
+		Reason:   "cve_found",
+		Findings: []proxy.CVEFinding{{ID: "CVE-2024-001", Severity: proxy.SeverityHigh, Summary: "RCE"}},
+	}}
+
+	srv := setupTestProxyCVE(t, upstream, sc, pol)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.28.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "package_blocked", body["error"])
+	assert.Equal(t, "cve_found", body["reason"])
+	cves, ok := body["cves"].([]any)
+	require.True(t, ok)
+	assert.Len(t, cves, 1)
+}
+
+func TestHandler_NoCVEScannerAllows(t *testing.T) {
+	upstream := makeUpstream(t, "safe-pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	// CVEScanner is nil — no scanning
+	srv := setupTestProxyCVE(t, upstream, nil, nil)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/s/safe-pkg/safe_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestHandler_CVEScannerErrorFailsClosed(t *testing.T) {
+	upstream := makeUpstream(t, "pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	sc := &mockScanner{err: fmt.Errorf("osv.dev unavailable")}
+	srv := setupTestProxyCVE(t, upstream, sc, nil)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/p/pkg/pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
