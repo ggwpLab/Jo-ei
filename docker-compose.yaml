@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  sca-proxy:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/sca-proxy/config.yaml:ro
+      - cache-data:/var/cache/sca-proxy
+      - clamav-socket:/var/run/clamav
+    environment:
+      - SCAPROXY_LOGGING_LEVEL=info
+    depends_on:
+      - clamav
+    restart: unless-stopped
+
+  clamav:
+    image: clamav/clamav:stable
+    volumes:
+      - clamav-socket:/var/run/clamav
+      - clamav-db:/var/lib/clamav
+    restart: unless-stopped
+
+volumes:
+  cache-data:
+  clamav-socket:
+  clamav-db:

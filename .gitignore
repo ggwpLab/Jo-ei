@@ -1,0 +1,4 @@
+bin/
+/sca-proxy
+*.test
+*.db

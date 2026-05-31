@@ -1,0 +1,58 @@
+server:
+  listen: ":8080"
+  tls:
+    enabled: false
+
+registries:
+  pypi:
+    upstream: "https://pypi.org"
+    enabled: true
+  npm:
+    upstream: "https://registry.npmjs.org"
+    enabled: false
+  maven:
+    upstream: "https://repo1.maven.org"
+    enabled: false
+
+supply_chain:
+  min_age_hours: 24
+  mode: "enforce"
+
+cve:
+  enabled: true
+  base_url: "https://api.osv.dev"
+  block_on: "HIGH"
+  cache_ttl_minutes: 1440
+
+cache:
+  backend: "local"
+  local:
+    path: "/var/cache/sca-proxy"
+    max_size_gb: 100
+
+policy:
+  active_profile: "production"
+  profiles:
+    dev:
+      cve_block: false
+      supply_chain_block: false
+      allowlist: []
+      denylist: []
+    staging:
+      cve_block: true
+      cve_min_severity: "HIGH"
+      supply_chain_block: true
+      allowlist: []
+      denylist: []
+    production:
+      cve_block: true
+      cve_min_severity: "HIGH"
+      supply_chain_block: true
+      malware_block: true
+      allowlist: []
+      denylist: []
+
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
