@@ -68,7 +68,7 @@ func parseMavenPath(path string) (name, version string, ok bool) {
 	return group + ":" + artifact, version, true
 }
 
-// FetchMetadata issues a HEAD request to the artifact's .jar URL and reads the
+// FetchMetadata issues a HEAD request to the artifact's .pom URL and reads the
 // Last-Modified header as the publish time. A missing/unparseable header yields
 // a zero PublishedAt (the supply chain filter treats it as old).
 func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
@@ -78,10 +78,12 @@ func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef)
 	}
 	group, artifact := parts[0], parts[1]
 	groupPath := strings.ReplaceAll(group, ".", "/")
-	artifactURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.jar",
+	// HEAD the .pom (present for every artifact type — jar/war/aar) so the
+	// age check works regardless of the intercepted artifact's extension.
+	pomURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
 		a.upstream, groupPath, artifact, ref.Version, artifact, ref.Version)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, artifactURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pomURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building maven HEAD request: %w", err)
 	}
