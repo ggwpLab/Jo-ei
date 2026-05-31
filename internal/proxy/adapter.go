@@ -161,3 +161,17 @@ type FilterResult struct {
 type SCFilter interface {
 	Check(ctx context.Context, ref *PackageRef, meta *PackageMetadata) FilterResult
 }
+
+// ── Antivirus / malware-scan types ───────────────────────────────────────────
+
+// AVResult records the outcome of an antivirus scan of a single file.
+type AVResult struct {
+	Clean     bool   // true iff no malware signature matched
+	Signature string // signature name when infected, "" otherwise
+}
+
+// AVScanner scans a file on disk for malware.
+// Implementations must be safe for concurrent use.
+type AVScanner interface {
+	Scan(ctx context.Context, filePath string) (*AVResult, error)
+}
