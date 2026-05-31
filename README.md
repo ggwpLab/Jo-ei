@@ -98,3 +98,24 @@ Every package download goes through this pipeline:
 
 If any scanner is unreachable, the request is rejected (fail-closed). The proxy never serves
 an artifact that has not been approved.
+
+## Configuration
+
+The proxy reads `config.yaml` (default path, overridable with `--config`).
+All values can be overridden with environment variables using the prefix `SCAPROXY_`
+and `_` as separator (e.g. `SCAPROXY_SUPPLY_CHAIN_MODE=dry_run`).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `server.listen` | `:8080` | TCP address to listen on |
+| `supply_chain.min_age_hours` | `24` | Minimum package age in hours before serving |
+| `supply_chain.mode` | `enforce` | `enforce` blocks; `dry_run` logs only; `off` disables the filter |
+| `cve.enabled` | `true` | Enable CVE scanning via osv.dev |
+| `cve.block_on` | `HIGH` | Minimum severity to block: `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW` |
+| `policy.active_profile` | `production` | Name of the active policy profile |
+| `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks. Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
+| `policy.profiles.<name>.denylist` | `[]` | Packages always blocked regardless of scan results. Same format as `allowlist` |
+| `cache.local.path` | `/var/cache/sca-proxy` | Directory for cached artifacts |
+| `cache.local.max_size_gb` | `100` | Maximum cache size; oldest entries evicted when exceeded (LRU) |
+
+The full default configuration is in [`config.yaml`](./config.yaml).
