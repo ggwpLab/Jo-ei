@@ -84,3 +84,26 @@ func TestNPMAdapter_FetchMetadata_VersionMissing(t *testing.T) {
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
 }
+
+func TestNPMAdapter_NormalizeRequest_EmptyVersionRejected(t *testing.T) {
+	a := adapters.NewNPMAdapter("https://registry.npmjs.org")
+	r := httptest.NewRequest(http.MethodGet, "/lodash/-/lodash-.tgz", nil)
+	_, ok := a.NormalizeRequest(r)
+	assert.False(t, ok)
+}
+
+func TestNPMAdapter_FetchMetadata_VersionInTimeButNotVersions(t *testing.T) {
+	publishedAt := time.Now().UTC().Add(-48 * time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"time":     map[string]any{"1.0.0": publishedAt.Format(time.RFC3339)},
+			"versions": map[string]any{}, // version absent from versions map
+		})
+	}))
+	defer srv.Close()
+
+	a := adapters.NewNPMAdapter(srv.URL)
+	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
+	_, err := a.FetchMetadata(context.Background(), ref)
+	assert.Error(t, err)
+}

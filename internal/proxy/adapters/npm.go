@@ -69,7 +69,11 @@ func parseNPMVersion(name, filename string) (string, bool) {
 	if !strings.HasPrefix(base, prefix) {
 		return "", false
 	}
-	return strings.TrimPrefix(base, prefix), true
+	version := strings.TrimPrefix(base, prefix)
+	if version == "" {
+		return "", false
+	}
+	return version, true
 }
 
 // FetchMetadata reads the npm registry document and resolves the version's
@@ -106,7 +110,10 @@ func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (
 		return nil, fmt.Errorf("parsing npm publish time %q: %w", publishedStr, err)
 	}
 
-	versionInfo := doc.Versions[ref.Version]
+	versionInfo, ok := doc.Versions[ref.Version]
+	if !ok {
+		return nil, fmt.Errorf("version %s missing from npm versions map for %s", ref.Version, ref.Name)
+	}
 	return &proxy.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		License:     versionInfo.License,
