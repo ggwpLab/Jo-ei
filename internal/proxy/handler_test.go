@@ -337,3 +337,77 @@ func TestHandler_CVEScannerErrorFailsClosed(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
+
+// ─── mock AV scanner ──────────────────────────────────────────────────────
+
+type mockAVScanner struct {
+	result *proxy.AVResult
+	err    error
+}
+
+func (m *mockAVScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, error) {
+	return m.result, m.err
+}
+
+// setupTestProxyAV wires an AV scanner into the handler (no CVE scanner).
+func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av proxy.AVScanner) *httptest.Server {
+	t.Helper()
+	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
+	handler := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:   adapters.NewPyPIAdapter(upstream.URL),
+		Filter:    filter,
+		Cache:     newFakeCache(),
+		Logger:    zerolog.Nop(),
+		Upstream:  upstream.URL,
+		AVScanner: av,
+	})
+	return httptest.NewServer(handler)
+}
+
+func TestHandler_MalwareReturns403(t *testing.T) {
+	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR"}}
+	srv := setupTestProxyAV(t, upstream, av)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/e/evil-pkg/evil_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "package_blocked", body["error"])
+	assert.Equal(t, "malware_found", body["reason"])
+	assert.Equal(t, "Win.Test.EICAR", body["signature"])
+}
+
+func TestHandler_AVScannerErrorFailsClosed(t *testing.T) {
+	upstream := makeUpstream(t, "pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	av := &mockAVScanner{err: fmt.Errorf("clamd unavailable")}
+	srv := setupTestProxyAV(t, upstream, av)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/p/pkg/pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+func TestHandler_CleanArtifactPassesAV(t *testing.T) {
+	upstream := makeUpstream(t, "safe-pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	av := &mockAVScanner{result: &proxy.AVResult{Clean: true}}
+	srv := setupTestProxyAV(t, upstream, av)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/s/safe-pkg/safe_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
