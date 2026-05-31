@@ -26,3 +26,54 @@ Developer (pip/npm/mvn)
 
 **What gets cached:** Approved artifacts are stored locally; repeat requests are served
 from cache without contacting the upstream registry.
+
+## Quick Start
+
+**Prerequisites:** Docker and Docker Compose (no Go installation required for this path).
+
+**1. Start the proxy**
+
+```bash
+git clone <repo-url> && cd sca-proxy
+docker-compose up -d
+```
+
+The proxy starts on `http://localhost:8080`. ClamAV initialises its signature database on
+first run — this takes ~60 seconds.
+
+**2. Point your package manager at the proxy**
+
+pip:
+```bash
+pip install requests \
+  --index-url http://localhost:8080/simple/ \
+  --trusted-host localhost
+```
+
+Or persist it in `~/.pip/pip.conf`:
+```ini
+[global]
+index-url = http://localhost:8080/simple/
+trusted-host = localhost
+```
+
+npm:
+```bash
+npm install lodash --registry http://localhost:8080/
+```
+
+Or persist it:
+```bash
+npm config set registry http://localhost:8080/
+```
+
+**3. Smoke test**
+
+```bash
+# Health check
+curl -s http://localhost:8080/health
+# Expected: {"status":"ok"}
+
+# Install a well-known package (should pass)
+pip install requests==2.31.0 --index-url http://localhost:8080/simple/ --trusted-host localhost
+```
