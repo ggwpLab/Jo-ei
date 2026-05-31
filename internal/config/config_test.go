@@ -63,3 +63,49 @@ func TestLoad_DefaultValues(t *testing.T) {
 	// Unset fields should have zero values
 	assert.Equal(t, "", cfg.Cache.Backend)
 }
+
+func writeTempConfig(t *testing.T, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	require.NoError(t, err)
+	_, err = f.WriteString(content)
+	require.NoError(t, err)
+	f.Close()
+	return f.Name()
+}
+
+func TestLoadConfig_CVESection(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+cve:
+  enabled: true
+  base_url: "https://api.osv.dev"
+  block_on: "HIGH"
+  cache_ttl_minutes: 1440
+policy:
+  active_profile: "production"
+  profiles:
+    production:
+      cve_block: true
+      cve_min_severity: "HIGH"
+      supply_chain_block: true
+      allowlist:
+        - "pypi/requests"
+      denylist:
+        - "npm/evil-pkg"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.CVE.Enabled)
+	assert.Equal(t, "https://api.osv.dev", cfg.CVE.BaseURL)
+	assert.Equal(t, "HIGH", cfg.CVE.BlockOn)
+	assert.Equal(t, 1440, cfg.CVE.CacheTTLMinutes)
+
+	prod := cfg.Policy.Profiles["production"]
+	assert.True(t, prod.CVEBlock)
+	assert.Equal(t, "HIGH", prod.CVEMinSeverity)
+	assert.Equal(t, []string{"pypi/requests"}, prod.Allowlist)
+	assert.Equal(t, []string{"npm/evil-pkg"}, prod.Denylist)
+}

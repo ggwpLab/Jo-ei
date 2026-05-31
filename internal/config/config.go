@@ -10,6 +10,7 @@ type Config struct {
 	Server      ServerConfig      `mapstructure:"server"`
 	Registries  RegistriesConfig  `mapstructure:"registries"`
 	SupplyChain SupplyChainConfig `mapstructure:"supply_chain"`
+	CVE         CVEConfig         `mapstructure:"cve"`
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
 	Logging     LoggingConfig     `mapstructure:"logging"`
@@ -66,9 +67,20 @@ type PolicyConfig struct {
 }
 
 type PolicyProfile struct {
-	CVEBlock         bool `mapstructure:"cve_block"`
-	SupplyChainBlock bool `mapstructure:"supply_chain_block"`
-	MalwareBlock     bool `mapstructure:"malware_block"`
+	CVEBlock         bool     `mapstructure:"cve_block"`
+	CVEMinSeverity   string   `mapstructure:"cve_min_severity"` // overrides CVEConfig.BlockOn when non-empty
+	SupplyChainBlock bool     `mapstructure:"supply_chain_block"`
+	MalwareBlock     bool     `mapstructure:"malware_block"`
+	Allowlist        []string `mapstructure:"allowlist"` // "pypi/requests" or "pypi/requests@2.31.0"
+	Denylist         []string `mapstructure:"denylist"`
+}
+
+// CVEConfig configures the CVE scanner (osv.dev).
+type CVEConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	BaseURL         string `mapstructure:"base_url"`          // default "https://api.osv.dev"
+	BlockOn         string `mapstructure:"block_on"`          // "CRITICAL"|"HIGH"|"MEDIUM"|"LOW"
+	CacheTTLMinutes int    `mapstructure:"cache_ttl_minutes"` // default 1440
 }
 
 type LoggingConfig struct {

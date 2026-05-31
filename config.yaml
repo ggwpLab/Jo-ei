@@ -18,6 +18,12 @@ supply_chain:
   min_age_hours: 24
   mode: "enforce"
 
+cve:
+  enabled: true
+  base_url: "https://api.osv.dev"
+  block_on: "HIGH"
+  cache_ttl_minutes: 1440
+
 cache:
   backend: "local"
   local:
@@ -30,13 +36,21 @@ policy:
     dev:
       cve_block: false
       supply_chain_block: false
+      allowlist: []
+      denylist: []
     staging:
       cve_block: true
+      cve_min_severity: "HIGH"
       supply_chain_block: true
+      allowlist: []
+      denylist: []
     production:
       cve_block: true
+      cve_min_severity: "HIGH"
       supply_chain_block: true
       malware_block: true
+      allowlist: []
+      denylist: []
 
 logging:
   level: "info"
