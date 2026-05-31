@@ -119,3 +119,73 @@ and `_` as separator (e.g. `SCAPROXY_SUPPLY_CHAIN_MODE=dry_run`).
 | `cache.local.max_size_gb` | `100` | Maximum cache size; oldest entries evicted when exceeded (LRU) |
 
 The full default configuration is in [`config.yaml`](./config.yaml).
+
+## Understanding Block Responses
+
+When the proxy rejects a request, it returns a structured JSON body. The `reason` field
+tells you exactly why.
+
+### 423 Locked — Supply Chain Filter
+
+The package was published too recently.
+
+```json
+{
+  "error": "package_blocked",
+  "reason": "package_version_newer_than_24h",
+  "package": "requests",
+  "version": "2.32.0",
+  "published_at": "2026-05-31T10:00:00Z",
+  "block_until": "2026-06-01T10:00:00Z",
+  "blocked_by": ["supply_chain_filter"],
+  "request_id": "req_abc123"
+}
+```
+
+**What to do:**
+- Wait until `block_until` and retry.
+- Or add the package to `policy.profiles.<name>.allowlist` to bypass the age check for
+  trusted packages (e.g. internal packages, approved hotfixes).
+
+### 403 Forbidden — CVE found
+
+A known vulnerability meets or exceeds the configured severity threshold.
+
+```json
+{
+  "error": "package_blocked",
+  "reason": "cve_found",
+  "package": "requests",
+  "version": "2.28.0",
+  "cves": [
+    {
+      "id": "CVE-2024-35195",
+      "severity": "HIGH",
+      "summary": "Requests Session object does not verify requests after making first request with verify=False"
+    }
+  ],
+  "blocked_by": ["cve_scanner"],
+  "request_id": "req_def456"
+}
+```
+
+**What to do:**
+- Upgrade to a version with no CVEs at or above the threshold.
+- Or add the package+version to `allowlist` if the CVE has been reviewed and accepted
+  as a known risk.
+
+### 403 Forbidden — Denylist
+
+```json
+{
+  "error": "package_blocked",
+  "reason": "denylisted",
+  "package": "evil-pkg",
+  "version": "1.0.0",
+  "blocked_by": ["cve_scanner"],
+  "request_id": "req_ghi789"
+}
+```
+
+**What to do:** Remove the package from `policy.profiles.<name>.denylist` if it was added
+in error, or use a different package.
