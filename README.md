@@ -1,9 +1,9 @@
 # sca-proxy
 
-A transparent supply chain security proxy for package registries. Currently supports PyPI;
-npm, Maven, and Go support ships in Phase 3.
+A transparent supply chain security proxy for package registries. Supports PyPI, npm, and
+Maven (Go support ships in a later phase).
 Point your package manager at sca-proxy instead of the upstream registry — it intercepts
-every download and enforces three layers of protection before serving the artifact.
+every download and enforces four layers of protection before serving the artifact.
 
 ```
 Developer (pip/npm/mvn)
@@ -14,10 +14,11 @@ Developer (pip/npm/mvn)
   │  1. Cache lookup (HIT served immediately)   │
   │  2. Supply Chain Filter (24h rule)          │
   │  3. CVE Scanner (osv.dev)                   │
+  │  4. Malware Scanner (ClamAV)                │
   └─────────────────────────────────────────────┘
         │
         ▼
-   Upstream registry (PyPI / npm / …)
+   Upstream registry (PyPI / npm / Maven)
 ```
 
 **What gets blocked:**
@@ -40,8 +41,8 @@ git clone <repo-url> && cd sca-proxy
 docker-compose up -d
 ```
 
-The proxy starts on `http://localhost:8080`. ClamAV is included in the compose file but
-is not yet active (malware scanning ships in Phase 3).
+The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
+malware scanning is active when the selected policy profile sets `malware_block: true`.
 
 **2. Point your package manager at the proxy**
 
@@ -59,7 +60,7 @@ index-url = http://localhost:8080/pypi/simple/
 trusted-host = localhost
 ```
 
-npm (not yet active in default config — PyPI only in the current release):
+npm:
 ```bash
 npm install lodash --registry http://localhost:8080/npm/
 ```
