@@ -141,9 +141,9 @@ registries:
       - "https://repo1.maven.org/maven2"
       - "https://repo.spring.io/release"
   rubygems:
+    enabled: true
     upstreams:
       - "https://rubygems.org"
-    enabled: true
 ```
 
 ## Configuration
