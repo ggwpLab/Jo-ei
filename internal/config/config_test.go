@@ -138,6 +138,36 @@ registries:
 	require.NoError(t, err)
 }
 
+func TestLoad_ParsesRubyGemsUpstreams(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  rubygems:
+    enabled: true
+    upstreams:
+      - "https://rubygems.org"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://rubygems.org"}, cfg.Registries.RubyGems.Upstreams)
+	assert.True(t, cfg.Registries.RubyGems.Enabled)
+}
+
+func TestLoad_EnabledRubyGemsWithoutUpstreamsFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  rubygems:
+    enabled: true
+    upstreams: []
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rubygems")
+}
+
 func TestLoadConfig_CVESection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
