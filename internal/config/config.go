@@ -17,6 +17,22 @@ type Config struct {
 	Logging     LoggingConfig     `mapstructure:"logging"`
 }
 
+// Validate checks cross-field invariants after loading.
+func (c *Config) Validate() error {
+	regs := map[string]RegistryConfig{
+		"pypi":     c.Registries.PyPI,
+		"npm":      c.Registries.NPM,
+		"maven":    c.Registries.Maven,
+		"rubygems": c.Registries.RubyGems,
+	}
+	for name, rc := range regs {
+		if rc.Enabled && len(rc.Upstreams) == 0 {
+			return fmt.Errorf("registry %q is enabled but has no upstreams", name)
+		}
+	}
+	return nil
+}
+
 type ServerConfig struct {
 	Listen string    `mapstructure:"listen"`
 	TLS    TLSConfig `mapstructure:"tls"`
@@ -29,14 +45,15 @@ type TLSConfig struct {
 }
 
 type RegistriesConfig struct {
-	PyPI  RegistryConfig `mapstructure:"pypi"`
-	NPM   RegistryConfig `mapstructure:"npm"`
-	Maven RegistryConfig `mapstructure:"maven"`
+	PyPI     RegistryConfig `mapstructure:"pypi"`
+	NPM      RegistryConfig `mapstructure:"npm"`
+	Maven    RegistryConfig `mapstructure:"maven"`
+	RubyGems RegistryConfig `mapstructure:"rubygems"`
 }
 
 type RegistryConfig struct {
-	Upstream string `mapstructure:"upstream"`
-	Enabled  bool   `mapstructure:"enabled"`
+	Upstreams []string `mapstructure:"upstreams"`
+	Enabled   bool     `mapstructure:"enabled"`
 }
 
 type SupplyChainConfig struct {
@@ -112,6 +129,9 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating config: %w", err)
 	}
 	return &cfg, nil
 }

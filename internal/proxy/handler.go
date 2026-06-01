@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,7 +39,6 @@ type HandlerConfig struct {
 	Filter     SCFilter
 	Cache      ArtifactCache
 	Logger     zerolog.Logger
-	Upstream   string
 	CVEScanner CVEScanner    // optional; nil disables CVE scanning
 	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
 	AVScanner  AVScanner     // optional; nil disables malware scanning
@@ -148,11 +148,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Download artifact from upstream to a temp file
-	upstreamURL := h.cfg.Adapter.UpstreamURL(r)
-	tmpPath, err := h.downloadToTemp(ctx, upstreamURL)
+	// Download artifact, trying each configured upstream in order.
+	upstreamURLs := h.cfg.Adapter.UpstreamURLs(r)
+	if len(upstreamURLs) == 0 {
+		log.Error().Msg("adapter returned no upstream URLs")
+		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
+		return
+	}
+	tmpPath, allNotFound, err := h.downloadFromUpstreams(ctx, upstreamURLs)
 	if err != nil {
-		log.Error().Err(err).Str("upstream_url", upstreamURL).Msg("failed to download artifact")
+		if allNotFound {
+			log.Warn().Strs("upstream_urls", upstreamURLs).Msg("artifact not found on any upstream")
+			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
+			return
+		}
+		log.Error().Err(err).Strs("upstream_urls", upstreamURLs).Msg("failed to download artifact")
 		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_unavailable")
 		return
 	}
@@ -191,71 +201,127 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.serveFromCache(w, entry)
 }
 
-// proxyTransparent forwards a request to upstream and streams the response back.
+// proxyTransparent forwards a non-intercepted request to each configured
+// upstream in order, streaming back the first response with status < 400.
+// If all fail, returns 404 (all were 404/410) or 502.
 func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.cfg.Upstream + r.URL.RequestURI()
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
-	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+	urls := h.cfg.Adapter.UpstreamURLs(r)
+	if len(urls) == 0 {
+		h.cfg.Logger.Error().Msg("adapter returned no upstream URLs for transparent request")
+		http.Error(w, "no upstream configured", http.StatusInternalServerError)
 		return
 	}
-	for key, vals := range r.Header {
-		for _, v := range vals {
-			req.Header.Add(key, v)
+
+	// Buffer the request body once so it can be replayed across attempts.
+	var body []byte
+	if r.Body != nil {
+		b, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
-	}
-	for _, h := range hopByHopHeaders {
-		req.Header.Del(h)
+		body = b
 	}
 
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	allNotFound := true
+	for _, url := range urls {
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(body))
+		if err != nil {
+			allNotFound = false
+			continue
+		}
+		for key, vals := range r.Header {
+			for _, v := range vals {
+				req.Header.Add(key, v)
+			}
+		}
+		for _, hop := range hopByHopHeaders {
+			req.Header.Del(hop)
+		}
+
+		resp, err := h.httpClient.Do(req)
+		if err != nil {
+			allNotFound = false
+			continue
+		}
+		if resp.StatusCode < 400 {
+			for _, hop := range hopByHopHeaders {
+				resp.Header.Del(hop)
+			}
+			for key, vals := range resp.Header {
+				for _, v := range vals {
+					w.Header().Add(key, v)
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
+			}
+			resp.Body.Close()
+			return
+		}
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusGone {
+			allNotFound = false
+		}
+		resp.Body.Close()
+	}
+
+	if allNotFound {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	defer resp.Body.Close()
-
-	for key, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
-	}
+	http.Error(w, "upstream unavailable", http.StatusBadGateway)
 }
 
-// downloadToTemp downloads url to a temporary file and returns its path.
-// The caller is responsible for removing the file.
-func (h *Handler) downloadToTemp(ctx context.Context, url string) (string, error) {
+// tryDownload downloads url to a temp file. Returns the temp path on HTTP 200.
+// statusCode is the upstream HTTP status (0 on transport error). The caller
+// removes the file.
+func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, statusCode int, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", url, err)
+		return "", 0, fmt.Errorf("downloading %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
+		return "", resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
 	}
 
 	tmp, err := os.CreateTemp("", "sca-proxy-artifact-*")
 	if err != nil {
-		return "", fmt.Errorf("creating temp file: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
 	defer tmp.Close()
-
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
 		os.Remove(tmp.Name())
-		return "", fmt.Errorf("writing temp file: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
 	}
+	return tmp.Name(), resp.StatusCode, nil
+}
 
-	return tmp.Name(), nil
+// downloadFromUpstreams tries each candidate URL in order, returning the first
+// HTTP 200. allNotFound is true iff every attempt returned 404/410 (no other
+// failure occurred), which the caller maps to a 404 instead of 502.
+func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, allNotFound bool, err error) {
+	if len(urls) == 0 {
+		return "", false, fmt.Errorf("downloadFromUpstreams: no upstream URLs provided")
+	}
+	allNotFound = true
+	for _, u := range urls {
+		path, status, derr := h.tryDownload(ctx, u)
+		if derr == nil {
+			return path, false, nil
+		}
+		if status != http.StatusNotFound && status != http.StatusGone {
+			allNotFound = false
+		}
+		err = derr
+	}
+	return "", allNotFound, err
 }
 
 // serveFromCache streams the cached artifact to the response writer.

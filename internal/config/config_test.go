@@ -16,7 +16,9 @@ server:
   listen: ":9090"
 registries:
   pypi:
-    upstream: "https://pypi.org"
+    upstreams:
+      - "https://pypi.org"
+      - "https://mirror.example.org/pypi"
     enabled: true
 supply_chain:
   min_age_hours: 48
@@ -39,7 +41,7 @@ logging:
 	require.NoError(t, err)
 
 	assert.Equal(t, ":9090", cfg.Server.Listen)
-	assert.Equal(t, "https://pypi.org", cfg.Registries.PyPI.Upstream)
+	assert.Equal(t, []string{"https://pypi.org", "https://mirror.example.org/pypi"}, cfg.Registries.PyPI.Upstreams)
 	assert.True(t, cfg.Registries.PyPI.Enabled)
 	assert.Equal(t, 48, cfg.SupplyChain.MinAgeHours)
 	assert.Equal(t, "enforce", cfg.SupplyChain.Mode)
@@ -89,6 +91,81 @@ clamav:
 	assert.True(t, cfg.ClamAV.Enabled)
 	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.ClamAV.Address)
 	assert.Equal(t, 45, cfg.ClamAV.TimeoutSeconds)
+}
+
+func TestLoad_ParsesMavenUpstreamsList(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  maven:
+    enabled: true
+    upstreams:
+      - "https://repo1.maven.org/maven2"
+      - "https://repo.spring.io/release"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"https://repo1.maven.org/maven2",
+		"https://repo.spring.io/release",
+	}, cfg.Registries.Maven.Upstreams)
+}
+
+func TestLoad_EnabledRegistryWithoutUpstreamsFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  npm:
+    enabled: true
+    upstreams: []
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "npm")
+}
+
+func TestLoad_DisabledRegistryWithoutUpstreamsOK(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  npm:
+    enabled: false
+`)
+	_, err := config.Load(path)
+	require.NoError(t, err)
+}
+
+func TestLoad_ParsesRubyGemsUpstreams(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  rubygems:
+    enabled: true
+    upstreams:
+      - "https://rubygems.org"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://rubygems.org"}, cfg.Registries.RubyGems.Upstreams)
+	assert.True(t, cfg.Registries.RubyGems.Enabled)
+}
+
+func TestLoad_EnabledRubyGemsWithoutUpstreamsFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  rubygems:
+    enabled: true
+    upstreams: []
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rubygems")
 }
 
 func TestLoadConfig_CVESection(t *testing.T) {

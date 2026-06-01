@@ -15,15 +15,19 @@ var mavenArtifactExts = []string{".jar", ".war", ".aar"}
 
 // MavenAdapter implements proxy.RegistryAdapter for a Maven repository.
 type MavenAdapter struct {
-	upstream   string
+	upstreams  []string
 	httpClient *http.Client
 }
 
-// NewMavenAdapter creates a Maven adapter pointing at the given upstream URL
-// (e.g. "https://repo1.maven.org/maven2").
-func NewMavenAdapter(upstream string) *MavenAdapter {
+// NewMavenAdapter creates a Maven adapter over the given ordered upstream URLs
+// (e.g. "https://repo1.maven.org/maven2"). Upstreams are tried in order.
+func NewMavenAdapter(upstreams []string) *MavenAdapter {
+	trimmed := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		trimmed[i] = strings.TrimRight(u, "/")
+	}
 	return &MavenAdapter{
-		upstream:   strings.TrimRight(upstream, "/"),
+		upstreams:  trimmed,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -68,32 +72,39 @@ func parseMavenPath(path string) (name, version string, ok bool) {
 	return group + ":" + artifact, version, true
 }
 
-// FetchMetadata issues a HEAD request to the artifact's .pom URL and reads the
-// Last-Modified header as the publish time. A missing/unparseable header yields
-// a zero PublishedAt (the supply chain filter treats it as old).
+// FetchMetadata walks the configured upstreams in order, returning the first
+// success. If all upstreams fail, the last error is returned.
 func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+	lastErr := fmt.Errorf("no upstreams configured for maven")
+	for _, base := range a.upstreams {
+		meta, err := a.fetchMetadataFrom(ctx, base, ref)
+		if err == nil {
+			return meta, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
 	parts := strings.SplitN(ref.Name, ":", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid maven name %q (want group:artifact)", ref.Name)
 	}
 	group, artifact := parts[0], parts[1]
 	groupPath := strings.ReplaceAll(group, ".", "/")
-	// HEAD the .pom (present for every artifact type — jar/war/aar) so the
-	// age check works regardless of the intercepted artifact's extension.
 	pomURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
-		a.upstream, groupPath, artifact, ref.Version, artifact, ref.Version)
+		base, groupPath, artifact, ref.Version, artifact, ref.Version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pomURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building maven HEAD request: %w", err)
 	}
-
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching maven artifact head: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("maven returned HTTP %d for %s", resp.StatusCode, ref.Key())
 	}
@@ -107,7 +118,11 @@ func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef)
 	return meta, nil
 }
 
-// UpstreamURL returns the upstream URL for a proxy request.
-func (a *MavenAdapter) UpstreamURL(r *http.Request) string {
-	return a.upstream + r.URL.RequestURI()
+// UpstreamURLs returns one candidate URL per configured upstream, in order.
+func (a *MavenAdapter) UpstreamURLs(r *http.Request) []string {
+	urls := make([]string, len(a.upstreams))
+	for i, base := range a.upstreams {
+		urls[i] = base + r.URL.RequestURI()
+	}
+	return urls
 }

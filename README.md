@@ -70,6 +70,22 @@ Or persist it:
 npm config set registry http://localhost:8080/npm/
 ```
 
+**yarn** (uses the npm registry protocol via the `/yarn/` alias):
+```bash
+# Yarn Berry (v2+)
+yarn config set npmRegistryServer http://localhost:8080/yarn/
+# Yarn Classic (v1)
+yarn config set registry http://localhost:8080/yarn/
+```
+
+**RubyGems / Bundler:**
+```bash
+# bundler
+bundle config mirror.https://rubygems.org http://localhost:8080/rubygems
+# or set the source in a Gemfile:
+#   source "http://localhost:8080/rubygems"
+```
+
 **3. Smoke test**
 
 ```bash
@@ -108,6 +124,27 @@ an artifact that has not been approved.
 
 Index and metadata requests (e.g. `/simple/requests/` for pip) are proxied transparently
 to the upstream registry without scanning or caching.
+
+### Multiple upstreams per provider
+
+Each provider accepts an ordered list of `upstreams`. For every request the proxy tries
+them in order and uses the first that serves the artifact (Nexus-style sequential
+fallback). Any failure — 404/410, 5xx, timeout, or connection refused — advances to the
+next upstream. If every upstream returns 404/410 the client gets a 404; any other failure
+mix yields a 502.
+
+```yaml
+registries:
+  maven:
+    enabled: true
+    upstreams:
+      - "https://repo1.maven.org/maven2"
+      - "https://repo.spring.io/release"
+  rubygems:
+    enabled: true
+    upstreams:
+      - "https://rubygems.org"
+```
 
 ## Configuration
 

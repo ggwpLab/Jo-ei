@@ -160,6 +160,29 @@ func TestOSVScanner_APIError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOSVScanner_RubyGemsStripsPlatformSuffix(t *testing.T) {
+	srv := newMockOSV(t, map[string]string{
+		"RubyGems/nokogiri@1.15.0": `{
+			"vulns": [{
+				"id": "GHSA-xxxx",
+				"aliases": ["CVE-2023-0001"],
+				"summary": "vuln in nokogiri",
+				"database_specific": {"severity": "HIGH"}
+			}]
+		}`,
+	})
+	defer srv.Close()
+
+	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
+	result, err := sc.Scan(context.Background(), &proxy.PackageRef{
+		Ecosystem: "rubygems", Name: "nokogiri", Version: "1.15.0-x86_64-linux",
+	})
+	require.NoError(t, err)
+	require.False(t, result.Clean)
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, "CVE-2023-0001", result.Findings[0].ID)
+}
+
 func TestOSVScanner_EcosystemMapping(t *testing.T) {
 	var capturedEcosystem string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +204,7 @@ func TestOSVScanner_EcosystemMapping(t *testing.T) {
 		{"npm", "npm"},
 		{"maven", "Maven"},
 		{"go", "Go"},
+		{"rubygems", "RubyGems"},
 	}
 	for _, c := range cases {
 		sc.Scan(context.Background(), &proxy.PackageRef{Ecosystem: c.ecosystem, Name: "x", Version: "1.0.0"})

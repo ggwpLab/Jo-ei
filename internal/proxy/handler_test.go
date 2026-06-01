@@ -72,7 +72,7 @@ func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error {
 func setupTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httptest.Server {
 	t.Helper()
 
-	adapter := adapters.NewPyPIAdapter(upstream.URL)
+	adapter := adapters.NewPyPIAdapter([]string{upstream.URL})
 	sc := supplychain.NewFilter(config.SupplyChainConfig{
 		MinAgeHours: 24,
 		Mode:        mode,
@@ -81,11 +81,10 @@ func setupTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httpt
 	logger := zerolog.Nop()
 
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  adapter,
-		Filter:   sc,
-		Cache:    fc,
-		Logger:   logger,
-		Upstream: upstream.URL,
+		Adapter: adapter,
+		Filter:  sc,
+		Cache:   fc,
+		Logger:  logger,
 	})
 
 	return httptest.NewServer(handler)
@@ -268,11 +267,10 @@ func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc proxy.CVEScan
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:    adapters.NewPyPIAdapter(upstream.URL),
+		Adapter:    adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:     filter,
 		Cache:      newFakeCache(),
 		Logger:     zerolog.Nop(),
-		Upstream:   upstream.URL,
 		CVEScanner: sc,
 		Policy:     pol,
 	})
@@ -354,11 +352,10 @@ func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av proxy.AVScanne
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:   adapters.NewPyPIAdapter(upstream.URL),
+		Adapter:   adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:    filter,
 		Cache:     newFakeCache(),
 		Logger:    zerolog.Nop(),
-		Upstream:  upstream.URL,
 		AVScanner: av,
 	})
 	return httptest.NewServer(handler)
@@ -410,4 +407,154 @@ func TestHandler_CleanArtifactPassesAV(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// ─── download fallback tests ───────────────────────────────────────────────
+
+// setupTwoUpstreamProxy builds a PyPI handler over [first, second].
+func setupTwoUpstreamProxy(t *testing.T, first, second *httptest.Server) *httptest.Server {
+	t.Helper()
+	handler := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewPyPIAdapter([]string{first.URL, second.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.Nop(),
+	})
+	return httptest.NewServer(handler)
+}
+
+func TestHandler_DownloadFallsBackToSecondUpstream(t *testing.T) {
+	published := time.Now().UTC().Add(-48 * time.Hour)
+	metaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/pypi/") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
+				"urls": []map[string]any{{
+					"upload_time_iso_8601": published.Format(time.RFC3339),
+					"url":                  "https://example.com/requests.whl",
+					"digests":              map[string]any{"sha256": "abc"},
+				}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound) // artifact missing here
+	}))
+	defer metaSrv.Close()
+	artifactSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("wheel-bytes"))
+	}))
+	defer artifactSrv.Close()
+
+	srv := setupTwoUpstreamProxy(t, metaSrv, artifactSrv)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.31.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "wheel-bytes", string(body))
+}
+
+func TestHandler_DownloadAllNotFoundReturns404(t *testing.T) {
+	published := time.Now().UTC().Add(-48 * time.Hour)
+	meta := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/pypi/") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
+				"urls": []map[string]any{{
+					"upload_time_iso_8601": published.Format(time.RFC3339),
+					"url":                  "https://example.com/requests.whl",
+					"digests":              map[string]any{"sha256": "abc"},
+				}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+	a := httptest.NewServer(http.HandlerFunc(meta))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(meta))
+	defer b.Close()
+
+	srv := setupTwoUpstreamProxy(t, a, b)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.31.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestHandler_TransparentProxyFallsBackToSecondUpstream(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("simple-index-html"))
+	}))
+	defer up.Close()
+
+	srv := setupTwoUpstreamProxy(t, down, up)
+	defer srv.Close()
+
+	// /simple/ is a metadata path (not intercepted) → transparent proxy.
+	resp, err := http.Get(srv.URL + "/simple/requests/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "simple-index-html", string(body))
+}
+
+func TestHandler_TransparentProxyAllNotFoundReturns404(t *testing.T) {
+	down1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down1.Close()
+	down2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down2.Close()
+
+	srv := setupTwoUpstreamProxy(t, down1, down2)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/simple/nonexistent/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestHandler_DownloadServerErrorReturns502(t *testing.T) {
+	published := time.Now().UTC().Add(-48 * time.Hour)
+	meta := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/pypi/") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
+				"urls": []map[string]any{{
+					"upload_time_iso_8601": published.Format(time.RFC3339),
+					"url":                  "https://example.com/requests.whl",
+					"digests":              map[string]any{"sha256": "abc"},
+				}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError) // not a 404
+	}
+	a := httptest.NewServer(http.HandlerFunc(meta))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(meta))
+	defer b.Close()
+
+	srv := setupTwoUpstreamProxy(t, a, b)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.31.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 }

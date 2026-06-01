@@ -41,8 +41,9 @@ type RegistryAdapter interface {
 	// FetchMetadata fetches version metadata from the upstream registry.
 	FetchMetadata(ctx context.Context, ref *PackageRef) (*PackageMetadata, error)
 
-	// UpstreamURL returns the upstream URL corresponding to a proxy request path.
-	UpstreamURL(r *http.Request) string
+	// UpstreamURLs returns one candidate upstream URL per configured upstream,
+	// in priority order, for the given proxy request path.
+	UpstreamURLs(r *http.Request) []string
 }
 
 // BlockedError is returned when a package is blocked by a policy.

@@ -5,13 +5,21 @@ server:
 
 registries:
   pypi:
-    upstream: "https://pypi.org"
+    upstreams:
+      - "https://pypi.org"
     enabled: true
   npm:
-    upstream: "https://registry.npmjs.org"
+    upstreams:
+      - "https://registry.npmjs.org"
     enabled: true
   maven:
-    upstream: "https://repo1.maven.org/maven2"
+    upstreams:
+      - "https://repo1.maven.org/maven2"
+      - "https://repo.spring.io/release"
+    enabled: true
+  rubygems:
+    upstreams:
+      - "https://rubygems.org"
     enabled: true
 
 supply_chain:

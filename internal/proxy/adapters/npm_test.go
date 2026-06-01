@@ -15,7 +15,7 @@ import (
 )
 
 func TestNPMAdapter_NormalizeRequest_Tarball(t *testing.T) {
-	a := adapters.NewNPMAdapter("https://registry.npmjs.org")
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
 	r := httptest.NewRequest(http.MethodGet, "/lodash/-/lodash-4.17.21.tgz", nil)
 	ref, ok := a.NormalizeRequest(r)
@@ -26,7 +26,7 @@ func TestNPMAdapter_NormalizeRequest_Tarball(t *testing.T) {
 }
 
 func TestNPMAdapter_NormalizeRequest_ScopedTarball(t *testing.T) {
-	a := adapters.NewNPMAdapter("https://registry.npmjs.org")
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
 	r := httptest.NewRequest(http.MethodGet, "/@babel/core/-/core-7.24.0.tgz", nil)
 	ref, ok := a.NormalizeRequest(r)
@@ -36,7 +36,7 @@ func TestNPMAdapter_NormalizeRequest_ScopedTarball(t *testing.T) {
 }
 
 func TestNPMAdapter_NormalizeRequest_MetadataNotIntercepted(t *testing.T) {
-	a := adapters.NewNPMAdapter("https://registry.npmjs.org")
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
 	r := httptest.NewRequest(http.MethodGet, "/lodash", nil)
 	_, ok := a.NormalizeRequest(r)
@@ -63,7 +63,7 @@ func TestNPMAdapter_FetchMetadata(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewNPMAdapter(srv.URL)
+	a := adapters.NewNPMAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
@@ -79,14 +79,14 @@ func TestNPMAdapter_FetchMetadata_VersionMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewNPMAdapter(srv.URL)
+	a := adapters.NewNPMAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "9.9.9"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
 }
 
 func TestNPMAdapter_NormalizeRequest_EmptyVersionRejected(t *testing.T) {
-	a := adapters.NewNPMAdapter("https://registry.npmjs.org")
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 	r := httptest.NewRequest(http.MethodGet, "/lodash/-/lodash-.tgz", nil)
 	_, ok := a.NormalizeRequest(r)
 	assert.False(t, ok)
@@ -102,8 +102,41 @@ func TestNPMAdapter_FetchMetadata_VersionInTimeButNotVersions(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewNPMAdapter(srv.URL)
+	a := adapters.NewNPMAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
+}
+
+func TestNPMAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
+	published := time.Now().UTC().Add(-72 * time.Hour)
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"time": map[string]string{"1.0.0": published.Format(time.RFC3339)},
+			"versions": map[string]any{
+				"1.0.0": map[string]any{"license": "MIT", "dist": map[string]any{"shasum": "abc"}},
+			},
+		})
+	}))
+	defer up.Close()
+
+	a := adapters.NewNPMAdapter([]string{down.URL, up.URL})
+	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.WithinDuration(t, published, meta.PublishedAt, time.Second)
+}
+
+func TestNPMAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org/", "https://mirror.example.org"})
+	r := httptest.NewRequest(http.MethodGet, "/lodash/-/lodash-1.0.0.tgz", nil)
+	urls := a.UpstreamURLs(r)
+	assert.Equal(t, []string{
+		"https://registry.npmjs.org/lodash/-/lodash-1.0.0.tgz",
+		"https://mirror.example.org/lodash/-/lodash-1.0.0.tgz",
+	}, urls)
 }

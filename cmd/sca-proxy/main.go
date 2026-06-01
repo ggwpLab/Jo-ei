@@ -113,30 +113,24 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			Msg("clamav.enabled is true but active profile has malware_block:false — AV scanner not attached")
 	}
 
-	// Build one handler per enabled registry, keyed by routing prefix.
-	handlers := map[string]*proxy.Handler{}
-	if cfg.Registries.PyPI.Enabled {
-		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstream),
-			cfg.Registries.PyPI.Upstream, shared)
-	}
-	if cfg.Registries.NPM.Enabled {
-		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstream),
-			cfg.Registries.NPM.Upstream, shared)
-	}
-	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstream),
-			cfg.Registries.Maven.Upstream, shared)
-	}
+	// Build the prefix→handler routing map from config.
+	handlers := buildHandlers(cfg, shared)
 
 	if len(handlers) == 0 {
-		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven}.enabled: true")
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems}.enabled: true")
+	}
+
+	// The yarn prefix is an alias of the npm handler, not a separate registry.
+	registryCount := len(handlers)
+	if _, ok := handlers["yarn"]; ok {
+		registryCount--
 	}
 
 	mux := proxy.NewMux(handlers, logger)
 
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
-		Int("registries", len(handlers)).
+		Int("registries", registryCount).
 		Bool("clamav", shared.avScanner != nil).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
@@ -151,15 +145,36 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	return srv.ListenAndServe()
 }
 
+// buildHandlers constructs the routing map of prefix→handler from config.
+// The "yarn" prefix is an alias for the npm handler, since yarn speaks the npm
+// registry protocol.
+func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Handler {
+	handlers := map[string]*proxy.Handler{}
+	if cfg.Registries.PyPI.Enabled {
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
+	}
+	if cfg.Registries.NPM.Enabled {
+		npmHandler := buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
+		handlers["npm"] = npmHandler
+		handlers["yarn"] = npmHandler
+	}
+	if cfg.Registries.Maven.Enabled {
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
+	}
+	if cfg.Registries.RubyGems.Enabled {
+		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams), shared)
+	}
+	return handlers
+}
+
 // buildHandler constructs a proxy.Handler for one registry adapter with the
 // shared dependency set.
-func buildHandler(adapter proxy.RegistryAdapter, upstream string, shared sharedDeps) *proxy.Handler {
+func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapter,
 		Filter:     shared.filter,
 		Cache:      shared.cache,
 		Logger:     shared.logger,
-		Upstream:   upstream,
 		CVEScanner: shared.cveScanner,
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,
