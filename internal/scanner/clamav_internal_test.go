@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseClamAVAddress(t *testing.T) {
+func TestParseScannerAddress(t *testing.T) {
 	cases := []struct {
 		in          string
 		wantNetwork string
@@ -20,7 +20,7 @@ func TestParseClamAVAddress(t *testing.T) {
 		{"", "", "", true},
 	}
 	for _, c := range cases {
-		network, addr, err := parseClamAVAddress(c.in)
+		network, addr, err := parseScannerAddress(c.in)
 		if c.wantErr {
 			assert.Error(t, err, "address %q", c.in)
 			continue
@@ -44,4 +44,10 @@ func TestParseClamAVResponse(t *testing.T) {
 
 	_, err = parseClamAVResponse("INSTREAM size limit exceeded. ERROR\x00")
 	assert.Error(t, err)
+}
+
+func TestParseClamAVResponse_SetsEngine(t *testing.T) {
+	clean, err := parseClamAVResponse("stream: OK\x00")
+	require.NoError(t, err)
+	assert.Equal(t, "clamav", clean.Engine)
 }

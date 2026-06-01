@@ -169,6 +169,7 @@ type SCFilter interface {
 type AVResult struct {
 	Clean     bool   // true iff no malware signature matched
 	Signature string // signature name when infected, "" otherwise
+	Engine    string // engine that produced this verdict, e.g. "clamav" | "icap"
 }
 
 // AVScanner scans a file on disk for malware.

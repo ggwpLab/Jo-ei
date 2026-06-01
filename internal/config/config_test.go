@@ -76,21 +76,23 @@ func writeTempConfig(t *testing.T, content string) string {
 	return f.Name()
 }
 
-func TestLoadConfig_ClamAVSection(t *testing.T) {
+func TestLoadConfig_MalwareScannersSection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
   listen: ":8080"
-clamav:
-  enabled: true
-  address: "unix:///var/run/clamav/clamd.sock"
-  timeout_seconds: 45
+malware:
+  scanners:
+    - type: clamav
+      address: "unix:///var/run/clamav/clamd.sock"
+      timeout_seconds: 45
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
 
-	assert.True(t, cfg.ClamAV.Enabled)
-	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.ClamAV.Address)
-	assert.Equal(t, 45, cfg.ClamAV.TimeoutSeconds)
+	require.Len(t, cfg.Malware.Scanners, 1)
+	assert.Equal(t, "clamav", cfg.Malware.Scanners[0].Type)
+	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.Malware.Scanners[0].Address)
+	assert.Equal(t, 45, cfg.Malware.Scanners[0].TimeoutSeconds)
 }
 
 func TestLoad_ParsesMavenUpstreamsList(t *testing.T) {
@@ -166,6 +168,54 @@ registries:
 	_, err := config.Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rubygems")
+}
+
+func TestLoad_ParsesMalwareScanners(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+malware:
+  scanners:
+    - type: clamav
+      address: "unix:///var/run/clamav/clamd.sock"
+      timeout_seconds: 30
+    - type: icap
+      address: "tcp:kaspersky:1344"
+      service: "avscan"
+      timeout_seconds: 15
+`)
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Malware.Scanners, 2)
+	assert.Equal(t, "clamav", cfg.Malware.Scanners[0].Type)
+	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.Malware.Scanners[0].Address)
+	assert.Equal(t, 30, cfg.Malware.Scanners[0].TimeoutSeconds)
+	assert.Equal(t, "icap", cfg.Malware.Scanners[1].Type)
+	assert.Equal(t, "avscan", cfg.Malware.Scanners[1].Service)
+}
+
+func TestValidate_RejectsBadScanners(t *testing.T) {
+	cases := []config.ScannerConfig{
+		{Type: "", Address: "tcp:x:1"},                  // missing type
+		{Type: "bogus", Address: "tcp:x:1"},             // unknown type
+		{Type: "clamav", Address: ""},                   // missing address
+		{Type: "icap", Address: "tcp:x:1", Service: ""}, // icap without service
+	}
+	for _, sc := range cases {
+		c := &config.Config{Malware: config.MalwareConfig{Scanners: []config.ScannerConfig{sc}}}
+		err := c.Validate()
+		require.Error(t, err, "scanner %+v should be rejected", sc)
+		assert.Contains(t, err.Error(), "malware.scanners[0]", "error should reference the scanner index")
+	}
+}
+
+func TestValidate_AcceptsGoodScanners(t *testing.T) {
+	c := &config.Config{Malware: config.MalwareConfig{Scanners: []config.ScannerConfig{
+		{Type: "clamav", Address: "unix:///s.sock"},
+		{Type: "icap", Address: "tcp:k:1344", Service: "avscan"},
+	}}}
+	assert.NoError(t, c.Validate())
 }
 
 func TestLoadConfig_CVESection(t *testing.T) {
