@@ -31,14 +31,18 @@ type pypiJSONResponse struct {
 
 // PyPIAdapter implements proxy.RegistryAdapter for PyPI.
 type PyPIAdapter struct {
-	upstream   string
+	upstreams  []string
 	httpClient *http.Client
 }
 
-// NewPyPIAdapter creates a PyPI adapter pointing at the given upstream URL.
-func NewPyPIAdapter(upstream string) *PyPIAdapter {
+// NewPyPIAdapter creates a PyPI adapter over the given ordered upstream URLs.
+func NewPyPIAdapter(upstreams []string) *PyPIAdapter {
+	trimmed := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		trimmed[i] = strings.TrimRight(u, "/")
+	}
 	return &PyPIAdapter{
-		upstream:   strings.TrimRight(upstream, "/"),
+		upstreams:  trimmed,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -78,15 +82,27 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool
 	}, true
 }
 
-// FetchMetadata fetches PyPI version metadata from the JSON API.
+// FetchMetadata walks the configured upstreams in order, returning the first
+// success. If all upstreams fail, the last error is returned.
 func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
-	apiURL := fmt.Sprintf("%s/pypi/%s/%s/json", a.upstream, ref.Name, ref.Version)
+	lastErr := fmt.Errorf("no upstreams configured for pypi")
+	for _, base := range a.upstreams {
+		meta, err := a.fetchMetadataFrom(ctx, base, ref)
+		if err == nil {
+			return meta, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+	apiURL := fmt.Sprintf("%s/pypi/%s/%s/json", base, ref.Name, ref.Version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building metadata request: %w", err)
 	}
-
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching pypi metadata: %w", err)
@@ -104,20 +120,17 @@ func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) 
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, fmt.Errorf("decoding pypi response: %w", err)
 	}
-
 	if len(info.URLs) == 0 {
 		return nil, fmt.Errorf("no download URLs in pypi response for %s@%s", ref.Name, ref.Version)
 	}
 
 	publishedAt, err := time.Parse(time.RFC3339, info.URLs[0].UploadTimeISO)
 	if err != nil {
-		// PyPI sometimes omits timezone; try without it.
 		publishedAt, err = time.Parse("2006-01-02T15:04:05.999999Z07:00", info.URLs[0].UploadTimeISO)
 		if err != nil {
 			return nil, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", info.URLs[0].UploadTimeISO, err)
 		}
 	}
-
 	return &proxy.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		Maintainer:  info.Info.Author,
@@ -126,9 +139,13 @@ func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) 
 	}, nil
 }
 
-// UpstreamURL returns the upstream URL for a proxy request.
-func (a *PyPIAdapter) UpstreamURL(r *http.Request) string {
-	return a.upstream + r.URL.RequestURI()
+// UpstreamURLs returns one candidate URL per configured upstream, in order.
+func (a *PyPIAdapter) UpstreamURLs(r *http.Request) []string {
+	urls := make([]string, len(a.upstreams))
+	for i, base := range a.upstreams {
+		urls[i] = base + r.URL.RequestURI()
+	}
+	return urls
 }
 
 // parsePyPIFilename extracts the normalized package name and version from a filename.

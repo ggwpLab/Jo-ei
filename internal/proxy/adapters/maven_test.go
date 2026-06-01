@@ -14,7 +14,7 @@ import (
 )
 
 func TestMavenAdapter_NormalizeRequest_Jar(t *testing.T) {
-	a := adapters.NewMavenAdapter("https://repo1.maven.org/maven2")
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
 
 	r := httptest.NewRequest(http.MethodGet,
 		"/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar", nil)
@@ -26,7 +26,7 @@ func TestMavenAdapter_NormalizeRequest_Jar(t *testing.T) {
 }
 
 func TestMavenAdapter_NormalizeRequest_PomNotIntercepted(t *testing.T) {
-	a := adapters.NewMavenAdapter("https://repo1.maven.org/maven2")
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
 
 	r := httptest.NewRequest(http.MethodGet,
 		"/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.pom", nil)
@@ -45,7 +45,7 @@ func TestMavenAdapter_FetchMetadata_UsesLastModified(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewMavenAdapter(srv.URL)
+	a := adapters.NewMavenAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestMavenAdapter_FetchMetadata_NoLastModifiedYieldsZeroTime(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewMavenAdapter(srv.URL)
+	a := adapters.NewMavenAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestMavenAdapter_FetchMetadata_NoLastModifiedYieldsZeroTime(t *testing.T) {
 }
 
 func TestMavenAdapter_NormalizeRequest_WarAndAar(t *testing.T) {
-	a := adapters.NewMavenAdapter("https://repo1.maven.org/maven2")
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
 	cases := []struct {
 		path        string
 		wantName    string
@@ -95,7 +95,7 @@ func TestMavenAdapter_FetchMetadata_WarUsesPomHead(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewMavenAdapter(srv.URL)
+	a := adapters.NewMavenAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:myapp", Version: "1.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
@@ -108,8 +108,58 @@ func TestMavenAdapter_FetchMetadata_NonOKReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := adapters.NewMavenAdapter(srv.URL)
+	a := adapters.NewMavenAdapter([]string{srv.URL})
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:gone", Version: "9.9.9"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
+}
+
+func TestMavenAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
+	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up.Close()
+
+	a := adapters.NewMavenAdapter([]string{down.URL, up.URL})
+	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
+}
+
+func TestMavenAdapter_FetchMetadata_AllUpstreamsFail(t *testing.T) {
+	down1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down1.Close()
+	down2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer down2.Close()
+
+	a := adapters.NewMavenAdapter([]string{down1.URL, down2.URL})
+	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
+	_, err := a.FetchMetadata(context.Background(), ref)
+	require.Error(t, err)
+}
+
+func TestMavenAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{
+		"https://repo1.maven.org/maven2/",
+		"https://repo.spring.io/release",
+	})
+	r := httptest.NewRequest(http.MethodGet,
+		"/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar", nil)
+	urls := a.UpstreamURLs(r)
+	assert.Equal(t, []string{
+		"https://repo1.maven.org/maven2/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar",
+		"https://repo.spring.io/release/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar",
+	}, urls)
 }

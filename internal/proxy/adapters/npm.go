@@ -24,14 +24,18 @@ type npmMetadata struct {
 
 // NPMAdapter implements proxy.RegistryAdapter for the npm registry.
 type NPMAdapter struct {
-	upstream   string
+	upstreams  []string
 	httpClient *http.Client
 }
 
-// NewNPMAdapter creates an npm adapter pointing at the given upstream URL.
-func NewNPMAdapter(upstream string) *NPMAdapter {
+// NewNPMAdapter creates an npm adapter over the given ordered upstream URLs.
+func NewNPMAdapter(upstreams []string) *NPMAdapter {
+	trimmed := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		trimmed[i] = strings.TrimRight(u, "/")
+	}
 	return &NPMAdapter{
-		upstream:   strings.TrimRight(upstream, "/"),
+		upstreams:  trimmed,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -76,22 +80,32 @@ func parseNPMVersion(name, filename string) (string, bool) {
 	return version, true
 }
 
-// FetchMetadata reads the npm registry document and resolves the version's
-// publish time, license, and shasum.
+// FetchMetadata walks the configured upstreams in order, returning the first
+// success. If all upstreams fail, the last error is returned.
 func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
-	apiURL := a.upstream + "/" + ref.Name
+	lastErr := fmt.Errorf("no upstreams configured for npm")
+	for _, base := range a.upstreams {
+		meta, err := a.fetchMetadataFrom(ctx, base, ref)
+		if err == nil {
+			return meta, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+	apiURL := base + "/" + ref.Name
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building npm metadata request: %w", err)
 	}
-
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching npm metadata: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("npm returned HTTP %d for %s", resp.StatusCode, ref.Name)
 	}
@@ -100,7 +114,6 @@ func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil, fmt.Errorf("decoding npm response: %w", err)
 	}
-
 	publishedStr, ok := doc.Time[ref.Version]
 	if !ok {
 		return nil, fmt.Errorf("version %s not found in npm metadata for %s", ref.Version, ref.Name)
@@ -109,7 +122,6 @@ func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (
 	if err != nil {
 		return nil, fmt.Errorf("parsing npm publish time %q: %w", publishedStr, err)
 	}
-
 	versionInfo, ok := doc.Versions[ref.Version]
 	if !ok {
 		return nil, fmt.Errorf("version %s missing from npm versions map for %s", ref.Version, ref.Name)
@@ -121,7 +133,11 @@ func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (
 	}, nil
 }
 
-// UpstreamURL returns the upstream URL for a proxy request.
-func (a *NPMAdapter) UpstreamURL(r *http.Request) string {
-	return a.upstream + r.URL.RequestURI()
+// UpstreamURLs returns one candidate URL per configured upstream, in order.
+func (a *NPMAdapter) UpstreamURLs(r *http.Request) []string {
+	urls := make([]string, len(a.upstreams))
+	for i, base := range a.upstreams {
+		urls[i] = base + r.URL.RequestURI()
+	}
+	return urls
 }

@@ -15,13 +15,12 @@ import (
 )
 
 // buildHandlerFor wires a minimal handler for a single registry adapter.
-func buildHandlerFor(adapter proxy.RegistryAdapter, upstream string) *proxy.Handler {
+func buildHandlerFor(adapter proxy.RegistryAdapter) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  adapter,
-		Filter:   supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
-		Cache:    newFakeCache(),
-		Logger:   zerolog.Nop(),
-		Upstream: upstream,
+		Adapter: adapter,
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.Nop(),
 	})
 }
 
@@ -35,7 +34,7 @@ func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 	defer upstream.Close()
 
 	mux := proxy.NewMux(map[string]*proxy.Handler{
-		"pypi": buildHandlerFor(adapters.NewPyPIAdapter(upstream.URL), upstream.URL),
+		"pypi": buildHandlerFor(adapters.NewPyPIAdapter([]string{upstream.URL})),
 	}, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

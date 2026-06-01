@@ -116,16 +116,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// Build one handler per enabled registry, keyed by routing prefix.
 	handlers := map[string]*proxy.Handler{}
 	if cfg.Registries.PyPI.Enabled {
-		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstream),
-			cfg.Registries.PyPI.Upstream, shared)
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
 	}
 	if cfg.Registries.NPM.Enabled {
-		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstream),
-			cfg.Registries.NPM.Upstream, shared)
+		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
 	}
 	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstream),
-			cfg.Registries.Maven.Upstream, shared)
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
 	}
 
 	if len(handlers) == 0 {
@@ -153,13 +150,12 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 // buildHandler constructs a proxy.Handler for one registry adapter with the
 // shared dependency set.
-func buildHandler(adapter proxy.RegistryAdapter, upstream string, shared sharedDeps) *proxy.Handler {
+func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapter,
 		Filter:     shared.filter,
 		Cache:      shared.cache,
 		Logger:     shared.logger,
-		Upstream:   upstream,
 		CVEScanner: shared.cveScanner,
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,

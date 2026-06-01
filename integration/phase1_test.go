@@ -74,18 +74,17 @@ func newTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httptes
 	})
 	require.NoError(t, err)
 
-	adapter := adapters.NewPyPIAdapter(upstream.URL)
+	adapter := adapters.NewPyPIAdapter([]string{upstream.URL})
 	filter := supplychain.NewFilter(config.SupplyChainConfig{
 		MinAgeHours: 24,
 		Mode:        mode,
 	}, nil)
 
 	h := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  adapter,
-		Filter:   filter,
-		Cache:    &localCacheAdapter{lc: localCache},
-		Logger:   zerolog.Nop(),
-		Upstream: upstream.URL,
+		Adapter: adapter,
+		Filter:  filter,
+		Cache:   &localCacheAdapter{lc: localCache},
+		Logger:  zerolog.Nop(),
 	})
 
 	return httptest.NewServer(h)
