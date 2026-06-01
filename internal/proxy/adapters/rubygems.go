@@ -78,13 +78,13 @@ func parseGemFilename(filename string) (name, version string, ok bool) {
 			break
 		}
 	}
-	if verIdx <= 0 { // no version segment, or an empty name
+	if verIdx <= 0 { // no digit-led segment found (-1), or it is the first segment (no name before it)
 		return "", "", false
 	}
 	name = strings.Join(segs[:verIdx], "-")
 	number := segs[verIdx]
 	platform := strings.Join(segs[verIdx+1:], "-")
-	if name == "" || number == "" {
+	if name == "" {
 		return "", "", false
 	}
 	if platform == "" {

@@ -127,3 +127,23 @@ func TestRubyGemsAdapter_FetchMetadata_VersionNotFound(t *testing.T) {
 	_, err := a.FetchMetadata(context.Background(), ref)
 	require.Error(t, err)
 }
+
+func TestRubyGemsAdapter_FetchMetadata_FallsBackWhenVersionAbsent(t *testing.T) {
+	created := time.Now().UTC().Add(-72 * time.Hour)
+	// First upstream is healthy (200) but only has an older version.
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"number":"6.1.0","platform":"ruby","created_at":"2020-01-01T00:00:00Z","licenses":["MIT"],"sha":"old"}]`))
+	}))
+	defer first.Close()
+	// Second upstream has the requested version.
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"number":"7.0.4","platform":"ruby","created_at":"` + created.Format(time.RFC3339) + `","licenses":["MIT"],"sha":"newsha"}]`))
+	}))
+	defer second.Close()
+
+	a := adapters.NewRubyGemsAdapter([]string{first.URL, second.URL})
+	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, "newsha", meta.Checksum)
+}
