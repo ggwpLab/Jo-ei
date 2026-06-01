@@ -30,6 +30,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("registry %q is enabled but has no upstreams", name)
 		}
 	}
+	// Zero scanners is valid; malware scanning is simply skipped.
 	for i, sc := range c.Malware.Scanners {
 		switch sc.Type {
 		case "clamav", "icap":

@@ -171,7 +171,7 @@ registries:
 }
 
 func TestLoad_ParsesMalwareScanners(t *testing.T) {
-	yaml := `
+	path := writeTempConfig(t, `
 server:
   listen: ":8080"
 malware:
@@ -183,12 +183,9 @@ malware:
       address: "tcp:kaspersky:1344"
       service: "avscan"
       timeout_seconds: 15
-`
-	dir := t.TempDir()
-	f := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(f, []byte(yaml), 0644))
+`)
 
-	cfg, err := config.Load(f)
+	cfg, err := config.Load(path)
 	require.NoError(t, err)
 	require.Len(t, cfg.Malware.Scanners, 2)
 	assert.Equal(t, "clamav", cfg.Malware.Scanners[0].Type)
@@ -207,7 +204,9 @@ func TestValidate_RejectsBadScanners(t *testing.T) {
 	}
 	for _, sc := range cases {
 		c := &config.Config{Malware: config.MalwareConfig{Scanners: []config.ScannerConfig{sc}}}
-		assert.Error(t, c.Validate(), "scanner %+v", sc)
+		err := c.Validate()
+		require.Error(t, err, "scanner %+v should be rejected", sc)
+		assert.Contains(t, err.Error(), "malware.scanners[0]", "error should reference the scanner index")
 	}
 }
 
