@@ -34,7 +34,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	// Second upstream: serves .pom HEAD (with a Last-Modified that satisfies the
 	// 24h age check) and the .jar body.
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ".pom") {
+		if strings.HasSuffix(r.URL.Path, ".pom") && r.Method == http.MethodHead {
 			w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
 			w.WriteHeader(http.StatusOK)
 			return
