@@ -113,20 +113,11 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			Msg("clamav.enabled is true but active profile has malware_block:false — AV scanner not attached")
 	}
 
-	// Build one handler per enabled registry, keyed by routing prefix.
-	handlers := map[string]*proxy.Handler{}
-	if cfg.Registries.PyPI.Enabled {
-		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
-	}
-	if cfg.Registries.NPM.Enabled {
-		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
-	}
-	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
-	}
+	// Build the prefix→handler routing map from config.
+	handlers := buildHandlers(cfg, shared)
 
 	if len(handlers) == 0 {
-		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven}.enabled: true")
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems}.enabled: true")
 	}
 
 	mux := proxy.NewMux(handlers, logger)
@@ -146,6 +137,28 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		WriteTimeout: 120 * time.Second,
 	}
 	return srv.ListenAndServe()
+}
+
+// buildHandlers constructs the routing map of prefix→handler from config.
+// The "yarn" prefix is an alias for the npm handler, since yarn speaks the npm
+// registry protocol.
+func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Handler {
+	handlers := map[string]*proxy.Handler{}
+	if cfg.Registries.PyPI.Enabled {
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
+	}
+	if cfg.Registries.NPM.Enabled {
+		npmHandler := buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
+		handlers["npm"] = npmHandler
+		handlers["yarn"] = npmHandler
+	}
+	if cfg.Registries.Maven.Enabled {
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
+	}
+	if cfg.Registries.RubyGems.Enabled {
+		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams), shared)
+	}
+	return handlers
 }
 
 // buildHandler constructs a proxy.Handler for one registry adapter with the
