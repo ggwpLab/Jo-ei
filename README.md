@@ -14,7 +14,7 @@ Developer (pip/npm/mvn)
   │  1. Cache lookup (HIT served immediately)   │
   │  2. Supply Chain Filter (24h rule)          │
   │  3. CVE Scanner (osv.dev)                   │
-  │  4. Malware Scanner (ClamAV / ICAP)          │
+  │  4. Malware Scanner (ClamAV / ICAP)         │
   └─────────────────────────────────────────────┘
         │
         ▼
@@ -24,7 +24,7 @@ Developer (pip/npm/mvn)
 **What gets blocked:**
 - Packages published less than 24 hours ago (supply chain poisoning protection)
 - Packages with CVE severity ≥ configured threshold (`HIGH` by default)
-- Packages whose artifact matches a ClamAV malware signature
+- Packages whose artifact matches a malware signature detected by any configured scanner
 - Packages on the explicit `denylist`
 
 **What gets cached:** Approved artifacts are stored locally; repeat requests are served
