@@ -11,7 +11,7 @@ type Config struct {
 	Registries  RegistriesConfig  `mapstructure:"registries"`
 	SupplyChain SupplyChainConfig `mapstructure:"supply_chain"`
 	CVE         CVEConfig         `mapstructure:"cve"`
-	ClamAV      ClamAVConfig      `mapstructure:"clamav"`
+	Malware     MalwareConfig     `mapstructure:"malware"`
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
 	Logging     LoggingConfig     `mapstructure:"logging"`
@@ -28,6 +28,21 @@ func (c *Config) Validate() error {
 	for name, rc := range regs {
 		if rc.Enabled && len(rc.Upstreams) == 0 {
 			return fmt.Errorf("registry %q is enabled but has no upstreams", name)
+		}
+	}
+	for i, sc := range c.Malware.Scanners {
+		switch sc.Type {
+		case "clamav", "icap":
+		case "":
+			return fmt.Errorf("malware.scanners[%d]: type is required", i)
+		default:
+			return fmt.Errorf("malware.scanners[%d]: unknown type %q (want clamav|icap)", i, sc.Type)
+		}
+		if sc.Address == "" {
+			return fmt.Errorf("malware.scanners[%d]: address is required", i)
+		}
+		if sc.Type == "icap" && sc.Service == "" {
+			return fmt.Errorf("malware.scanners[%d]: icap scanner requires a service", i)
 		}
 	}
 	return nil
@@ -101,11 +116,17 @@ type CVEConfig struct {
 	CacheTTLMinutes int    `mapstructure:"cache_ttl_minutes"` // default 1440
 }
 
-// ClamAVConfig configures the ClamAV malware scanner (clamd).
-type ClamAVConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`
-	Address        string `mapstructure:"address"`         // "unix:///var/run/clamav/clamd.sock" or "tcp:host:3310"
+// MalwareConfig configures the malware-scanning engines run after download.
+type MalwareConfig struct {
+	Scanners []ScannerConfig `mapstructure:"scanners"`
+}
+
+// ScannerConfig configures a single malware-scanning engine.
+type ScannerConfig struct {
+	Type           string `mapstructure:"type"`            // "clamav" | "icap"
+	Address        string `mapstructure:"address"`         // unix:///path | tcp:host:port
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 30
+	Service        string `mapstructure:"service"`         // ICAP service name (icap only)
 }
 
 type LoggingConfig struct {
