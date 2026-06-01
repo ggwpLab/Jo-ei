@@ -70,6 +70,22 @@ Or persist it:
 npm config set registry http://localhost:8080/npm/
 ```
 
+**yarn** (uses the npm registry protocol via the `/yarn/` alias):
+```bash
+# Yarn Berry (v2+)
+yarn config set npmRegistryServer http://localhost:8080/yarn/
+# Yarn Classic (v1)
+yarn config set registry http://localhost:8080/yarn/
+```
+
+**RubyGems / Bundler:**
+```bash
+# bundler
+bundle config mirror.https://rubygems.org http://localhost:8080/rubygems
+# or set the source in a Gemfile:
+#   source "http://localhost:8080/rubygems"
+```
+
 **3. Smoke test**
 
 ```bash
@@ -124,6 +140,10 @@ registries:
     upstreams:
       - "https://repo1.maven.org/maven2"
       - "https://repo.spring.io/release"
+  rubygems:
+    upstreams:
+      - "https://rubygems.org"
+    enabled: true
 ```
 
 ## Configuration
