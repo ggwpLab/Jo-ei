@@ -177,8 +177,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !avResult.Clean {
-			log.Warn().Str("signature", avResult.Signature).Msg("malware detected")
-			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Signature)
+			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).Msg("malware detected")
+			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Engine, avResult.Signature)
 			return
 		}
 	}
@@ -379,12 +379,13 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *Packa
 }
 
 // writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
-func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, signature string) {
+func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, engine, signature string) {
 	body := map[string]any{
 		"error":      "package_blocked",
 		"package":    ref.Name,
 		"version":    ref.Version,
 		"reason":     "malware_found",
+		"engine":     engine,
 		"signature":  signature,
 		"blocked_by": []string{"malware_scanner"},
 		"request_id": requestID,

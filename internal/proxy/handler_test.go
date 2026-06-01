@@ -365,7 +365,7 @@ func TestHandler_MalwareReturns403(t *testing.T) {
 	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
 	defer upstream.Close()
 
-	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR"}}
+	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "clamav"}}
 	srv := setupTestProxyAV(t, upstream, av)
 	defer srv.Close()
 
@@ -379,6 +379,7 @@ func TestHandler_MalwareReturns403(t *testing.T) {
 	assert.Equal(t, "package_blocked", body["error"])
 	assert.Equal(t, "malware_found", body["reason"])
 	assert.Equal(t, "Win.Test.EICAR", body["signature"])
+	assert.Equal(t, "clamav", body["engine"])
 }
 
 func TestHandler_AVScannerErrorFailsClosed(t *testing.T) {
