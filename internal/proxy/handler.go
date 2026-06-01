@@ -148,17 +148,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Download artifact from upstream to a temp file
-	candidateURLs := h.cfg.Adapter.UpstreamURLs(r)
-	if len(candidateURLs) == 0 {
+	// Download artifact, trying each configured upstream in order.
+	upstreamURLs := h.cfg.Adapter.UpstreamURLs(r)
+	if len(upstreamURLs) == 0 {
 		log.Error().Msg("adapter returned no upstream URLs")
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
 		return
 	}
-	upstreamURL := candidateURLs[0]
-	tmpPath, err := h.downloadToTemp(ctx, upstreamURL)
+	tmpPath, allNotFound, err := h.downloadFromUpstreams(ctx, upstreamURLs)
 	if err != nil {
-		log.Error().Err(err).Str("upstream_url", upstreamURL).Msg("failed to download artifact")
+		if allNotFound {
+			log.Warn().Strs("upstream_urls", upstreamURLs).Msg("artifact not found on any upstream")
+			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
+			return
+		}
+		log.Error().Err(err).Strs("upstream_urls", upstreamURLs).Msg("failed to download artifact")
 		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_unavailable")
 		return
 	}
@@ -232,36 +236,51 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// downloadToTemp downloads url to a temporary file and returns its path.
-// The caller is responsible for removing the file.
-func (h *Handler) downloadToTemp(ctx context.Context, url string) (string, error) {
+// tryDownload downloads url to a temp file. Returns the temp path on HTTP 200.
+// statusCode is the upstream HTTP status (0 on transport error). The caller
+// removes the file.
+func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, statusCode int, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("downloading %s: %w", url, err)
+		return "", 0, fmt.Errorf("downloading %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
+		return "", resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
 	}
 
 	tmp, err := os.CreateTemp("", "sca-proxy-artifact-*")
 	if err != nil {
-		return "", fmt.Errorf("creating temp file: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
 	defer tmp.Close()
-
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
 		os.Remove(tmp.Name())
-		return "", fmt.Errorf("writing temp file: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
 	}
+	return tmp.Name(), resp.StatusCode, nil
+}
 
-	return tmp.Name(), nil
+// downloadFromUpstreams tries each candidate URL in order, returning the first
+// HTTP 200. allNotFound is true iff every attempt returned 404/410 (no other
+// failure occurred), which the caller maps to a 404 instead of 502.
+func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, allNotFound bool, err error) {
+	allNotFound = true
+	for _, u := range urls {
+		path, status, derr := h.tryDownload(ctx, u)
+		if derr == nil {
+			return path, false, nil
+		}
+		if status != http.StatusNotFound && status != http.StatusGone {
+			allNotFound = false
+		}
+		err = derr
+	}
+	return "", allNotFound, err
 }
 
 // serveFromCache streams the cached artifact to the response writer.
