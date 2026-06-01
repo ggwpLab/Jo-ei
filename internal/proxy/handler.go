@@ -269,6 +269,9 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 // HTTP 200. allNotFound is true iff every attempt returned 404/410 (no other
 // failure occurred), which the caller maps to a 404 instead of 502.
 func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, allNotFound bool, err error) {
+	if len(urls) == 0 {
+		return "", false, fmt.Errorf("downloadFromUpstreams: no upstream URLs provided")
+	}
 	allNotFound = true
 	for _, u := range urls {
 		path, status, derr := h.tryDownload(ctx, u)
