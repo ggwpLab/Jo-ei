@@ -129,7 +129,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validating config: %w", err)
 	}
 	return &cfg, nil
 }

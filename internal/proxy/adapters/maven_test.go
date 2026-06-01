@@ -135,12 +135,16 @@ func TestMavenAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 }
 
 func TestMavenAdapter_FetchMetadata_AllUpstreamsFail(t *testing.T) {
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	down1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
-	defer down.Close()
+	defer down1.Close()
+	down2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer down2.Close()
 
-	a := adapters.NewMavenAdapter([]string{down.URL, down.URL})
+	a := adapters.NewMavenAdapter([]string{down1.URL, down2.URL})
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	require.Error(t, err)

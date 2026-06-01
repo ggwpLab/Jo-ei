@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -156,7 +157,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 func buildHandler(adapter proxy.RegistryAdapter, upstreams []string, shared sharedDeps) *proxy.Handler {
 	upstream := ""
 	if len(upstreams) > 0 {
-		upstream = upstreams[0]
+		upstream = strings.TrimRight(upstreams[0], "/")
 	}
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapter,

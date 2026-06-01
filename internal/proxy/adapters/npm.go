@@ -80,7 +80,8 @@ func parseNPMVersion(name, filename string) (string, bool) {
 	return version, true
 }
 
-// FetchMetadata walks the configured upstreams in order, returning the first success.
+// FetchMetadata walks the configured upstreams in order, returning the first
+// success. If all upstreams fail, the last error is returned.
 func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for npm")
 	for _, base := range a.upstreams {

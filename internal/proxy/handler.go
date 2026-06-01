@@ -149,7 +149,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Download artifact from upstream to a temp file
-	upstreamURL := h.cfg.Adapter.UpstreamURLs(r)[0]
+	candidateURLs := h.cfg.Adapter.UpstreamURLs(r)
+	if len(candidateURLs) == 0 {
+		log.Error().Msg("adapter returned no upstream URLs")
+		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
+		return
+	}
+	upstreamURL := candidateURLs[0]
 	tmpPath, err := h.downloadToTemp(ctx, upstreamURL)
 	if err != nil {
 		log.Error().Err(err).Str("upstream_url", upstreamURL).Msg("failed to download artifact")

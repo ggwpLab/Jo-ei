@@ -73,7 +73,7 @@ func parseMavenPath(path string) (name, version string, ok bool) {
 }
 
 // FetchMetadata walks the configured upstreams in order, returning the first
-// success. The current body is parameterised by a single base URL.
+// success. If all upstreams fail, the last error is returned.
 func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for maven")
 	for _, base := range a.upstreams {

@@ -82,7 +82,8 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool
 	}, true
 }
 
-// FetchMetadata walks the configured upstreams in order, returning the first success.
+// FetchMetadata walks the configured upstreams in order, returning the first
+// success. If all upstreams fail, the last error is returned.
 func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for pypi")
 	for _, base := range a.upstreams {
