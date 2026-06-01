@@ -204,6 +204,7 @@ func TestOSVScanner_EcosystemMapping(t *testing.T) {
 		{"npm", "npm"},
 		{"maven", "Maven"},
 		{"go", "Go"},
+		{"rubygems", "RubyGems"},
 	}
 	for _, c := range cases {
 		sc.Scan(context.Background(), &proxy.PackageRef{Ecosystem: c.ecosystem, Name: "x", Version: "1.0.0"})

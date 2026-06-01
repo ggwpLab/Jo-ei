@@ -102,7 +102,8 @@ func (s *OSVScanner) Scan(ctx context.Context, ref *proxy.PackageRef) (*proxy.Sc
 
 // queryOSV performs the actual HTTP request to api.osv.dev.
 func (s *OSVScanner) queryOSV(ctx context.Context, ref *proxy.PackageRef) (*proxy.ScanResult, error) {
-	ecosystem, ok := ecosystemMap[strings.ToLower(ref.Ecosystem)]
+	eco := strings.ToLower(ref.Ecosystem)
+	ecosystem, ok := ecosystemMap[eco]
 	if !ok {
 		ecosystem = ref.Ecosystem // fall back to as-is
 	}
@@ -110,7 +111,7 @@ func (s *OSVScanner) queryOSV(ctx context.Context, ref *proxy.PackageRef) (*prox
 	// RubyGems encodes the platform into the version (e.g. "1.15.0-x86_64-linux");
 	// OSV is keyed by the bare gem version. Gem versions contain no hyphens.
 	version := ref.Version
-	if strings.ToLower(ref.Ecosystem) == "rubygems" {
+	if eco == "rubygems" {
 		version = strings.SplitN(version, "-", 2)[0]
 	}
 
