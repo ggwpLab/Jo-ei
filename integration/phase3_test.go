@@ -96,7 +96,6 @@ func newPhase3NPMProxy(t *testing.T, upstream *httptest.Server, clamdAddr string
 		Filter:    supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
 		Cache:     &localCacheAdapter{lc: lc},
 		Logger:    zerolog.Nop(),
-		Upstream:  upstream.URL,
 		AVScanner: av,
 	})
 	mux := proxy.NewMux(map[string]*proxy.Handler{"npm": h}, zerolog.Nop())
@@ -161,7 +160,6 @@ func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
 		Filter:    supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
 		Cache:     &localCacheAdapter{lc: lc},
 		Logger:    zerolog.Nop(),
-		Upstream:  registry.URL,
 		AVScanner: av,
 	})
 	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, zerolog.Nop())

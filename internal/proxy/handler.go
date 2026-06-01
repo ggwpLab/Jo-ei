@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,7 +39,6 @@ type HandlerConfig struct {
 	Filter     SCFilter
 	Cache      ArtifactCache
 	Logger     zerolog.Logger
-	Upstream   string
 	CVEScanner CVEScanner    // optional; nil disables CVE scanning
 	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
 	AVScanner  AVScanner     // optional; nil disables malware scanning
@@ -201,39 +201,64 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.serveFromCache(w, entry)
 }
 
-// proxyTransparent forwards a request to upstream and streams the response back.
+// proxyTransparent forwards a non-intercepted request to each configured
+// upstream in order, streaming back the first response with status < 400.
+// If all fail, returns 404 (all were 404/410) or 502.
 func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.cfg.Upstream + r.URL.RequestURI()
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
-	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		return
-	}
-	for key, vals := range r.Header {
-		for _, v := range vals {
-			req.Header.Add(key, v)
-		}
-	}
-	for _, h := range hopByHopHeaders {
-		req.Header.Del(h)
+	urls := h.cfg.Adapter.UpstreamURLs(r)
+
+	// Buffer the request body once so it can be replayed across attempts.
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+		r.Body.Close()
 	}
 
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	allNotFound := true
+	for _, url := range urls {
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(body))
+		if err != nil {
+			allNotFound = false
+			continue
+		}
+		for key, vals := range r.Header {
+			for _, v := range vals {
+				req.Header.Add(key, v)
+			}
+		}
+		for _, hop := range hopByHopHeaders {
+			req.Header.Del(hop)
+		}
+
+		resp, err := h.httpClient.Do(req)
+		if err != nil {
+			allNotFound = false
+			continue
+		}
+		if resp.StatusCode < 400 {
+			for key, vals := range resp.Header {
+				for _, v := range vals {
+					w.Header().Add(key, v)
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
+			}
+			resp.Body.Close()
+			return
+		}
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusGone {
+			allNotFound = false
+		}
+		resp.Body.Close()
+	}
+
+	if allNotFound {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	defer resp.Body.Close()
-
-	for key, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
-	}
+	http.Error(w, "upstream unavailable", http.StatusBadGateway)
 }
 
 // tryDownload downloads url to a temp file. Returns the temp path on HTTP 200.

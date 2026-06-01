@@ -81,11 +81,10 @@ func setupTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httpt
 	logger := zerolog.Nop()
 
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  adapter,
-		Filter:   sc,
-		Cache:    fc,
-		Logger:   logger,
-		Upstream: upstream.URL,
+		Adapter: adapter,
+		Filter:  sc,
+		Cache:   fc,
+		Logger:  logger,
 	})
 
 	return httptest.NewServer(handler)
@@ -272,7 +271,6 @@ func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc proxy.CVEScan
 		Filter:     filter,
 		Cache:      newFakeCache(),
 		Logger:     zerolog.Nop(),
-		Upstream:   upstream.URL,
 		CVEScanner: sc,
 		Policy:     pol,
 	})
@@ -358,7 +356,6 @@ func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av proxy.AVScanne
 		Filter:    filter,
 		Cache:     newFakeCache(),
 		Logger:    zerolog.Nop(),
-		Upstream:  upstream.URL,
 		AVScanner: av,
 	})
 	return httptest.NewServer(handler)
@@ -485,6 +482,44 @@ func TestHandler_DownloadAllNotFoundReturns404(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/packages/py3/r/requests/requests-2.31.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestHandler_TransparentProxyFallsBackToSecondUpstream(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("simple-index-html"))
+	}))
+	defer up.Close()
+
+	srv := setupTwoUpstreamProxy(t, down, up)
+	defer srv.Close()
+
+	// /simple/ is a metadata path (not intercepted) → transparent proxy.
+	resp, err := http.Get(srv.URL + "/simple/requests/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, "simple-index-html", string(body))
+}
+
+func TestHandler_TransparentProxyAllNotFoundReturns404(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down.Close()
+
+	srv := setupTwoUpstreamProxy(t, down, down)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/simple/nonexistent/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)

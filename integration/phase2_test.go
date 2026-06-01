@@ -60,7 +60,6 @@ func newPhase2Proxy(t *testing.T, upstream, osvServer *httptest.Server, prof con
 		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
 		Cache:      &localCacheAdapter{lc: lc},
 		Logger:     zerolog.Nop(),
-		Upstream:   upstream.URL,
 		CVEScanner: cveScanner,
 		Policy:     policyEngine,
 	})

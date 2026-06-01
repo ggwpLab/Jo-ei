@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -117,16 +116,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// Build one handler per enabled registry, keyed by routing prefix.
 	handlers := map[string]*proxy.Handler{}
 	if cfg.Registries.PyPI.Enabled {
-		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams),
-			cfg.Registries.PyPI.Upstreams, shared)
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
 	}
 	if cfg.Registries.NPM.Enabled {
-		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams),
-			cfg.Registries.NPM.Upstreams, shared)
+		handlers["npm"] = buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
 	}
 	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams),
-			cfg.Registries.Maven.Upstreams, shared)
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
 	}
 
 	if len(handlers) == 0 {
@@ -154,17 +150,12 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 // buildHandler constructs a proxy.Handler for one registry adapter with the
 // shared dependency set.
-func buildHandler(adapter proxy.RegistryAdapter, upstreams []string, shared sharedDeps) *proxy.Handler {
-	upstream := ""
-	if len(upstreams) > 0 {
-		upstream = strings.TrimRight(upstreams[0], "/")
-	}
+func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapter,
 		Filter:     shared.filter,
 		Cache:      shared.cache,
 		Logger:     shared.logger,
-		Upstream:   upstream,
 		CVEScanner: shared.cveScanner,
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,
