@@ -28,8 +28,6 @@ func TestBuildHandlers_RubyGemsRegisteredWhenEnabled(t *testing.T) {
 	h := buildHandlers(cfg, sharedDeps{logger: zerolog.Nop()})
 
 	assert.Contains(t, h, "rubygems")
-	_, hasNPM := h["npm"]
-	assert.False(t, hasNPM)
-	_, hasYarn := h["yarn"]
-	assert.False(t, hasYarn)
+	assert.NotContains(t, h, "npm")
+	assert.NotContains(t, h, "yarn")
 }

@@ -120,11 +120,17 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems}.enabled: true")
 	}
 
+	// The yarn prefix is an alias of the npm handler, not a separate registry.
+	registryCount := len(handlers)
+	if _, ok := handlers["yarn"]; ok {
+		registryCount--
+	}
+
 	mux := proxy.NewMux(handlers, logger)
 
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
-		Int("registries", len(handlers)).
+		Int("registries", registryCount).
 		Bool("clamav", shared.avScanner != nil).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
