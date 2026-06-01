@@ -20,9 +20,10 @@ type Config struct {
 // Validate checks cross-field invariants after loading.
 func (c *Config) Validate() error {
 	regs := map[string]RegistryConfig{
-		"pypi":  c.Registries.PyPI,
-		"npm":   c.Registries.NPM,
-		"maven": c.Registries.Maven,
+		"pypi":     c.Registries.PyPI,
+		"npm":      c.Registries.NPM,
+		"maven":    c.Registries.Maven,
+		"rubygems": c.Registries.RubyGems,
 	}
 	for name, rc := range regs {
 		if rc.Enabled && len(rc.Upstreams) == 0 {
@@ -44,9 +45,10 @@ type TLSConfig struct {
 }
 
 type RegistriesConfig struct {
-	PyPI  RegistryConfig `mapstructure:"pypi"`
-	NPM   RegistryConfig `mapstructure:"npm"`
-	Maven RegistryConfig `mapstructure:"maven"`
+	PyPI     RegistryConfig `mapstructure:"pypi"`
+	NPM      RegistryConfig `mapstructure:"npm"`
+	Maven    RegistryConfig `mapstructure:"maven"`
+	RubyGems RegistryConfig `mapstructure:"rubygems"`
 }
 
 type RegistryConfig struct {

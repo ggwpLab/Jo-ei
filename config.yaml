@@ -17,6 +17,10 @@ registries:
       - "https://repo1.maven.org/maven2"
       - "https://repo.spring.io/release"
     enabled: true
+  rubygems:
+    upstreams:
+      - "https://rubygems.org"
+    enabled: true
 
 supply_chain:
   min_age_hours: 24
