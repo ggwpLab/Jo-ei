@@ -35,7 +35,7 @@ func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 	defer upstream.Close()
 
 	mux := proxy.NewMux(map[string]*proxy.Handler{
-		"pypi": buildHandlerFor(adapters.NewPyPIAdapter(upstream.URL), upstream.URL),
+		"pypi": buildHandlerFor(adapters.NewPyPIAdapter([]string{upstream.URL}), upstream.URL),
 	}, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

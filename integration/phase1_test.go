@@ -74,7 +74,7 @@ func newTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httptes
 	})
 	require.NoError(t, err)
 
-	adapter := adapters.NewPyPIAdapter(upstream.URL)
+	adapter := adapters.NewPyPIAdapter([]string{upstream.URL})
 	filter := supplychain.NewFilter(config.SupplyChainConfig{
 		MinAgeHours: 24,
 		Mode:        mode,

@@ -72,7 +72,7 @@ func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error {
 func setupTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httptest.Server {
 	t.Helper()
 
-	adapter := adapters.NewPyPIAdapter(upstream.URL)
+	adapter := adapters.NewPyPIAdapter([]string{upstream.URL})
 	sc := supplychain.NewFilter(config.SupplyChainConfig{
 		MinAgeHours: 24,
 		Mode:        mode,
@@ -268,7 +268,7 @@ func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc proxy.CVEScan
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:    adapters.NewPyPIAdapter(upstream.URL),
+		Adapter:    adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:     filter,
 		Cache:      newFakeCache(),
 		Logger:     zerolog.Nop(),
@@ -354,7 +354,7 @@ func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av proxy.AVScanne
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:   adapters.NewPyPIAdapter(upstream.URL),
+		Adapter:   adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:    filter,
 		Cache:     newFakeCache(),
 		Logger:    zerolog.Nop(),
