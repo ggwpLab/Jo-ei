@@ -100,17 +100,22 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		shared.policy = policy.NewEngine(cfg.CVE, profile)
 	}
 
-	// ClamAV scanner (optional; attached only when the profile blocks malware).
-	if cfg.ClamAV.Enabled && profile.MalwareBlock {
-		av, err := scanner.NewClamAVScanner(cfg.ClamAV.Address,
-			time.Duration(cfg.ClamAV.TimeoutSeconds)*time.Second)
-		if err != nil {
-			return err
+	// Malware scanners (optional; attached only when the profile blocks malware).
+	engineCount := 0
+	if profile.MalwareBlock && len(cfg.Malware.Scanners) > 0 {
+		scanners := make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
+		for _, sc := range cfg.Malware.Scanners {
+			av, err := scanner.New(sc)
+			if err != nil {
+				return err
+			}
+			scanners = append(scanners, av)
 		}
-		shared.avScanner = av
-	} else if cfg.ClamAV.Enabled {
+		shared.avScanner = scanner.NewMultiScanner(scanners...)
+		engineCount = len(scanners)
+	} else if len(cfg.Malware.Scanners) > 0 {
 		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
-			Msg("clamav.enabled is true but active profile has malware_block:false — AV scanner not attached")
+			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
 	}
 
 	// Build the prefix→handler routing map from config.
@@ -131,7 +136,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
 		Int("registries", registryCount).
-		Bool("clamav", shared.avScanner != nil).
+		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
 		Msg("SCA Proxy starting")
