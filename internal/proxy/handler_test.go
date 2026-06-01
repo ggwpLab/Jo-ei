@@ -16,6 +16,7 @@ import (
 	"github.com/sca-proxy/sca-proxy/internal/config"
 	"github.com/sca-proxy/sca-proxy/internal/proxy"
 	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
+	"github.com/sca-proxy/sca-proxy/internal/scanner"
 	"github.com/sca-proxy/sca-proxy/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -408,6 +409,32 @@ func TestHandler_CleanArtifactPassesAV(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestHandler_MultiScannerReportsDetectingEngine(t *testing.T) {
+	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	// First engine clean, second detects — verify the handler surfaces the
+	// detecting engine end-to-end through a real MultiScanner.
+	cleanEngine := &mockAVScanner{result: &proxy.AVResult{Clean: true, Engine: "clamav"}}
+	infectedEngine := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "icap"}}
+	multi := scanner.NewMultiScanner(cleanEngine, infectedEngine)
+
+	srv := setupTestProxyAV(t, upstream, multi)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/e/evil-pkg/evil_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "package_blocked", body["error"])
+	assert.Equal(t, "malware_found", body["reason"])
+	assert.Equal(t, "Win.Test.EICAR", body["signature"])
+	assert.Equal(t, "icap", body["engine"])
 }
 
 // ─── download fallback tests ───────────────────────────────────────────────
