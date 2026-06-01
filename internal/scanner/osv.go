@@ -15,10 +15,11 @@ import (
 
 // ecosystemMap maps our internal ecosystem names to OSV API ecosystem names.
 var ecosystemMap = map[string]string{
-	"pypi":  "PyPI",
-	"npm":   "npm",
-	"maven": "Maven",
-	"go":    "Go",
+	"pypi":     "PyPI",
+	"npm":      "npm",
+	"maven":    "Maven",
+	"go":       "Go",
+	"rubygems": "RubyGems",
 }
 
 // osvQueryRequest is the body sent to api.osv.dev/v1/query.
@@ -106,9 +107,16 @@ func (s *OSVScanner) queryOSV(ctx context.Context, ref *proxy.PackageRef) (*prox
 		ecosystem = ref.Ecosystem // fall back to as-is
 	}
 
+	// RubyGems encodes the platform into the version (e.g. "1.15.0-x86_64-linux");
+	// OSV is keyed by the bare gem version. Gem versions contain no hyphens.
+	version := ref.Version
+	if strings.ToLower(ref.Ecosystem) == "rubygems" {
+		version = strings.SplitN(version, "-", 2)[0]
+	}
+
 	reqBody, err := json.Marshal(osvQueryRequest{
 		Package: osvPackage{Name: ref.Name, Ecosystem: ecosystem},
-		Version: ref.Version,
+		Version: version,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshalling OSV request: %w", err)
