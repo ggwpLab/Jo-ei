@@ -32,10 +32,16 @@ cve:
   block_on: "HIGH"
   cache_ttl_minutes: 1440
 
-clamav:
-  enabled: true
-  address: "unix:///var/run/clamav/clamd.sock"
-  timeout_seconds: 30
+malware:
+  scanners:
+    - type: clamav
+      address: "unix:///var/run/clamav/clamd.sock"
+      timeout_seconds: 30
+    # Add a commercial engine over ICAP (Kaspersky, Dr.Web, …):
+    # - type: icap
+    #   address: "tcp:kaspersky-icap:1344"
+    #   service: "avscan"
+    #   timeout_seconds: 30
 
 cache:
   backend: "local"

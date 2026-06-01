@@ -22,6 +22,12 @@ services:
       - clamav-db:/var/lib/clamav
     restart: unless-stopped
 
+  # Example ICAP engine (Kaspersky / Dr.Web). Point a malware.scanners[] entry
+  # at it with type: icap, address: "tcp:icap:1344", service: <vendor service>.
+  # icap:
+  #   image: <vendor/icap-image>
+  #   restart: unless-stopped
+
 volumes:
   cache-data:
   clamav-socket:

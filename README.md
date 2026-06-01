@@ -14,7 +14,7 @@ Developer (pip/npm/mvn)
   │  1. Cache lookup (HIT served immediately)   │
   │  2. Supply Chain Filter (24h rule)          │
   │  3. CVE Scanner (osv.dev)                   │
-  │  4. Malware Scanner (ClamAV)                │
+  │  4. Malware Scanner (ClamAV / ICAP)          │
   └─────────────────────────────────────────────┘
         │
         ▼
@@ -112,9 +112,11 @@ Every package download goes through this pipeline:
    If any finding meets or exceeds `cve.block_on` severity, the package is rejected with
    HTTP **403 Forbidden**. Results are cached in memory for `cve.cache_ttl_minutes`.
 
-4. **Malware Scan** — the artifact is downloaded to a temp file and streamed to
-   ClamAV (clamd `INSTREAM`). If a signature matches, the package is rejected with
-   HTTP **403 Forbidden** (`reason: malware_found`) and the artifact is not cached.
+4. **Malware Scan** — the artifact is downloaded to a temp file and scanned by
+   every configured engine in `malware.scanners[]` (native ClamAV `INSTREAM`, or
+   any ICAP server such as Kaspersky / Dr.Web). If any engine reports a signature,
+   the package is rejected with HTTP **403 Forbidden** (`reason: malware_found`)
+   and the artifact is not cached.
 
 5. **Cache + Serve** — a clean artifact is stored in the local cache and served to
    the client.
@@ -240,7 +242,7 @@ in error, or use a different package.
 
 ### 403 Forbidden — Malware detected
 
-The downloaded artifact matched a ClamAV signature.
+The downloaded artifact matched a malware signature.
 
 ```json
 {
@@ -248,6 +250,7 @@ The downloaded artifact matched a ClamAV signature.
   "reason": "malware_found",
   "package": "evil-pkg",
   "version": "1.0.0",
+  "engine": "clamav",
   "signature": "Win.Trojan.Agent-123456",
   "blocked_by": ["malware_scanner"],
   "request_id": "req_jkl012"
