@@ -206,12 +206,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // If all fail, returns 404 (all were 404/410) or 502.
 func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 	urls := h.cfg.Adapter.UpstreamURLs(r)
+	if len(urls) == 0 {
+		h.cfg.Logger.Error().Msg("adapter returned no upstream URLs for transparent request")
+		http.Error(w, "no upstream configured", http.StatusInternalServerError)
+		return
+	}
 
 	// Buffer the request body once so it can be replayed across attempts.
 	var body []byte
 	if r.Body != nil {
-		body, _ = io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
 		r.Body.Close()
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		body = b
 	}
 
 	allNotFound := true
@@ -236,6 +246,9 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if resp.StatusCode < 400 {
+			for _, hop := range hopByHopHeaders {
+				resp.Header.Del(hop)
+			}
 			for key, vals := range resp.Header {
 				for _, v := range vals {
 					w.Header().Add(key, v)

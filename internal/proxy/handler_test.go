@@ -511,12 +511,16 @@ func TestHandler_TransparentProxyFallsBackToSecondUpstream(t *testing.T) {
 }
 
 func TestHandler_TransparentProxyAllNotFoundReturns404(t *testing.T) {
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	down1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
-	defer down.Close()
+	defer down1.Close()
+	down2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer down2.Close()
 
-	srv := setupTwoUpstreamProxy(t, down, down)
+	srv := setupTwoUpstreamProxy(t, down1, down2)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/simple/nonexistent/")
