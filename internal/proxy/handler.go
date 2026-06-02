@@ -68,14 +68,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 
-	// Built-in endpoints
-	if r.URL.Path == "/health" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok"}`)
-		return
-	}
-
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
 		// Metadata / simple API — proxy transparently, no interception

@@ -46,18 +46,6 @@ type RegistryAdapter interface {
 	UpstreamURLs(r *http.Request) []string
 }
 
-// BlockedError is returned when a package is blocked by a policy.
-type BlockedError struct {
-	Package   PackageRef
-	Reason    string
-	BlockedBy []string
-	Details   map[string]any
-}
-
-func (e *BlockedError) Error() string {
-	return fmt.Sprintf("package %s blocked: %s (by %v)", e.Package.Key(), e.Reason, e.BlockedBy)
-}
-
 // ── CVE / scan types ────────────────────────────────────────────────────────
 
 // Severity represents a CVE severity level.
