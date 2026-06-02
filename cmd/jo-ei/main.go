@@ -2,9 +2,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
@@ -47,6 +50,9 @@ type sharedDeps struct {
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
@@ -163,7 +169,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
-	return srv.ListenAndServe()
+	return serve(ctx, srv)
 }
 
 // buildHandlers constructs the routing map of prefix→handler from config.
