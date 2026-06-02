@@ -44,4 +44,6 @@ type Cache interface {
 	Invalidate(ref *proxy.PackageRef) error
 	// Stats returns aggregate cache statistics.
 	Stats() (CacheStats, error)
+	// Close stops background workers and releases the index.
+	Close() error
 }

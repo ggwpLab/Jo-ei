@@ -20,6 +20,7 @@ func newTestLocalCache(t *testing.T) cache.Cache {
 		TTL:       24 * time.Hour,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
