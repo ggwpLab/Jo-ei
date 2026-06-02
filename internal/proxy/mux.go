@@ -25,7 +25,9 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+			m.logger.Error().Err(err).Msg("writing health response")
+		}
 		return
 	}
 
@@ -35,7 +37,9 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.logger.Warn().Str("prefix", prefix).Str("path", r.URL.Path).Msg("request to unknown registry prefix")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":"unknown_registry"}`))
+		if _, err := w.Write([]byte(`{"error":"unknown_registry"}`)); err != nil {
+			m.logger.Error().Err(err).Msg("writing not-found response")
+		}
 		return
 	}
 

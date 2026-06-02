@@ -351,7 +351,9 @@ func (h *Handler) writeBlockedResponse(w http.ResponseWriter, requestID string, 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusLocked)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeError sends a structured JSON error response.
@@ -367,7 +369,9 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *Packa
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
@@ -384,7 +388,9 @@ func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID s
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeCVEBlockedResponse sends a 403 Forbidden response with CVE details.
@@ -415,5 +421,7 @@ func (h *Handler) writeCVEBlockedResponse(w http.ResponseWriter, requestID strin
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
