@@ -291,7 +291,7 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 		return "", resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	tmp, err := os.CreateTemp("", "sca-proxy-artifact-*")
+	tmp, err := os.CreateTemp("", "jo-ei-artifact-*")
 	if err != nil {
 		return "", resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
@@ -334,7 +334,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) {
 	defer f.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-SCA-Proxy-Cache", "HIT")
+	w.Header().Set("X-Joei-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, f); err != nil {
 		h.cfg.Logger.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("error streaming cached artifact")

@@ -161,7 +161,7 @@ func TestIntegration_CacheHitNoUpstreamOnSecondRequest(t *testing.T) {
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode)
-	assert.Equal(t, "HIT", resp2.Header.Get("X-SCA-Proxy-Cache"))
+	assert.Equal(t, "HIT", resp2.Header.Get("X-Joei-Cache"))
 
 	// Upstream must not be contacted on second request
 	assert.Equal(t, countAfterFirst, requestCount)

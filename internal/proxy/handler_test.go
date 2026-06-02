@@ -220,7 +220,7 @@ func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode)
-	assert.Equal(t, "HIT", resp2.Header.Get("X-SCA-Proxy-Cache"))
+	assert.Equal(t, "HIT", resp2.Header.Get("X-Joei-Cache"))
 	// Upstream call count should not increase on cache hit
 	assert.Equal(t, countAfterFirst, callCount)
 }
