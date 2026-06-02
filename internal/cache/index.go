@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
 	_ "modernc.org/sqlite"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 const schema = `

@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/rs/zerolog"
-	"github.com/sca-proxy/sca-proxy/internal/cache"
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
-	"github.com/sca-proxy/sca-proxy/internal/scanner"
-	"github.com/sca-proxy/sca-proxy/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,6 +87,7 @@ func newPhase3NPMProxy(t *testing.T, upstream *httptest.Server, clamdAddr string
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	av, err := scanner.NewClamAVScanner(clamdAddr, 5*time.Second)
 	require.NoError(t, err)
@@ -152,6 +153,7 @@ func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 	av, err := scanner.NewClamAVScanner(clamd, 5*time.Second)
 	require.NoError(t, err)
 

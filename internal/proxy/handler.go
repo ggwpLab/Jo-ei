@@ -68,14 +68,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 
-	// Built-in endpoints
-	if r.URL.Path == "/health" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok"}`)
-		return
-	}
-
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
 		// Metadata / simple API — proxy transparently, no interception
@@ -177,8 +169,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !avResult.Clean {
-			log.Warn().Str("signature", avResult.Signature).Msg("malware detected")
-			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Signature)
+			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).Msg("malware detected")
+			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Engine, avResult.Signature)
 			return
 		}
 	}
@@ -291,7 +283,7 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 		return "", resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	tmp, err := os.CreateTemp("", "sca-proxy-artifact-*")
+	tmp, err := os.CreateTemp("", "jo-ei-artifact-*")
 	if err != nil {
 		return "", resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
@@ -334,7 +326,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) {
 	defer f.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-SCA-Proxy-Cache", "HIT")
+	w.Header().Set("X-Joei-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, f); err != nil {
 		h.cfg.Logger.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("error streaming cached artifact")
@@ -359,7 +351,9 @@ func (h *Handler) writeBlockedResponse(w http.ResponseWriter, requestID string, 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusLocked)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeError sends a structured JSON error response.
@@ -375,23 +369,28 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *Packa
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
-func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, signature string) {
+func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *PackageRef, engine, signature string) {
 	body := map[string]any{
 		"error":      "package_blocked",
 		"package":    ref.Name,
 		"version":    ref.Version,
 		"reason":     "malware_found",
+		"engine":     engine,
 		"signature":  signature,
 		"blocked_by": []string{"malware_scanner"},
 		"request_id": requestID,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }
 
 // writeCVEBlockedResponse sends a 403 Forbidden response with CVE details.
@@ -422,5 +421,7 @@ func (h *Handler) writeCVEBlockedResponse(w http.ResponseWriter, requestID strin
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+	}
 }

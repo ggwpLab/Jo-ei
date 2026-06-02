@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // clamavChunkSize is the size of each INSTREAM data chunk sent to clamd.
@@ -27,7 +27,7 @@ type ClamAVScanner struct {
 // NewClamAVScanner creates a scanner for the given clamd address.
 // address is "unix:///var/run/clamav/clamd.sock" or "tcp:host:3310".
 func NewClamAVScanner(address string, timeout time.Duration) (*ClamAVScanner, error) {
-	network, addr, err := parseClamAVAddress(address)
+	network, addr, err := parseScannerAddress(address)
 	if err != nil {
 		return nil, err
 	}
@@ -37,15 +37,16 @@ func NewClamAVScanner(address string, timeout time.Duration) (*ClamAVScanner, er
 	return &ClamAVScanner{network: network, addr: addr, timeout: timeout}, nil
 }
 
-// parseClamAVAddress splits "unix:///path" or "tcp:host:port" into (network, addr).
-func parseClamAVAddress(address string) (network, addr string, err error) {
+// parseScannerAddress splits "unix:///path" or "tcp:host:port" into (network, addr).
+// Shared by all socket-based scanners (clamav, icap).
+func parseScannerAddress(address string) (network, addr string, err error) {
 	switch {
 	case strings.HasPrefix(address, "unix://"):
 		return "unix", strings.TrimPrefix(address, "unix://"), nil
 	case strings.HasPrefix(address, "tcp:"):
 		return "tcp", strings.TrimPrefix(address, "tcp:"), nil
 	default:
-		return "", "", fmt.Errorf("unsupported clamav address %q (want unix:// or tcp:)", address)
+		return "", "", fmt.Errorf("unsupported scanner address %q (want unix:// or tcp:)", address)
 	}
 }
 
@@ -115,13 +116,13 @@ func parseClamAVResponse(resp string) (*proxy.AVResult, error) {
 	trimmed := strings.TrimRight(resp, "\x00\n ")
 	switch {
 	case strings.HasSuffix(trimmed, "OK"):
-		return &proxy.AVResult{Clean: true}, nil
+		return &proxy.AVResult{Clean: true, Engine: "clamav"}, nil
 	case strings.HasSuffix(trimmed, "FOUND"):
 		sig := strings.TrimSuffix(trimmed, " FOUND")
 		if idx := strings.Index(sig, ": "); idx != -1 {
 			sig = sig[idx+2:]
 		}
-		return &proxy.AVResult{Clean: false, Signature: strings.TrimSpace(sig)}, nil
+		return &proxy.AVResult{Clean: false, Signature: strings.TrimSpace(sig), Engine: "clamav"}, nil
 	default:
 		return nil, fmt.Errorf("clamd error response: %q", trimmed)
 	}

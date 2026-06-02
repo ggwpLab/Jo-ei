@@ -6,9 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // LocalCacheConfig configures the local filesystem cache.
@@ -20,8 +21,11 @@ type LocalCacheConfig struct {
 
 // LocalCache implements Cache using the local filesystem with a SQLite index.
 type LocalCache struct {
-	cfg   LocalCacheConfig
-	index *Index
+	cfg       LocalCacheConfig
+	index     *Index
+	evictCh   chan struct{}
+	workerWG  sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // NewLocalCache creates a LocalCache rooted at cfg.RootPath.
@@ -36,7 +40,10 @@ func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
 		return nil, fmt.Errorf("opening cache index: %w", err)
 	}
 
-	return &LocalCache{cfg: cfg, index: idx}, nil
+	lc := &LocalCache{cfg: cfg, index: idx, evictCh: make(chan struct{}, 1)}
+	lc.workerWG.Add(1)
+	go lc.evictWorker()
+	return lc, nil
 }
 
 // artifactPath returns the deterministic on-disk path for a cached artifact.
@@ -108,8 +115,11 @@ func (lc *LocalCache) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool,
 		return fmt.Errorf("indexing cached artifact: %w", err)
 	}
 
-	// Evict LRU entries if over the size limit (non-blocking).
-	go lc.evictIfNeeded()
+	// Signal the eviction worker (non-blocking; bursts coalesce).
+	select {
+	case lc.evictCh <- struct{}{}:
+	default:
+	}
 
 	return nil
 }
@@ -136,18 +146,29 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	return CacheStats{Entries: count, SizeBytes: size}, nil
 }
 
-// evictIfNeeded removes LRU entries until the cache is under MaxSizeGB.
+// evictWorker drains eviction triggers until the channel is closed.
+func (lc *LocalCache) evictWorker() {
+	defer lc.workerWG.Done()
+	for range lc.evictCh {
+		lc.evictIfNeeded()
+	}
+}
+
+// evictIfNeeded evicts LRU entries until the cache is under MaxSizeGB.
 func (lc *LocalCache) evictIfNeeded() {
 	maxBytes := int64(lc.cfg.MaxSizeGB) * 1024 * 1024 * 1024
 	if maxBytes == 0 {
 		return
 	}
+	lc.evictToSize(maxBytes)
+}
 
+// evictToSize removes LRU entries until total size is at or below maxBytes.
+func (lc *LocalCache) evictToSize(maxBytes int64) {
 	total, err := lc.index.TotalSizeBytes()
 	if err != nil || total <= maxBytes {
 		return
 	}
-
 	for total > maxBytes {
 		candidates, err := lc.index.LRUCandidates(10)
 		if err != nil || len(candidates) == 0 {
@@ -159,4 +180,15 @@ func (lc *LocalCache) evictIfNeeded() {
 		}
 		total, _ = lc.index.TotalSizeBytes()
 	}
+}
+
+// Close stops the eviction worker and closes the index. Safe to call twice.
+func (lc *LocalCache) Close() error {
+	var closeErr error
+	lc.closeOnce.Do(func() {
+		close(lc.evictCh)
+		lc.workerWG.Wait()
+		closeErr = lc.index.Close()
+	})
+	return closeErr
 }

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // ecosystemMap maps our internal ecosystem names to OSV API ecosystem names.
@@ -39,9 +39,9 @@ type osvQueryResponse struct {
 }
 
 type osvVulnerability struct {
-	ID              string   `json:"id"`
-	Aliases         []string `json:"aliases"`
-	Summary         string   `json:"summary"`
+	ID               string   `json:"id"`
+	Aliases          []string `json:"aliases"`
+	Summary          string   `json:"summary"`
 	DatabaseSpecific struct {
 		Severity string `json:"severity"`
 	} `json:"database_specific"`
@@ -62,17 +62,62 @@ type OSVScanner struct {
 
 	mu    sync.Mutex
 	cache map[string]*cveEntry
+
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // NewOSVScanner creates an OSVScanner with the given base URL and cache TTL.
 // baseURL should be "https://api.osv.dev" (or a mock server URL in tests).
 func NewOSVScanner(baseURL string, ttl time.Duration) *OSVScanner {
-	return &OSVScanner{
+	s := &OSVScanner{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: 15 * time.Second},
 		ttl:     ttl,
 		cache:   make(map[string]*cveEntry),
+		stop:    make(chan struct{}),
 	}
+	s.wg.Add(1)
+	go s.janitor()
+	return s
+}
+
+// janitor periodically removes expired cache entries so the map does not grow
+// unbounded across distinct package keys.
+func (s *OSVScanner) janitor() {
+	defer s.wg.Done()
+	interval := s.ttl
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.mu.Lock()
+			for k, e := range s.cache {
+				if now.After(e.expiresAt) {
+					delete(s.cache, k)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
+// Close stops the janitor goroutine and waits for it to exit.
+// Safe to call more than once.
+func (s *OSVScanner) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		s.wg.Wait()
+	})
+	return nil
 }
 
 // Scan implements proxy.CVEScanner.

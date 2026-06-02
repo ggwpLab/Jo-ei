@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
-	"github.com/sca-proxy/sca-proxy/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
 // fakeCache is an in-memory ArtifactCache for handler tests.
@@ -104,8 +106,8 @@ func makeUpstream(t *testing.T, name, version string, ageHours int) *httptest.Se
 				},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://example.com/" + name + ".whl",
-					"digests":             map[string]any{"sha256": "abc123"},
+					"url":                  "https://example.com/" + name + ".whl",
+					"digests":              map[string]any{"sha256": "abc123"},
 				}},
 			})
 			return
@@ -148,7 +150,7 @@ func TestHandler_BlocksNewPackage(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "package_blocked", body["error"])
-	assert.Equal(t, "package_version_newer_than_24h", body["reason"])
+	assert.Equal(t, "package_younger_than_min_age", body["reason"])
 }
 
 func TestHandler_AllowsOldPackage(t *testing.T) {
@@ -191,8 +193,8 @@ func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://files.example.com/flask-3.0.0.whl",
-					"digests":             map[string]any{"sha256": "def456"},
+					"url":                  "https://files.example.com/flask-3.0.0.whl",
+					"digests":              map[string]any{"sha256": "def456"},
 				}},
 			})
 			return
@@ -219,7 +221,7 @@ func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode)
-	assert.Equal(t, "HIT", resp2.Header.Get("X-SCA-Proxy-Cache"))
+	assert.Equal(t, "HIT", resp2.Header.Get("X-Joei-Cache"))
 	// Upstream call count should not increase on cache hit
 	assert.Equal(t, countAfterFirst, callCount)
 }
@@ -365,7 +367,7 @@ func TestHandler_MalwareReturns403(t *testing.T) {
 	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
 	defer upstream.Close()
 
-	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR"}}
+	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "clamav"}}
 	srv := setupTestProxyAV(t, upstream, av)
 	defer srv.Close()
 
@@ -379,6 +381,7 @@ func TestHandler_MalwareReturns403(t *testing.T) {
 	assert.Equal(t, "package_blocked", body["error"])
 	assert.Equal(t, "malware_found", body["reason"])
 	assert.Equal(t, "Win.Test.EICAR", body["signature"])
+	assert.Equal(t, "clamav", body["engine"])
 }
 
 func TestHandler_AVScannerErrorFailsClosed(t *testing.T) {
@@ -407,6 +410,32 @@ func TestHandler_CleanArtifactPassesAV(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestHandler_MultiScannerReportsDetectingEngine(t *testing.T) {
+	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
+	defer upstream.Close()
+
+	// First engine clean, second detects — verify the handler surfaces the
+	// detecting engine end-to-end through a real MultiScanner.
+	cleanEngine := &mockAVScanner{result: &proxy.AVResult{Clean: true, Engine: "clamav"}}
+	infectedEngine := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "icap"}}
+	multi := scanner.NewMultiScanner(cleanEngine, infectedEngine)
+
+	srv := setupTestProxyAV(t, upstream, multi)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/e/evil-pkg/evil_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "package_blocked", body["error"])
+	assert.Equal(t, "malware_found", body["reason"])
+	assert.Equal(t, "Win.Test.EICAR", body["signature"])
+	assert.Equal(t, "icap", body["engine"])
 }
 
 // ─── download fallback tests ───────────────────────────────────────────────

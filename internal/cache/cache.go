@@ -1,9 +1,10 @@
+// Package cache stores downloaded artifacts and their scan results.
 package cache
 
 import (
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // CacheEntry stores an artifact path and its scan results.
@@ -43,4 +44,6 @@ type Cache interface {
 	Invalidate(ref *proxy.PackageRef) error
 	// Stats returns aggregate cache statistics.
 	Stats() (CacheStats, error)
+	// Close stops background workers and releases the index.
+	Close() error
 }

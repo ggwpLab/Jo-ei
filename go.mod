@@ -1,4 +1,4 @@
-module github.com/sca-proxy/sca-proxy
+module github.com/ggwpLab/Jo-ei
 
 go 1.25.0
 

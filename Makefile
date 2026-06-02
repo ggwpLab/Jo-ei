@@ -1,16 +1,19 @@
-.PHONY: build test lint clean
+.PHONY: build test lint fmt clean
 
 build:
-	go build -o bin/sca-proxy ./cmd/sca-proxy
+	go build -o bin/jo-ei ./cmd/jo-ei
 
 test:
 	go test ./... -v -race
 
+fmt:
+	gofmt -w .
+
 lint:
-	go vet ./...
+	golangci-lint run
 
 run:
-	go run ./cmd/sca-proxy --config config.yaml
+	go run ./cmd/jo-ei --config config.yaml
 
 clean:
 	rm -rf bin/

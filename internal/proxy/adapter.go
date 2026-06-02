@@ -1,3 +1,4 @@
+// Package proxy contains the HTTP handler, routing, and shared registry types.
 package proxy
 
 import (
@@ -46,25 +47,13 @@ type RegistryAdapter interface {
 	UpstreamURLs(r *http.Request) []string
 }
 
-// BlockedError is returned when a package is blocked by a policy.
-type BlockedError struct {
-	Package   PackageRef
-	Reason    string
-	BlockedBy []string
-	Details   map[string]any
-}
-
-func (e *BlockedError) Error() string {
-	return fmt.Sprintf("package %s blocked: %s (by %v)", e.Package.Key(), e.Reason, e.BlockedBy)
-}
-
 // ── CVE / scan types ────────────────────────────────────────────────────────
 
 // Severity represents a CVE severity level.
 type Severity int
 
 const (
-	SeverityUnknown  Severity = iota
+	SeverityUnknown Severity = iota
 	SeverityLow
 	SeverityMedium
 	SeverityHigh
@@ -152,7 +141,7 @@ type PolicyDecider interface {
 // so proxy cannot import supplychain.
 type FilterResult struct {
 	Allowed     bool
-	Reason      string    // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
+	Reason      string // "ok" | "allowlisted" | "dry_run" | "off" | "package_younger_than_min_age"
 	PublishedAt time.Time
 	BlockUntil  time.Time // non-zero when Allowed=false
 }
@@ -169,6 +158,7 @@ type SCFilter interface {
 type AVResult struct {
 	Clean     bool   // true iff no malware signature matched
 	Signature string // signature name when infected, "" otherwise
+	Engine    string // engine that produced this verdict, e.g. "clamav" | "icap"
 }
 
 // AVScanner scans a file on disk for malware.
