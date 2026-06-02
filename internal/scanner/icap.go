@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // icapChunkSize is the size of each chunk streamed in the RESPMOD body.

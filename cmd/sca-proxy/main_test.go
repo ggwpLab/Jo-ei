@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	"github.com/sca-proxy/sca-proxy/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/stretchr/testify/assert"
 )
 

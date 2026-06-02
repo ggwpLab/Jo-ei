@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
-	"github.com/sca-proxy/sca-proxy/internal/scanner"
-	"github.com/sca-proxy/sca-proxy/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

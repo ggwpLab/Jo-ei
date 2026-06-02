@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // MultiScanner runs several AV engines sequentially in order. It implements

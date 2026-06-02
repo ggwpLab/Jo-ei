@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // ecosystemMap maps our internal ecosystem names to OSV API ecosystem names.

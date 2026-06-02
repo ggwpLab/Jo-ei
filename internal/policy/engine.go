@@ -3,8 +3,8 @@ package policy
 import (
 	"strings"
 
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // Engine evaluates packages against a policy profile.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // pypiJSONResponse represents the PyPI JSON API response for a specific version.
