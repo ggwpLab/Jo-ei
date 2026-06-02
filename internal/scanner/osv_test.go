@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
 // newMockOSV builds an httptest.Server that serves canned OSV responses.

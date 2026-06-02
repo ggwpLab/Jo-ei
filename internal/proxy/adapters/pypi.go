@@ -1,3 +1,4 @@
+// Package adapters implements per-registry RegistryAdapter implementations.
 package adapters
 
 import (

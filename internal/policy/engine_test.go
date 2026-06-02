@@ -3,10 +3,11 @@ package policy_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/stretchr/testify/assert"
 )
 
 var baseProfile = config.PolicyProfile{

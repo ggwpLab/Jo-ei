@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
 type stubScanner struct {

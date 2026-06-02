@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
@@ -17,6 +16,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,8 +51,10 @@ func newPhase2Proxy(t *testing.T, upstream, osvServer *httptest.Server, prof con
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: 24 * time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	cveScanner := scanner.NewOSVScanner(osvServer.URL, time.Minute)
+	t.Cleanup(func() { _ = cveScanner.Close() })
 	policyEngine := policy.NewEngine(config.CVEConfig{Enabled: true, BlockOn: "HIGH"}, prof)
 
 	h := proxy.NewHandler(proxy.HandlerConfig{

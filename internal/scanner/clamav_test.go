@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
 // newMockClamd starts a TCP server that consumes an INSTREAM request and then

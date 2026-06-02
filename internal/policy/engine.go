@@ -1,3 +1,4 @@
+// Package policy evaluates packages against CVE/allow/deny policy profiles.
 package policy
 
 import (
@@ -10,8 +11,8 @@ import (
 // Engine evaluates packages against a policy profile.
 // It implements proxy.PolicyDecider.
 type Engine struct {
-	blockOn  proxy.Severity
-	cveBlock bool
+	blockOn   proxy.Severity
+	cveBlock  bool
 	allowlist map[string]bool // "ecosystem/name" or "ecosystem/name@version"
 	denylist  map[string]bool
 }

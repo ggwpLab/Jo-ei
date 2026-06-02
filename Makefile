@@ -1,4 +1,4 @@
-.PHONY: build test lint clean
+.PHONY: build test lint fmt clean
 
 build:
 	go build -o bin/jo-ei ./cmd/jo-ei
@@ -6,8 +6,11 @@ build:
 test:
 	go test ./... -v -race
 
+fmt:
+	gofmt -w .
+
 lint:
-	go vet ./...
+	golangci-lint run
 
 run:
 	go run ./cmd/jo-ei --config config.yaml

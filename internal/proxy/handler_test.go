@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeCache is an in-memory ArtifactCache for handler tests.
@@ -105,8 +106,8 @@ func makeUpstream(t *testing.T, name, version string, ageHours int) *httptest.Se
 				},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://example.com/" + name + ".whl",
-					"digests":             map[string]any{"sha256": "abc123"},
+					"url":                  "https://example.com/" + name + ".whl",
+					"digests":              map[string]any{"sha256": "abc123"},
 				}},
 			})
 			return
@@ -149,7 +150,7 @@ func TestHandler_BlocksNewPackage(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "package_blocked", body["error"])
-	assert.Equal(t, "package_version_newer_than_24h", body["reason"])
+	assert.Equal(t, "package_younger_than_min_age", body["reason"])
 }
 
 func TestHandler_AllowsOldPackage(t *testing.T) {
@@ -192,8 +193,8 @@ func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://files.example.com/flask-3.0.0.whl",
-					"digests":             map[string]any{"sha256": "def456"},
+					"url":                  "https://files.example.com/flask-3.0.0.whl",
+					"digests":              map[string]any{"sha256": "def456"},
 				}},
 			})
 			return

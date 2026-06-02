@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func newFilter(mode string, allowlist *supplychain.Allowlist) *supplychain.Filter {
@@ -27,7 +28,7 @@ func TestFilter_BlocksPackageUnder24h(t *testing.T) {
 	result := f.Check(context.Background(), ref, meta)
 
 	require.False(t, result.Allowed)
-	assert.Equal(t, "package_version_newer_than_24h", result.Reason)
+	assert.Equal(t, "package_younger_than_min_age", result.Reason)
 	assert.False(t, result.BlockUntil.IsZero())
 }
 

@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
 // newMockICAP starts a TCP server that consumes a RESPMOD request and replies

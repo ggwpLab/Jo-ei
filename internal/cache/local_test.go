@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 func newTestLocalCache(t *testing.T) cache.Cache {
@@ -20,6 +21,7 @@ func newTestLocalCache(t *testing.T) cache.Cache {
 		TTL:       24 * time.Hour,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 

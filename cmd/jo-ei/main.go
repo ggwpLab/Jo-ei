@@ -1,13 +1,18 @@
+// Command jo-ei is the Jōei supply-chain security proxy for package registries.
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
@@ -15,7 +20,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/spf13/cobra"
 )
 
 var cfgFile string
@@ -47,6 +51,9 @@ type sharedDeps struct {
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
@@ -57,32 +64,46 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		level = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(level)
-	logger := log.Logger
+
+	logOut, closeLog, err := logWriter(cfg.Logging.Output)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeLog() }()
+
+	var logger zerolog.Logger
 	if cfg.Logging.Format == "text" {
-		logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
+		logger = zerolog.New(zerolog.ConsoleWriter{Out: logOut, TimeFormat: time.RFC3339}).
 			With().Timestamp().Logger()
+	} else {
+		logger = zerolog.New(logOut).With().Timestamp().Logger()
 	}
 	if levelErr != nil {
 		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
-	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{
-		RootPath:  cfg.Cache.Local.Path,
-		MaxSizeGB: cfg.Cache.Local.MaxSizeGB,
-		TTL:       24 * time.Hour,
-	})
+	artifactCache, err := cache.New(cfg.Cache)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = artifactCache.Close() }()
 
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
 	if !ok {
 		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
 	}
 
+	var allowlist *supplychain.Allowlist
+	if cfg.SupplyChain.AllowlistPath != "" {
+		allowlist, err = supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
+		if err != nil {
+			return err
+		}
+	}
+
 	shared := sharedDeps{
-		filter: supplychain.NewFilter(cfg.SupplyChain, nil),
-		cache:  &cacheAdapter{lc: localCache},
+		filter: supplychain.NewFilter(cfg.SupplyChain, allowlist),
+		cache:  &cacheAdapter{c: artifactCache},
 		logger: logger,
 	}
 
@@ -96,7 +117,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		shared.cveScanner = scanner.NewOSVScanner(baseURL, ttl)
+		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
+		defer func() { _ = osvScanner.Close() }()
+		shared.cveScanner = osvScanner
 		shared.policy = policy.NewEngine(cfg.CVE, profile)
 	}
 
@@ -147,7 +170,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
-	return srv.ListenAndServe()
+	return serve(ctx, srv)
 }
 
 // buildHandlers constructs the routing map of prefix→handler from config.
@@ -186,13 +209,13 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 	})
 }
 
-// cacheAdapter bridges cache.LocalCache to the proxy.ArtifactCache interface.
+// cacheAdapter bridges cache.Cache to the proxy.ArtifactCache interface.
 type cacheAdapter struct {
-	lc *cache.LocalCache
+	c cache.Cache
 }
 
 func (a *cacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
-	entry, found := a.lc.Get(ref)
+	entry, found := a.c.Get(ref)
 	if !found {
 		return nil, false
 	}
@@ -203,9 +226,9 @@ func (a *cacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
 }
 
 func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
-	return a.lc.Put(ref, tmpPath, scanClean, scanJSON)
+	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
 }
 
 func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
-	return a.lc.Invalidate(ref)
+	return a.c.Invalidate(ref)
 }
