@@ -1,16 +1,16 @@
 version: "3.9"
 
 services:
-  sca-proxy:
+  jo-ei:
     build: .
     ports:
       - "8080:8080"
     volumes:
-      - ./config.yaml:/etc/sca-proxy/config.yaml:ro
-      - cache-data:/var/cache/sca-proxy
+      - ./config.yaml:/etc/jo-ei/config.yaml:ro
+      - cache-data:/var/cache/jo-ei
       - clamav-socket:/var/run/clamav
     environment:
-      - SCAPROXY_LOGGING_LEVEL=info
+      - JOEI_LOGGING_LEVEL=info
     depends_on:
       - clamav
     restart: unless-stopped
