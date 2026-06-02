@@ -125,27 +125,32 @@ git commit -m "refactor: move cmd dir to cmd/jo-ei and update CLI display name t
 
 ---
 
-### Task 3: Rename the HTTP cache header
+### Task 3: Rename the HTTP cache header (and the temp-file prefix)
 
 **Files:**
-- Modify: `internal/proxy/handler.go:337`
+- Modify: `internal/proxy/handler.go:294` (temp-file prefix), `:337` (header)
 - Test: `internal/proxy/handler_test.go:223`, `integration/phase1_test.go:164`
+
+> Plan amendment (found during Task 1 review): `handler.go:294` also contains the
+> temp-file prefix `os.CreateTemp("", "sca-proxy-artifact-*")`. It is a machine
+> identifier, so rename it to the ASCII slug `jo-ei-artifact-*` in this task.
 
 - [ ] **Step 1: Run the existing handler test to confirm it passes with the old header**
 
 Run: `go test ./internal/proxy/ -run TestHandler -count=1`
 Expected: PASS (baseline; exact test names may vary — the suite is green).
 
-- [ ] **Step 2: Rename the header in the handler and both tests**
+- [ ] **Step 2: Rename the header in the handler and both tests, and the temp-file prefix**
 
 ```bash
 sed -i 's/X-SCA-Proxy-Cache/X-Joei-Cache/g' \
   internal/proxy/handler.go internal/proxy/handler_test.go integration/phase1_test.go
+sed -i 's/sca-proxy-artifact-/jo-ei-artifact-/g' internal/proxy/handler.go
 ```
 
-- [ ] **Step 3: Confirm no old header name remains**
+- [ ] **Step 3: Confirm no old header name or `sca-proxy` remains in the proxy package**
 
-Run: `grep -rn 'X-SCA-Proxy-Cache' . | grep -v '/.git/'`
+Run: `grep -rniE 'X-SCA-Proxy-Cache|sca-proxy' internal/proxy/ | grep -v '/.git/'`
 Expected: no output.
 
 - [ ] **Step 4: Run the proxy unit tests**
