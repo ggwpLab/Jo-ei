@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // npmMetadata is the subset of the npm registry document we consume.

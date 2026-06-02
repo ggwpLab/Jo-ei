@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	_ "modernc.org/sqlite"
 )
 

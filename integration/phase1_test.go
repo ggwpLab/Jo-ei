@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/sca-proxy/sca-proxy/internal/cache"
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
-	"github.com/sca-proxy/sca-proxy/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -161,7 +161,7 @@ func TestIntegration_CacheHitNoUpstreamOnSecondRequest(t *testing.T) {
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode)
-	assert.Equal(t, "HIT", resp2.Header.Get("X-SCA-Proxy-Cache"))
+	assert.Equal(t, "HIT", resp2.Header.Get("X-Joei-Cache"))
 
 	// Upstream must not be contacted on second request
 	assert.Equal(t, countAfterFirst, requestCount)

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // FilterResult is an alias for proxy.FilterResult kept here for backward compatibility.

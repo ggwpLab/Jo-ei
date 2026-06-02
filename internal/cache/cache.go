@@ -3,7 +3,7 @@ package cache
 import (
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // CacheEntry stores an artifact path and its scan results.

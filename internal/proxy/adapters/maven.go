@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // mavenArtifactExts are the binary artifact extensions we intercept and scan.

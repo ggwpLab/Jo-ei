@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // clamavChunkSize is the size of each INSTREAM data chunk sent to clamd.

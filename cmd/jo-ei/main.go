@@ -8,21 +8,21 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/sca-proxy/sca-proxy/internal/cache"
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/policy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy/adapters"
-	"github.com/sca-proxy/sca-proxy/internal/scanner"
-	"github.com/sca-proxy/sca-proxy/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/policy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/spf13/cobra"
 )
 
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "sca-proxy",
-	Short: "SCA Proxy — transparent supply chain security proxy for package registries",
+	Use:   "jo-ei",
+	Short: "Jōei — transparent supply chain security proxy for package registries",
 	RunE:  runProxy,
 }
 
@@ -139,7 +139,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
-		Msg("SCA Proxy starting")
+		Msg("Jōei starting")
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,

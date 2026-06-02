@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // rubygemsVersion is one entry in the /api/v1/versions/<gem>.json array.

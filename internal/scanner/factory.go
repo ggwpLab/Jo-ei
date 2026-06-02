@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // New builds an AV scanner from its config. Unknown types are an error.

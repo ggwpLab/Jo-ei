@@ -3,9 +3,9 @@ package policy_test
 import (
 	"testing"
 
-	"github.com/sca-proxy/sca-proxy/internal/config"
-	"github.com/sca-proxy/sca-proxy/internal/policy"
-	"github.com/sca-proxy/sca-proxy/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/policy"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/stretchr/testify/assert"
 )
 

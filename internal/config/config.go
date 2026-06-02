@@ -137,11 +137,11 @@ type LoggingConfig struct {
 }
 
 // Load reads a YAML config file and returns a Config.
-// Environment variables prefixed with SCAPROXY_ override file values.
+// Environment variables prefixed with JOEI_ override file values.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
-	v.SetEnvPrefix("SCAPROXY")
+	v.SetEnvPrefix("JOEI")
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
