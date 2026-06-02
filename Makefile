@@ -10,7 +10,7 @@ fmt:
 	gofmt -w .
 
 lint:
-	go vet ./...
+	golangci-lint run
 
 run:
 	go run ./cmd/jo-ei --config config.yaml

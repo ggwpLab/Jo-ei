@@ -3,8 +3,9 @@ package proxy_test
 import (
 	"testing"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 func TestPackageRef_Key(t *testing.T) {

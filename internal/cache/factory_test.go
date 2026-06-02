@@ -3,10 +3,11 @@ package cache_test
 import (
 	"testing"
 
-	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/config"
 )
 
 func TestNew_LocalBackend(t *testing.T) {

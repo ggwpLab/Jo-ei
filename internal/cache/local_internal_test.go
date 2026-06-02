@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 func writeTemp(t *testing.T, content string) string {

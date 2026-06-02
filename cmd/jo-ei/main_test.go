@@ -3,9 +3,10 @@ package main
 import (
 	"testing"
 
-	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ggwpLab/Jo-ei/internal/config"
 )
 
 func TestBuildHandlers_YarnAliasesNPM(t *testing.T) {

@@ -5,10 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
 func TestLoadAllowlist_ParsesEntriesIgnoringCommentsAndBlanks(t *testing.T) {

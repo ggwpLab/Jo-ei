@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func newFilter(mode string, allowlist *supplychain.Allowlist) *supplychain.Filter {

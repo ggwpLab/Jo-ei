@@ -5,13 +5,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // buildHandlerFor wires a minimal handler for a single registry adapter.

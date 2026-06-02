@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/spf13/cobra"
+
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
@@ -17,8 +20,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
-	"github.com/rs/zerolog"
-	"github.com/spf13/cobra"
 )
 
 var cfgFile string
@@ -68,7 +69,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer closeLog()
+	defer func() { _ = closeLog() }()
 
 	var logger zerolog.Logger
 	if cfg.Logging.Format == "text" {
@@ -85,7 +86,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer artifactCache.Close()
+	defer func() { _ = artifactCache.Close() }()
 
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
 	if !ok {
@@ -117,7 +118,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			ttl = 24 * time.Hour
 		}
 		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
-		defer osvScanner.Close()
+		defer func() { _ = osvScanner.Close() }()
 		shared.cveScanner = osvScanner
 		shared.policy = policy.NewEngine(cfg.CVE, profile)
 	}
