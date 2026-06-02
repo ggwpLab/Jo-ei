@@ -51,14 +51,7 @@ func (c *Config) Validate() error {
 }
 
 type ServerConfig struct {
-	Listen string    `mapstructure:"listen"`
-	TLS    TLSConfig `mapstructure:"tls"`
-}
-
-type TLSConfig struct {
-	Enabled  bool   `mapstructure:"enabled"`
-	CertFile string `mapstructure:"cert_file"`
-	KeyFile  string `mapstructure:"key_file"`
+	Listen string `mapstructure:"listen"`
 }
 
 type RegistriesConfig struct {
