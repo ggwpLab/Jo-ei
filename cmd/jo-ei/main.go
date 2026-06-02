@@ -15,7 +15,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -58,10 +57,19 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		level = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(level)
-	logger := log.Logger
+
+	logOut, closeLog, err := logWriter(cfg.Logging.Output)
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+
+	var logger zerolog.Logger
 	if cfg.Logging.Format == "text" {
-		logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
+		logger = zerolog.New(zerolog.ConsoleWriter{Out: logOut, TimeFormat: time.RFC3339}).
 			With().Timestamp().Logger()
+	} else {
+		logger = zerolog.New(logOut).With().Timestamp().Logger()
 	}
 	if levelErr != nil {
 		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
