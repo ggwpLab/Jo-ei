@@ -46,6 +46,12 @@ cache:
   local:
     path: "/var/cache/jo-ei"
     max_size_gb: 100
+  # S3 backend is reserved for a future release; setting backend: s3 currently
+  # fails fast at startup.
+  # s3:
+  #   endpoint: "https://s3.amazonaws.com"
+  #   bucket: "joei-cache"
+  #   region: "us-east-1"
 
 policy:
   active_profile: "production"

@@ -75,14 +75,11 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
-	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{
-		RootPath:  cfg.Cache.Local.Path,
-		MaxSizeGB: cfg.Cache.Local.MaxSizeGB,
-		TTL:       24 * time.Hour,
-	})
+	artifactCache, err := cache.New(cfg.Cache)
 	if err != nil {
 		return err
 	}
+	defer artifactCache.Close()
 
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
 	if !ok {
@@ -99,7 +96,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	shared := sharedDeps{
 		filter: supplychain.NewFilter(cfg.SupplyChain, allowlist),
-		cache:  &cacheAdapter{lc: localCache},
+		cache:  &cacheAdapter{c: artifactCache},
 		logger: logger,
 	}
 
@@ -203,13 +200,13 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 	})
 }
 
-// cacheAdapter bridges cache.LocalCache to the proxy.ArtifactCache interface.
+// cacheAdapter bridges cache.Cache to the proxy.ArtifactCache interface.
 type cacheAdapter struct {
-	lc *cache.LocalCache
+	c cache.Cache
 }
 
 func (a *cacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
-	entry, found := a.lc.Get(ref)
+	entry, found := a.c.Get(ref)
 	if !found {
 		return nil, false
 	}
@@ -220,9 +217,9 @@ func (a *cacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
 }
 
 func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
-	return a.lc.Put(ref, tmpPath, scanClean, scanJSON)
+	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
 }
 
 func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
-	return a.lc.Invalidate(ref)
+	return a.c.Invalidate(ref)
 }
