@@ -46,7 +46,7 @@ malware:
 cache:
   backend: "local"
   local:
-    path: "/var/cache/sca-proxy"
+    path: "/var/cache/jo-ei"
     max_size_gb: 100
 
 policy:
