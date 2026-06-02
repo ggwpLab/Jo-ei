@@ -81,8 +81,16 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
 	}
 
+	var allowlist *supplychain.Allowlist
+	if cfg.SupplyChain.AllowlistPath != "" {
+		allowlist, err = supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
+		if err != nil {
+			return err
+		}
+	}
+
 	shared := sharedDeps{
-		filter: supplychain.NewFilter(cfg.SupplyChain, nil),
+		filter: supplychain.NewFilter(cfg.SupplyChain, allowlist),
 		cache:  &cacheAdapter{lc: localCache},
 		logger: logger,
 	}
