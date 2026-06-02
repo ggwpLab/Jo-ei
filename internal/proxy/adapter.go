@@ -64,7 +64,7 @@ func (e *BlockedError) Error() string {
 type Severity int
 
 const (
-	SeverityUnknown  Severity = iota
+	SeverityUnknown Severity = iota
 	SeverityLow
 	SeverityMedium
 	SeverityHigh
@@ -152,7 +152,7 @@ type PolicyDecider interface {
 // so proxy cannot import supplychain.
 type FilterResult struct {
 	Allowed     bool
-	Reason      string    // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
+	Reason      string // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
 	PublishedAt time.Time
 	BlockUntil  time.Time // non-zero when Allowed=false
 }

@@ -39,9 +39,9 @@ type osvQueryResponse struct {
 }
 
 type osvVulnerability struct {
-	ID              string   `json:"id"`
-	Aliases         []string `json:"aliases"`
-	Summary         string   `json:"summary"`
+	ID               string   `json:"id"`
+	Aliases          []string `json:"aliases"`
+	Summary          string   `json:"summary"`
 	DatabaseSpecific struct {
 		Severity string `json:"severity"`
 	} `json:"database_specific"`

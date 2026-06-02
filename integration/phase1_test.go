@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,8 +53,8 @@ func newTestRegistry(t *testing.T, packageName, version string, ageHours int) *h
 				},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://example.com/" + packageName + ".whl",
-					"digests":             map[string]any{"sha256": "abc123"},
+					"url":                  "https://example.com/" + packageName + ".whl",
+					"digests":              map[string]any{"sha256": "abc123"},
 				}},
 			})
 			return
@@ -134,8 +134,8 @@ func TestIntegration_CacheHitNoUpstreamOnSecondRequest(t *testing.T) {
 				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
 				"urls": []map[string]any{{
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
-					"url":                 "https://files.example.com/flask-3.0.0.whl",
-					"digests":             map[string]any{"sha256": "def456"},
+					"url":                  "https://files.example.com/flask-3.0.0.whl",
+					"digests":              map[string]any{"sha256": "def456"},
 				}},
 			})
 			return

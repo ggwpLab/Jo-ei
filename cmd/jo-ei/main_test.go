@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/rs/zerolog"
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 

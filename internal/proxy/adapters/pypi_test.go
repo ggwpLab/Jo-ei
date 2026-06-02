@@ -75,8 +75,8 @@ func TestPyPIAdapter_FetchMetadata(t *testing.T) {
 			"urls": []map[string]any{
 				{
 					"upload_time_iso_8601": uploadTime.Format(time.RFC3339),
-					"url":                 "https://files.pythonhosted.org/packages/requests-2.31.0.whl",
-					"digests":             map[string]any{"sha256": "abc123"},
+					"url":                  "https://files.pythonhosted.org/packages/requests-2.31.0.whl",
+					"digests":              map[string]any{"sha256": "abc123"},
 				},
 			},
 		})
