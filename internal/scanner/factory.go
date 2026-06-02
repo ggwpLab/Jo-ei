@@ -1,3 +1,4 @@
+// Package scanner implements CVE and malware scanners.
 package scanner
 
 import (

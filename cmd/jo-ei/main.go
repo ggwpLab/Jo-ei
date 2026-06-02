@@ -1,3 +1,4 @@
+// Command jo-ei is the Jōei supply-chain security proxy for package registries.
 package main
 
 import (

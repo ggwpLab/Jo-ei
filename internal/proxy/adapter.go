@@ -1,3 +1,4 @@
+// Package proxy contains the HTTP handler, routing, and shared registry types.
 package proxy
 
 import (

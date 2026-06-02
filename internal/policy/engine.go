@@ -1,3 +1,4 @@
+// Package policy evaluates packages against CVE/allow/deny policy profiles.
 package policy
 
 import (

@@ -1,3 +1,4 @@
+// Package cache stores downloaded artifacts and their scan results.
 package cache
 
 import (

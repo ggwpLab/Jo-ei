@@ -1,3 +1,4 @@
+// Package config loads and validates the Jōei YAML/env configuration.
 package config
 
 import (

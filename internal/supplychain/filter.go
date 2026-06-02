@@ -1,3 +1,4 @@
+// Package supplychain implements the package-age supply-chain filter.
 package supplychain
 
 import (
