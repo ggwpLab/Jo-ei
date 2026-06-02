@@ -47,6 +47,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	h := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter: adapters.NewMavenAdapter([]string{down.URL, up.URL}),

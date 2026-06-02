@@ -184,9 +184,11 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 
 // Close stops the eviction worker and closes the index. Safe to call twice.
 func (lc *LocalCache) Close() error {
+	var closeErr error
 	lc.closeOnce.Do(func() {
 		close(lc.evictCh)
 		lc.workerWG.Wait()
+		closeErr = lc.index.Close()
 	})
-	return lc.index.Close()
+	return closeErr
 }

@@ -51,8 +51,10 @@ func newPhase2Proxy(t *testing.T, upstream, osvServer *httptest.Server, prof con
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: 24 * time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	cveScanner := scanner.NewOSVScanner(osvServer.URL, time.Minute)
+	t.Cleanup(func() { _ = cveScanner.Close() })
 	policyEngine := policy.NewEngine(config.CVEConfig{Enabled: true, BlockOn: "HIGH"}, prof)
 
 	h := proxy.NewHandler(proxy.HandlerConfig{

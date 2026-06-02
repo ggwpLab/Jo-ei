@@ -73,6 +73,7 @@ func newTestProxy(t *testing.T, upstream *httptest.Server, mode string) *httptes
 		TTL:       24 * time.Hour,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = localCache.Close() })
 
 	adapter := adapters.NewPyPIAdapter([]string{upstream.URL})
 	filter := supplychain.NewFilter(config.SupplyChainConfig{

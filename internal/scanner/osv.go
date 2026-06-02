@@ -64,6 +64,7 @@ type OSVScanner struct {
 	cache map[string]*cveEntry
 
 	stop      chan struct{}
+	wg        sync.WaitGroup
 	closeOnce sync.Once
 }
 
@@ -77,6 +78,7 @@ func NewOSVScanner(baseURL string, ttl time.Duration) *OSVScanner {
 		cache:   make(map[string]*cveEntry),
 		stop:    make(chan struct{}),
 	}
+	s.wg.Add(1)
 	go s.janitor()
 	return s
 }
@@ -84,6 +86,7 @@ func NewOSVScanner(baseURL string, ttl time.Duration) *OSVScanner {
 // janitor periodically removes expired cache entries so the map does not grow
 // unbounded across distinct package keys.
 func (s *OSVScanner) janitor() {
+	defer s.wg.Done()
 	interval := s.ttl
 	if interval <= 0 {
 		interval = time.Hour
@@ -107,9 +110,13 @@ func (s *OSVScanner) janitor() {
 	}
 }
 
-// Close stops the janitor goroutine. Safe to call more than once.
+// Close stops the janitor goroutine and waits for it to exit.
+// Safe to call more than once.
 func (s *OSVScanner) Close() error {
-	s.closeOnce.Do(func() { close(s.stop) })
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		s.wg.Wait()
+	})
 	return nil
 }
 

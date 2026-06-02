@@ -41,6 +41,7 @@ func TestIntegration_RubyGemsFallsBackToSecondUpstream(t *testing.T) {
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	handler := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter: adapters.NewRubyGemsAdapter([]string{down.URL, up.URL}),

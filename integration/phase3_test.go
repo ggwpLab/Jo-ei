@@ -87,6 +87,7 @@ func newPhase3NPMProxy(t *testing.T, upstream *httptest.Server, clamdAddr string
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 
 	av, err := scanner.NewClamAVScanner(clamdAddr, 5*time.Second)
 	require.NoError(t, err)
@@ -152,6 +153,7 @@ func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
 	dir := t.TempDir()
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
 	av, err := scanner.NewClamAVScanner(clamd, 5*time.Second)
 	require.NoError(t, err)
 

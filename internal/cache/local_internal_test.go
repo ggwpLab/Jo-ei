@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +39,33 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	after, err := lc.index.Count()
 	require.NoError(t, err)
 	require.Less(t, after, before)
+}
+
+func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	const n = 20
+	paths := make([]string, n)
+	for i := range paths {
+		paths[i] = writeTemp(t, "data")
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ref := &proxy.PackageRef{Ecosystem: "pypi", Name: fmt.Sprintf("pkg%d", i), Version: "1.0"}
+			_ = lc.Put(ref, paths[i], true, "")
+		}(i)
+	}
+	wg.Wait()
+
+	count, err := lc.index.Count()
+	require.NoError(t, err)
+	require.Equal(t, int64(n), count)
 }
 
 func TestLocalCache_CloseIsIdempotent(t *testing.T) {
