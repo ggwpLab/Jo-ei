@@ -21,8 +21,8 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "sca-proxy",
-	Short: "SCA Proxy — transparent supply chain security proxy for package registries",
+	Use:   "jo-ei",
+	Short: "Jōei — transparent supply chain security proxy for package registries",
 	RunE:  runProxy,
 }
 
@@ -139,7 +139,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
-		Msg("SCA Proxy starting")
+		Msg("Jōei starting")
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
