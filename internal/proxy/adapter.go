@@ -141,7 +141,7 @@ type PolicyDecider interface {
 // so proxy cannot import supplychain.
 type FilterResult struct {
 	Allowed     bool
-	Reason      string // "ok" | "allowlisted" | "dry_run" | "off" | "package_version_newer_than_24h"
+	Reason      string // "ok" | "allowlisted" | "dry_run" | "off" | "package_younger_than_min_age"
 	PublishedAt time.Time
 	BlockUntil  time.Time // non-zero when Allowed=false
 }

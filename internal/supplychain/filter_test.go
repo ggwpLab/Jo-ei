@@ -27,7 +27,7 @@ func TestFilter_BlocksPackageUnder24h(t *testing.T) {
 	result := f.Check(context.Background(), ref, meta)
 
 	require.False(t, result.Allowed)
-	assert.Equal(t, "package_version_newer_than_24h", result.Reason)
+	assert.Equal(t, "package_younger_than_min_age", result.Reason)
 	assert.False(t, result.BlockUntil.IsZero())
 }
 

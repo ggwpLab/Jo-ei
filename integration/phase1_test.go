@@ -120,7 +120,7 @@ func TestIntegration_NewPackageBlocked(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "package_blocked", body["error"])
-	assert.Equal(t, "package_version_newer_than_24h", body["reason"])
+	assert.Equal(t, "package_younger_than_min_age", body["reason"])
 }
 
 func TestIntegration_CacheHitNoUpstreamOnSecondRequest(t *testing.T) {

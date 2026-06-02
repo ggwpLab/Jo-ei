@@ -10,6 +10,9 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
+// reasonTooNew is returned when a package version is younger than min_age_hours.
+const reasonTooNew = "package_younger_than_min_age"
+
 // FilterResult is an alias for proxy.FilterResult kept here for backward compatibility.
 // New code should use proxy.FilterResult directly.
 type FilterResult = proxy.FilterResult
@@ -76,7 +79,7 @@ func (f *Filter) Check(_ context.Context, ref *proxy.PackageRef, meta *proxy.Pac
 		}
 		return FilterResult{
 			Allowed:     false,
-			Reason:      "package_version_newer_than_24h",
+			Reason:      reasonTooNew,
 			PublishedAt: meta.PublishedAt,
 			BlockUntil:  blockUntil,
 		}
