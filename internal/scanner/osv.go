@@ -62,17 +62,55 @@ type OSVScanner struct {
 
 	mu    sync.Mutex
 	cache map[string]*cveEntry
+
+	stop      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewOSVScanner creates an OSVScanner with the given base URL and cache TTL.
 // baseURL should be "https://api.osv.dev" (or a mock server URL in tests).
 func NewOSVScanner(baseURL string, ttl time.Duration) *OSVScanner {
-	return &OSVScanner{
+	s := &OSVScanner{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: 15 * time.Second},
 		ttl:     ttl,
 		cache:   make(map[string]*cveEntry),
+		stop:    make(chan struct{}),
 	}
+	go s.janitor()
+	return s
+}
+
+// janitor periodically removes expired cache entries so the map does not grow
+// unbounded across distinct package keys.
+func (s *OSVScanner) janitor() {
+	interval := s.ttl
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.mu.Lock()
+			for k, e := range s.cache {
+				if now.After(e.expiresAt) {
+					delete(s.cache, k)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
+// Close stops the janitor goroutine. Safe to call more than once.
+func (s *OSVScanner) Close() error {
+	s.closeOnce.Do(func() { close(s.stop) })
+	return nil
 }
 
 // Scan implements proxy.CVEScanner.

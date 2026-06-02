@@ -110,7 +110,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		shared.cveScanner = scanner.NewOSVScanner(baseURL, ttl)
+		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
+		defer osvScanner.Close()
+		shared.cveScanner = osvScanner
 		shared.policy = policy.NewEngine(cfg.CVE, profile)
 	}
 
