@@ -54,7 +54,7 @@ func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile confi
 	if profile.CVEMinSeverity != "" {
 		blockOn = profile.CVEMinSeverity
 	}
-	r := &Runtime{cveCfg: cve, profile: profile, fileAllow: fileAllow}
+	r := &Runtime{cveCfg: cve, profile: profile, fileAllow: append([]string{}, fileAllow...)}
 	r.install(RuntimeParams{
 		Mode:        sc.Mode,
 		MinAgeHours: sc.MinAgeHours,
@@ -68,6 +68,8 @@ func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile confi
 // install builds a fresh Engine/Filter pair for p and swaps it in atomically;
 // there is no partial application.
 func (r *Runtime) install(p RuntimeParams) {
+	p.Allowlist = append([]string{}, p.Allowlist...)
+	p.Denylist = append([]string{}, p.Denylist...)
 	merged := append(append([]string{}, r.fileAllow...), p.Allowlist...)
 	filter := supplychain.NewFilter(
 		config.SupplyChainConfig{Mode: p.Mode, MinAgeHours: p.MinAgeHours},
@@ -87,8 +89,9 @@ func (r *Runtime) install(p RuntimeParams) {
 var validModes = map[string]bool{"enforce": true, "dry_run": true, "off": true}
 var validSeverities = map[string]bool{"CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true}
 
-// Apply validates p and atomically swaps the active policy. On error the
-// current policy is unchanged.
+// Apply validates p and atomically swaps the active policy. Concurrent calls
+// are safe; last writer wins (no compare-and-swap). On error the current
+// policy is unchanged.
 func (r *Runtime) Apply(p RuntimeParams) error {
 	if !validModes[p.Mode] {
 		return &ValidationError{Field: "mode", Message: fmt.Sprintf("must be enforce, dry_run or off (got %q)", p.Mode)}
@@ -109,12 +112,6 @@ func (r *Runtime) Apply(p RuntimeParams) error {
 			return &ValidationError{Field: fmt.Sprintf("denylist[%d]", i), Message: msg}
 		}
 	}
-	if p.Allowlist == nil {
-		p.Allowlist = []string{}
-	}
-	if p.Denylist == nil {
-		p.Denylist = []string{}
-	}
 	r.install(p)
 	return nil
 }
@@ -125,6 +122,9 @@ func validateListEntry(e string) string {
 	eco, rest, ok := strings.Cut(strings.TrimSpace(e), "/")
 	if !ok || eco == "" || rest == "" {
 		return fmt.Sprintf("entry %q must be ecosystem/name or ecosystem/name@version", e)
+	}
+	if strings.ContainsAny(eco+rest, " \t") {
+		return fmt.Sprintf("entry %q must not contain whitespace", e)
 	}
 	return ""
 }

@@ -102,6 +102,7 @@ func TestRuntimeApplyValidation(t *testing.T) {
 		{"min_age_hours", func(p *policy.RuntimeParams) { p.MinAgeHours = -1 }},
 		{"cve_block_on", func(p *policy.RuntimeParams) { p.CVEBlockOn = "SEVERE" }},
 		{"allowlist[0]", func(p *policy.RuntimeParams) { p.Allowlist = []string{"no-slash"} }},
+		{"allowlist[0]", func(p *policy.RuntimeParams) { p.Allowlist = []string{"eco / name"} }},
 		{"denylist[0]", func(p *policy.RuntimeParams) { p.Denylist = []string{"/noeco"} }},
 	}
 	for _, tc := range cases {
