@@ -109,8 +109,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Debug().Msg("cache hit")
+		if err := h.serveFromCache(w, entry); err != nil {
+			record(VerdictError, GateCache, "cache_read_error", http.StatusInternalServerError, nil)
+			return
+		}
 		record(VerdictCache, GateCache, "cache_hit", http.StatusOK, nil)
-		h.serveFromCache(w, entry)
 		return
 	}
 
@@ -240,16 +243,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// PASS gate = the deepest gate this artifact actually cleared.
 	lastGate := GateSupply
-	if h.cfg.CVEScanner != nil {
+	if h.cfg.CVEScanner != nil && h.cfg.Policy != nil {
 		lastGate = GateCVE
 	}
 	if h.cfg.AVScanner != nil {
 		lastGate = GateMalware
 	}
+	if err := h.serveFromCache(w, entry); err != nil {
+		record(VerdictError, GateCache, "cache_read_error", http.StatusInternalServerError, nil)
+		return
+	}
 	record(VerdictPass, lastGate, scResult.Reason, http.StatusOK, func(ev *Event) {
 		ev.PublishedAt = scResult.PublishedAt
 	})
-	h.serveFromCache(w, entry)
 }
 
 // proxyTransparent forwards a non-intercepted request to each configured
@@ -375,12 +381,14 @@ func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmp
 	return "", allNotFound, err
 }
 
-// serveFromCache streams the cached artifact to the response writer.
-func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) {
+// serveFromCache streams the cached artifact to the response writer. It
+// returns an error only when the artifact cannot be opened (a 500 is written
+// in that case); streaming errors after headers are sent are logged only.
+func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) error {
 	f, err := os.Open(entry.ArtifactPath)
 	if err != nil {
 		http.Error(w, "cache read error", http.StatusInternalServerError)
-		return
+		return err
 	}
 	defer f.Close()
 
@@ -390,6 +398,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *ArtifactEntry) {
 	if _, err := io.Copy(w, f); err != nil {
 		h.cfg.Logger.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("error streaming cached artifact")
 	}
+	return nil
 }
 
 // writeBlockedResponse sends a 423 Locked response with structured JSON.

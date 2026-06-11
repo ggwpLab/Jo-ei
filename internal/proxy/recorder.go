@@ -24,7 +24,7 @@ const (
 // semantics mirror the console's request objects (web/console).
 type Event struct {
 	RequestID  string
-	Time       time.Time
+	Time       time.Time // outcome timestamp (request arrival = Time - LatencyMS)
 	Ecosystem  string
 	Package    string
 	Version    string
