@@ -27,6 +27,14 @@ import (
 
 var cfgFile string
 
+// eventHistorySize is the telemetry ring-buffer capacity backing the console
+// request feed (process-lifetime, in-memory).
+const eventHistorySize = 500
+
+// defaultOSVBaseURL is used for both the live scanner and the console's
+// scanner listing when cve.base_url is unset.
+const defaultOSVBaseURL = "https://api.osv.dev"
+
 var rootCmd = &cobra.Command{
 	Use:   "jo-ei",
 	Short: "Jōei — transparent supply chain security proxy for package registries",
@@ -111,7 +119,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// config wins again after restart).
 	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
 
-	store := telemetry.NewStore(500)
+	store := telemetry.NewStore(eventHistorySize)
 	broadcaster := telemetry.NewBroadcaster()
 
 	shared := sharedDeps{
@@ -125,7 +133,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if cfg.CVE.Enabled {
 		baseURL := cfg.CVE.BaseURL
 		if baseURL == "" {
-			baseURL = "https://api.osv.dev"
+			baseURL = defaultOSVBaseURL
 		}
 		ttl := time.Duration(cfg.CVE.CacheTTLMinutes) * time.Minute
 		if ttl == 0 {
@@ -135,6 +143,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		defer func() { _ = osvScanner.Close() }()
 		shared.cveScanner = osvScanner
 		shared.policy = policyRuntime
+	}
+
+	if !cfg.CVE.Enabled {
+		logger.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on and denylist have no effect (supply-chain mode/min-age/allowlist still apply)")
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
@@ -285,7 +297,7 @@ func scannerInfo(cfg *config.Config, profile config.PolicyProfile) []console.Sca
 	if cfg.CVE.Enabled {
 		base := cfg.CVE.BaseURL
 		if base == "" {
-			base = "https://api.osv.dev"
+			base = defaultOSVBaseURL
 		}
 		out = append(out, console.ScannerInfo{Name: "osv.dev", Detail: base, Enabled: true})
 	}

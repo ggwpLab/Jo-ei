@@ -49,10 +49,21 @@ type Runtime struct {
 
 // NewRuntime builds the boot snapshot from config. fileAllow entries are
 // always honored by the supply-chain filter regardless of runtime edits.
+//
+// Note an intentional semantic: the profile/runtime allowlist applies to ALL
+// gates — entries bypass both the CVE policy and the supply-chain age check
+// (the console presents a single "always trust" list). This is broader than
+// the pre-console behavior where profile.Allowlist only bypassed CVE checks.
 func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile config.PolicyProfile, fileAllow []string) *Runtime {
 	blockOn := cve.BlockOn
 	if profile.CVEMinSeverity != "" {
 		blockOn = profile.CVEMinSeverity
+	}
+	if blockOn == "" {
+		// Empty block_on historically blocked any finding with a known
+		// severity (threshold Unknown). LOW matches that exact set while
+		// keeping the params valid for PUT /api/policy round-trips.
+		blockOn = "LOW"
 	}
 	r := &Runtime{cveCfg: cve, profile: profile, fileAllow: append([]string{}, fileAllow...)}
 	r.install(RuntimeParams{

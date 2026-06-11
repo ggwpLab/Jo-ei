@@ -150,3 +150,16 @@ func TestRuntimeConcurrentApplyAndEvaluate(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestRuntimeEmptyBlockOnDefaultsToLow(t *testing.T) {
+	r := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{Enabled: true}, // no BlockOn
+		config.PolicyProfile{CVEBlock: true},
+		nil,
+	)
+	p := r.Current()
+	assert.Equal(t, "LOW", p.CVEBlockOn)
+	// The boot params must round-trip through Apply unchanged.
+	require.NoError(t, r.Apply(p))
+}
