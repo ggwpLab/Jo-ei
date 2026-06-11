@@ -61,6 +61,7 @@ func TestStoreCounters(t *testing.T) {
 	assert.False(t, snap.StartedAt.IsZero())
 
 	// Per-gate pipeline accounting (supply → cve → malware):
+	// r1 CACHE: cache+1 pass
 	// r2 PASS@malware: supply+1 cve+1 malware+1 pass
 	// r3,r4 BLOCK@cve: supply+1 each pass, cve+2 block
 	// r5 BLOCK@supply: supply+1 block
@@ -123,7 +124,13 @@ func TestStoreConcurrent(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < 200; i++ {
-				s.Record(evt(fmt.Sprintf("g%d-%d", g, i), proxy.VerdictPass, proxy.GateSupply, "ok"))
+				ev := evt(fmt.Sprintf("g%d-%d", g, i), proxy.VerdictPass, proxy.GateSupply, "ok")
+				if i%10 == 0 {
+					ev.Verdict = proxy.VerdictBlock
+					ev.BlockUntil = time.Now().Add(time.Hour)
+					ev.Version = fmt.Sprintf("1.0.%d", i) // distinct quarantine keys
+				}
+				s.Record(ev)
 				s.Recent(10)
 				s.Snapshot()
 				s.Quarantine(time.Now())

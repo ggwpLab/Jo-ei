@@ -46,6 +46,9 @@ type Store struct {
 
 // NewStore creates a Store holding the last capacity events.
 func NewStore(capacity int) *Store {
+	if capacity < 1 {
+		capacity = 1
+	}
 	return &Store{
 		buf:     make([]proxy.Event, capacity),
 		started: time.Now(),
@@ -100,13 +103,16 @@ func (s *Store) Record(ev proxy.Event) {
 		if c, ok := s.gates[ev.Gate]; ok {
 			c.Block++
 		}
+		// Pass++ for pipeline gates cleared before the blocking gate.
+		// idx > 0 also correctly skips non-pipeline gates (cache → idx -1):
+		// a cache-gate block implies no pipeline gate was reached at all.
 		if idx := pipelineIndex(ev.Gate); idx > 0 {
 			for _, g := range gatePipeline[:idx] {
 				s.gates[g].Pass++
 			}
 		}
 		switch {
-		case ev.Reason == "denylisted":
+		case ev.Reason == proxy.ReasonDenylisted:
 			s.denylisted++
 		case ev.Gate == proxy.GateSupply:
 			s.supplyBlocked++
@@ -116,6 +122,8 @@ func (s *Store) Record(ev proxy.Event) {
 			s.malwareBlocked++
 		}
 	case proxy.VerdictError:
+		// Errors are infrastructure failures, not gate verdicts: they count
+		// toward Errors only and intentionally leave gate tallies untouched.
 		s.errors++
 	}
 }

@@ -47,6 +47,10 @@ type Event struct {
 	BlockUntil  time.Time // non-zero only for supply-chain blocks
 }
 
+// ReasonDenylisted is the block reason produced by the policy engine for
+// denylisted packages; telemetry counts it separately from CVE blocks.
+const ReasonDenylisted = "denylisted"
+
 // Recorder receives telemetry events. Implementations must be safe for
 // concurrent use and must never block or fail the proxy data path: Record
 // returns nothing. Defined here (like ArtifactCache) to avoid the import
