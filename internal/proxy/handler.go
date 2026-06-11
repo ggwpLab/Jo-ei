@@ -42,6 +42,7 @@ type HandlerConfig struct {
 	CVEScanner CVEScanner    // optional; nil disables CVE scanning
 	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
 	AVScanner  AVScanner     // optional; nil disables malware scanning
+	Recorder   Recorder      // optional; nil disables telemetry
 }
 
 // hopByHopHeaders are connection-specific headers that must not be forwarded
@@ -75,6 +76,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Telemetry: exactly one event per intercepted request at its outcome.
+	// A nil Recorder makes record a no-op; telemetry can never fail a request.
+	start := time.Now()
+	record := func(verdict, gate, reason string, status int, mod func(*Event)) {
+		if h.cfg.Recorder == nil {
+			return
+		}
+		ev := Event{
+			RequestID: requestID, Time: time.Now(),
+			Ecosystem: ref.Ecosystem, Package: ref.Name, Version: ref.Version,
+			Verdict: verdict, Gate: gate, Reason: reason,
+			HTTPStatus: status, LatencyMS: time.Since(start).Milliseconds(),
+		}
+		if mod != nil {
+			mod(&ev)
+		}
+		h.cfg.Recorder.Record(ev)
+	}
+
 	log := h.cfg.Logger.With().
 		Str("request_id", requestID).
 		Str("package", ref.Key()).
@@ -84,10 +104,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if entry, found := h.cfg.Cache.Get(ref); found {
 		if !entry.ScanClean {
 			// Fail-closed: cached entry has failed scan result
+			record(VerdictBlock, GateCache, "scan_failed", http.StatusForbidden, nil)
 			h.writeError(w, requestID, ref, http.StatusForbidden, "scan_failed")
 			return
 		}
 		log.Debug().Msg("cache hit")
+		record(VerdictCache, GateCache, "cache_hit", http.StatusOK, nil)
 		h.serveFromCache(w, entry)
 		return
 	}
@@ -97,6 +119,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to fetch upstream metadata")
+		record(VerdictError, GateSupply, "upstream_metadata_unavailable", http.StatusBadGateway, nil)
 		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_metadata_unavailable")
 		return
 	}
@@ -109,6 +132,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Time("published_at", scResult.PublishedAt).
 			Time("block_until", scResult.BlockUntil).
 			Msg("supply chain filter blocked package")
+		record(VerdictBlock, GateSupply, scResult.Reason, http.StatusLocked, func(ev *Event) {
+			ev.BlockedBy = []string{"supply_chain"}
+			ev.PublishedAt = scResult.PublishedAt
+			ev.BlockUntil = scResult.BlockUntil
+		})
 		h.writeBlockedResponse(w, requestID, ref, scResult)
 		return
 	}
@@ -124,6 +152,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scanResult, err := h.cfg.CVEScanner.Scan(ctx, ref)
 		if err != nil {
 			log.Error().Err(err).Msg("CVE scan failed")
+			record(VerdictError, GateCVE, "cve_scan_error", http.StatusServiceUnavailable, nil)
 			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "cve_scan_error")
 			return
 		}
@@ -134,6 +163,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					Str("reason", decision.Reason).
 					Int("findings", len(decision.Findings)).
 					Msg("CVE policy blocked package")
+				blockedBy := "cve"
+				if decision.Reason == ReasonDenylisted {
+					blockedBy = "denylist"
+				}
+				record(VerdictBlock, GateCVE, decision.Reason, http.StatusForbidden, func(ev *Event) {
+					ev.BlockedBy = []string{blockedBy}
+					ev.CVEs = decision.Findings
+				})
 				h.writeCVEBlockedResponse(w, requestID, ref, decision)
 				return
 			}
@@ -144,6 +181,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upstreamURLs := h.cfg.Adapter.UpstreamURLs(r)
 	if len(upstreamURLs) == 0 {
 		log.Error().Msg("adapter returned no upstream URLs")
+		record(VerdictError, GateSupply, "no_upstream_configured", http.StatusInternalServerError, nil)
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
 		return
 	}
@@ -151,10 +189,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if allNotFound {
 			log.Warn().Strs("upstream_urls", upstreamURLs).Msg("artifact not found on any upstream")
+			record(VerdictError, GateSupply, "artifact_not_found", http.StatusNotFound, nil)
 			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
 			return
 		}
 		log.Error().Err(err).Strs("upstream_urls", upstreamURLs).Msg("failed to download artifact")
+		record(VerdictError, GateSupply, "upstream_unavailable", http.StatusBadGateway, nil)
 		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_unavailable")
 		return
 	}
@@ -165,11 +205,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		avResult, err := h.cfg.AVScanner.Scan(ctx, tmpPath)
 		if err != nil {
 			log.Error().Err(err).Msg("AV scan failed")
+			record(VerdictError, GateMalware, "av_scan_error", http.StatusServiceUnavailable, nil)
 			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "av_scan_error")
 			return
 		}
 		if !avResult.Clean {
 			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).Msg("malware detected")
+			record(VerdictBlock, GateMalware, "malware_found", http.StatusForbidden, func(ev *Event) {
+				ev.BlockedBy = []string{"malware"}
+				ev.MalwareEngine = avResult.Engine
+				ev.MalwareSignature = avResult.Signature
+			})
 			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Engine, avResult.Signature)
 			return
 		}
@@ -179,6 +225,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.cfg.Cache.Put(ref, tmpPath, true, ""); err != nil {
 		log.Error().Err(err).Msg("failed to cache artifact")
 		// Fail-closed: don't serve if we cannot cache
+		record(VerdictError, GateCache, "cache_error", http.StatusInternalServerError, nil)
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "cache_error")
 		return
 	}
@@ -187,9 +234,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	entry, found := h.cfg.Cache.Get(ref)
 	if !found {
 		// Should not happen — we just Put it
+		record(VerdictError, GateCache, "cache_error", http.StatusInternalServerError, nil)
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "cache_error")
 		return
 	}
+	// PASS gate = the deepest gate this artifact actually cleared.
+	lastGate := GateSupply
+	if h.cfg.CVEScanner != nil {
+		lastGate = GateCVE
+	}
+	if h.cfg.AVScanner != nil {
+		lastGate = GateMalware
+	}
+	record(VerdictPass, lastGate, scResult.Reason, http.StatusOK, func(ev *Event) {
+		ev.PublishedAt = scResult.PublishedAt
+	})
 	h.serveFromCache(w, entry)
 }
 
