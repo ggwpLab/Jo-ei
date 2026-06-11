@@ -3,6 +3,7 @@ package supplychain
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,20 @@ func (a *Allowlist) Contains(ref *proxy.PackageRef) bool {
 	byName := ref.Ecosystem + "/" + ref.Name
 	byVersion := byName + "@" + ref.Version
 	return a.entries[byName] || a.entries[byVersion]
+}
+
+// Entries returns a sorted copy of the allowlist entries, for merging with
+// runtime-added entries. Nil-safe.
+func (a *Allowlist) Entries() []string {
+	if a == nil {
+		return nil
+	}
+	out := make([]string, 0, len(a.entries))
+	for e := range a.entries {
+		out = append(out, e)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Filter implements the supply chain package age check.
