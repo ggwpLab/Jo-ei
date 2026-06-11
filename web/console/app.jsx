@@ -84,8 +84,12 @@ function App() {
   }, []);
   const dismiss = (id) => setToasts((xs) => xs.filter((x) => x.id !== id));
 
-  const saveLists = (patch, toast) => {
-    JOEI.savePolicy({ ...JOEI.policy, ...patch })
+  // Saves are chained so each patch is computed AFTER the previous PUT has
+  // applied — rapid allow/deny clicks cannot overwrite each other.
+  const saveChain = useRef(Promise.resolve());
+  const saveLists = (patchFn, toast) => {
+    saveChain.current = saveChain.current
+      .then(() => JOEI.savePolicy({ ...JOEI.policy, ...patchFn() }))
       .then(() => notify(toast))
       .catch((err) => notify({
         kind: "block", code: "400 Bad Request", title: "Policy update failed",
@@ -95,14 +99,16 @@ function App() {
 
   const onAllowlist = (target) => {
     const t = typeof target === "string" ? target : `${target.eco}/${target.pkg}@${target.ver}`;
-    if (JOEI.policy.allowlist.includes(t)) return;
-    saveLists({ allowlist: [...JOEI.policy.allowlist, t] },
-      { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted on all gates: <span className="t-pkg">{t}</span></> });
+    saveLists(() => {
+      const list = JOEI.policy.allowlist;
+      return { allowlist: list.includes(t) ? list : [...list, t] };
+    }, { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted on all gates: <span className="t-pkg">{t}</span></> });
   };
   const onDenylist = (target) => {
-    if (JOEI.policy.denylist.includes(target)) return;
-    saveLists({ denylist: [...JOEI.policy.denylist, target] },
-      { kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
+    saveLists(() => {
+      const list = JOEI.policy.denylist;
+      return { denylist: list.includes(target) ? list : [...list, target] };
+    }, { kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
   };
   const openThreat = (r) => setThreat(r);
 

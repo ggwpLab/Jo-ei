@@ -67,16 +67,19 @@ function Policy({ notify }) {
   const [saving, setSaving] = useState(false);
   const [fieldError, setFieldError] = useState(null);
 
-  // Pick up server-side changes unless the user has unsaved edits.
+  // Pick up server-side changes unless the user has unsaved edits. dirtyRef
+  // keeps the mount-only listener reading the current dirty flag.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   useEffect(() => {
-    const sync = () => { if (!dirty) setDraft({ ...JOEI.policy }); };
+    const sync = () => { if (!dirtyRef.current) setDraft({ ...JOEI.policy }); };
     window.addEventListener("joei:policy", sync);
     window.addEventListener("joei:data", sync);
     return () => {
       window.removeEventListener("joei:policy", sync);
       window.removeEventListener("joei:data", sync);
     };
-  }, [dirty]);
+  }, []);
 
   const p = draft;
   const update = (patch) => { setDraft({ ...p, ...patch }); setDirty(true); setFieldError(null); };
@@ -122,7 +125,7 @@ function Policy({ notify }) {
       <p className="muted" style={{ maxWidth: 680, marginTop: -4, marginBottom: 18, fontSize: 13 }}>
         Changes are a <b style={{ color: "var(--gold-l)" }}>runtime override</b>: they apply to the gate
         immediately but are not written to <span className="mono">config.yaml</span> — a restart restores the file policy.
-        {fieldError && <span style={{ color: "var(--vermilion-l)" }}> · rejected field: <span className="mono">{fieldError}</span></span>}
+        {fieldError && <span role="alert" style={{ color: "var(--vermilion-l)" }}> · rejected field: <span className="mono">{fieldError}</span></span>}
       </p>
 
       {yaml ? (
