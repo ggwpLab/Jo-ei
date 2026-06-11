@@ -111,7 +111,7 @@
   async function load() {
     const [overview, requests, quarantine, pol, registries] = await Promise.all([
       getJSON("/api/overview"),
-      getJSON("/api/requests?limit=120"),
+      getJSON("/api/requests?limit=500"),
       getJSON("/api/quarantine"),
       getJSON("/api/policy"),
       getJSON("/api/registries"),
@@ -123,7 +123,6 @@
     applyOverview(overview);
     J.requests = requests.requests.map(reviveEvent);
     J.registries = registries.registries.map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams }));
-    J.kpis.quarantined = J.quarantine.length;
     setConnected(true);
     fire("joei:data");
   }
@@ -138,10 +137,11 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await res.json();
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) {
-      const err = new Error(data.message || "invalid policy");
-      err.field = data.field;
+      const err = new Error((data && data.message) || "policy update failed (HTTP " + res.status + ")");
+      err.field = data && data.field;
       throw err;
     }
     applyPolicy(data);
