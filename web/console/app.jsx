@@ -3,7 +3,7 @@
 const NAV = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "feed", label: "Live Feed", icon: "feed", badge: "live", live: true },
-  { id: "quarantine", label: "Quarantine", icon: "quar", badge: "5", gold: true },
+  { id: "quarantine", label: "Quarantine", icon: "quar", gold: true },
   { id: "policy", label: "Policy", icon: "policy" },
   { id: "registries", label: "Registries & Cache", icon: "registry" },
 ];
@@ -58,14 +58,23 @@ function App() {
   const [page, setPage] = useState("overview");
   const [treatment, setTreatment] = useState("procession");
   const [threat, setThreat] = useState(null);
-  const [policy, setPolicy] = useState(JOEI.policy);
+  const [policy, setPolicyState] = useState(JOEI.policy);
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(JOEI.connected);
   const tid = useRef(0);
 
   useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 1500);
-    return () => clearTimeout(t);
+    const onData = () => { setLoading(false); setPolicyState(JOEI.policy); };
+    const onConn = () => setConnected(JOEI.connected);
+    window.addEventListener("joei:data", onData);
+    window.addEventListener("joei:policy", onData);
+    window.addEventListener("joei:connection", onConn);
+    return () => {
+      window.removeEventListener("joei:data", onData);
+      window.removeEventListener("joei:policy", onData);
+      window.removeEventListener("joei:connection", onConn);
+    };
   }, []);
 
   const notify = useCallback((t) => {
@@ -75,19 +84,27 @@ function App() {
   }, []);
   const dismiss = (id) => setToasts((xs) => xs.filter((x) => x.id !== id));
 
+  const saveLists = (patch, toast) => {
+    JOEI.savePolicy({ ...JOEI.policy, ...patch })
+      .then(() => notify(toast))
+      .catch((err) => notify({
+        kind: "block", code: "400 Bad Request", title: "Policy update failed",
+        msg: String(err.message || err),
+      }));
+  };
+
   const onAllowlist = (target) => {
     const t = typeof target === "string" ? target : `${target.eco}/${target.pkg}@${target.ver}`;
-    setPolicy((p) => p.allowlist.includes(t) ? p : { ...p, allowlist: [...p.allowlist, t] });
-    notify({ kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted on all gates: <span className="t-pkg">{t}</span></> });
+    if (JOEI.policy.allowlist.includes(t)) return;
+    saveLists({ allowlist: [...JOEI.policy.allowlist, t] },
+      { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted on all gates: <span className="t-pkg">{t}</span></> });
   };
   const onDenylist = (target) => {
-    setPolicy((p) => p.denylist.includes(target) ? p : { ...p, denylist: [...p.denylist, target] });
-    notify({ kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
+    if (JOEI.policy.denylist.includes(target)) return;
+    saveLists({ denylist: [...JOEI.policy.denylist, target] },
+      { kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
   };
-  const openThreat = (r) => {
-    setThreat(r);
-    // surface a block toast on the matching ecosystem rule for flavor
-  };
+  const openThreat = (r) => setThreat(r);
 
   const meta = PAGE_META[page];
 
@@ -138,19 +155,24 @@ function App() {
           <h1><span className="crumb-kanji kanji">{meta.kanji}</span> {meta.title}</h1>
           <div className="topbar-spacer"></div>
 
-          <span className="pill"><span className="muted" style={{ fontWeight: 500 }}>env</span>&nbsp;production</span>
-          <span className="pill"><span className="muted" style={{ fontWeight: 500 }}>profile</span>&nbsp;{policy.profile}</span>
+          <span className="pill" title="Console edits apply immediately but reset to the YAML config on restart">
+            <span className="muted" style={{ fontWeight: 500 }}>policy</span>&nbsp;runtime override
+          </span>
           <span className={`pill ${policy.mode === "enforce" ? "enforce" : policy.mode === "dry_run" ? "dry" : "off"}`}>
             <span className="dot"></span>
             {policy.mode === "enforce" ? "Enforcing" : policy.mode === "dry_run" ? "Dry-run" : "Off"}
           </span>
         </header>
 
+        {!connected && !loading && (
+          <div className="conn-banner">&#9888; No connection to the proxy — data may be stale; retrying…</div>
+        )}
+
         <div className="content">
           {page === "overview" && <Overview treatment={treatment} setTreatment={setTreatment} openThreat={openThreat} />}
           {page === "feed" && <LiveFeed openThreat={openThreat} />}
           {page === "quarantine" && <Quarantine onAllowlist={onAllowlist} />}
-          {page === "policy" && <Policy policy={policy} setPolicy={setPolicy} notify={notify} />}
+          {page === "policy" && <Policy notify={notify} />}
           {page === "registries" && <Registries notify={notify} />}
         </div>
       </div>

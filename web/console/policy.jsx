@@ -31,16 +31,10 @@ function ListEditor({ kind, items, onAdd, onRemove }) {
 
 function buildYaml(p) {
   return [
-    ["c", "# 浄衛 policy profile"],
-    ["k", "profile", "v", p.profile],
+    ["c", "# 浄衛 runtime policy — resets to config.yaml on restart"],
     ["k", "mode", "v", p.mode],
-    ["c", ""],
-    ["k", "cve:"],
-    ["i", "block_on", "v", p.cve_block_on],
-    ["c", ""],
-    ["k", "supply_chain:"],
-    ["i", "min_age_hours", "d", p.supply_chain.min_age_hours],
-    ["i", "mode", "v", p.supply_chain.mode],
+    ["k", "min_age_hours", "d", p.min_age_hours],
+    ["k", "cve_block_on", "v", p.cve_block_on],
     ["c", ""],
     ["k", "allowlist:"],
     ...p.allowlist.map((x) => ["li", x]),
@@ -66,12 +60,42 @@ function YamlView({ p }) {
   );
 }
 
-function Policy({ policy, setPolicy, notify }) {
+function Policy({ notify }) {
   const [yaml, setYaml] = useState(false);
+  const [draft, setDraft] = useState(() => ({ ...JOEI.policy }));
   const [dirty, setDirty] = useState(false);
-  const p = policy;
-  const update = (patch) => { setPolicy({ ...p, ...patch }); setDirty(true); };
-  const updateSC = (patch) => { setPolicy({ ...p, supply_chain: { ...p.supply_chain, ...patch } }); setDirty(true); };
+  const [saving, setSaving] = useState(false);
+  const [fieldError, setFieldError] = useState(null);
+
+  // Pick up server-side changes unless the user has unsaved edits.
+  useEffect(() => {
+    const sync = () => { if (!dirty) setDraft({ ...JOEI.policy }); };
+    window.addEventListener("joei:policy", sync);
+    window.addEventListener("joei:data", sync);
+    return () => {
+      window.removeEventListener("joei:policy", sync);
+      window.removeEventListener("joei:data", sync);
+    };
+  }, [dirty]);
+
+  const p = draft;
+  const update = (patch) => { setDraft({ ...p, ...patch }); setDirty(true); setFieldError(null); };
+
+  const save = () => {
+    setSaving(true);
+    JOEI.savePolicy(p)
+      .then(() => {
+        setDirty(false);
+        notify({ kind: "ok", code: "200 OK", title: "Policy applied",
+          msg: <>Runtime policy updated — resets to the YAML config on restart.</> });
+      })
+      .catch((err) => {
+        setFieldError(err.field || null);
+        notify({ kind: "block", code: "400 Bad Request", title: "Policy rejected",
+          msg: String(err.message || err) });
+      })
+      .finally(() => setSaving(false));
+  };
 
   const SEV = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
   const MODES = [["enforce", "Enforce"], ["dry_run", "Dry-run"], ["off", "Off"]];
@@ -81,35 +105,35 @@ function Policy({ policy, setPolicy, notify }) {
       <div className="section-head">
         <span className="head-kanji kanji">法</span>
         <div>
-          <div className="eyebrow">Policy profile</div>
-          <h2 className="row" style={{ gap: 12 }}>
-            <select className="select" style={{ fontSize: 18, fontWeight: 600, padding: "4px 30px 4px 10px" }}
-              value={p.profile} onChange={(e) => update({ profile: e.target.value })}>
-              {p.profiles.map((pr) => <option key={pr} value={pr}>{pr}</option>)}
-            </select>
-          </h2>
+          <div className="eyebrow">Runtime policy · applies immediately, resets on restart</div>
+          <h2>Effective policy</h2>
         </div>
         <div className="spacer"></div>
         <div className="seg">
           <button className={!yaml ? "active" : ""} onClick={() => setYaml(false)}>Form</button>
           <button className={yaml ? "active" : ""} onClick={() => setYaml(true)}>View as YAML</button>
         </div>
-        <button className={`btn ${dirty ? "primary" : ""}`} disabled={!dirty}
-          style={!dirty ? { opacity: .5 } : undefined}
-          onClick={() => { setDirty(false); notify({ kind: "ok", code: "200 OK", title: "Policy saved", msg: <>Profile <b>{p.profile}</b> applied to the gate.</> }); }}>
-          {dirty ? "Save & apply" : "Saved"}
+        <button className={`btn ${dirty ? "primary" : ""}`} disabled={!dirty || saving}
+          style={!dirty ? { opacity: .5 } : undefined} onClick={save}>
+          {saving ? "Applying…" : dirty ? "Save & apply" : "Saved"}
         </button>
       </div>
+
+      <p className="muted" style={{ maxWidth: 680, marginTop: -4, marginBottom: 18, fontSize: 13 }}>
+        Changes are a <b style={{ color: "var(--gold-l)" }}>runtime override</b>: they apply to the gate
+        immediately but are not written to <span className="mono">config.yaml</span> — a restart restores the file policy.
+        {fieldError && <span style={{ color: "var(--vermilion-l)" }}> · rejected field: <span className="mono">{fieldError}</span></span>}
+      </p>
 
       {yaml ? (
         <div className="card" style={{ padding: 22 }}><YamlView p={p} /></div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
-          {/* enforcement mode */}
+          {/* supply-chain mode + CVE threshold */}
           <div className="card" style={{ padding: 22 }}>
             <div className="field">
-              <label>Global enforcement mode</label>
-              <div className="hint">How the gate acts on a failing verdict.</div>
+              <label>衛 Supply-chain mode</label>
+              <div className="hint">How the gate acts on an immature package.</div>
               <div className="seg-radio" style={{ marginTop: 8 }}>
                 {MODES.map(([k, l]) => (
                   <button key={k} className={`${p.mode === k ? "active" : ""} ${k === "enforce" ? "enf" : ""}`}
@@ -130,27 +154,17 @@ function Policy({ policy, setPolicy, notify }) {
             </div>
           </div>
 
-          {/* supply chain */}
+          {/* min age */}
           <div className="card" style={{ padding: 22 }}>
             <div className="field">
-              <label>衛 Supply-chain · minimum age</label>
+              <label>衛 Minimum age</label>
               <div className="hint">Hold new releases (<span className="mono">423 Locked</span>) until they reach this age.</div>
               <div className="row" style={{ gap: 14, marginTop: 10 }}>
-                <input type="range" min="0" max="72" step="1" value={p.supply_chain.min_age_hours}
-                  onChange={(e) => updateSC({ min_age_hours: +e.target.value })} style={{ flex: 1, accentColor: "var(--gold)" }} />
+                <input type="range" min="0" max="72" step="1" value={p.min_age_hours}
+                  onChange={(e) => update({ min_age_hours: +e.target.value })} style={{ flex: 1, accentColor: "var(--gold)" }} />
                 <span className="mono" style={{ fontSize: 18, color: "var(--gold-l)", minWidth: 64, textAlign: "right" }}>
-                  {p.supply_chain.min_age_hours}h
+                  {p.min_age_hours}h
                 </span>
-              </div>
-            </div>
-            <div className="divider"></div>
-            <div className="field">
-              <label>Supply-chain mode</label>
-              <div className="seg-radio" style={{ marginTop: 8 }}>
-                {MODES.map(([k, l]) => (
-                  <button key={k} className={`${p.supply_chain.mode === k ? "active" : ""} ${k === "enforce" ? "enf" : ""}`}
-                    onClick={() => updateSC({ mode: k })}>{l}</button>
-                ))}
               </div>
             </div>
           </div>
