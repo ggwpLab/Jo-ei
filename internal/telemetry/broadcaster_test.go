@@ -57,7 +57,7 @@ func TestBroadcasterSlowSubscriberLosesEventsWithoutBlocking(t *testing.T) {
 
 	select {
 	case <-done: // publisher never stalls on the full channel
-	case <-time.After(2 * time.Second):
+	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Publish blocked on a slow subscriber")
 	}
 	assert.LessOrEqual(t, len(ch), 16, "slow subscriber only buffers up to its channel depth")

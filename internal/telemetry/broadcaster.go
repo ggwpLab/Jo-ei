@@ -53,8 +53,8 @@ func (b *Broadcaster) Publish(ev proxy.Event) {
 	}
 }
 
-// Hub is the proxy.Recorder wired into handlers: it stores the event and
-// fans it out to live subscribers.
+// Hub implements proxy.Recorder by recording to Store and publishing to
+// Broadcaster. Both fields must be non-nil.
 type Hub struct {
 	Store       *Store
 	Broadcaster *Broadcaster
