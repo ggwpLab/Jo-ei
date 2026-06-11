@@ -20,6 +20,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/web"
 )
 
 var cfgFile string
@@ -156,17 +157,26 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	mux := proxy.NewMux(handlers, logger)
 
+	// Wrap the proxy mux so the admin console is served at /console/ while every
+	// other path (registry prefixes, /health) falls through to the proxy mux
+	// untouched. Keeping the console in a parent mux leaves the proxy package
+	// and its routing free of UI concerns.
+	root := http.NewServeMux()
+	root.Handle("/console/", web.ConsoleHandler())
+	root.Handle("/", mux)
+
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
 		Int("registries", registryCount).
 		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
+		Str("console", "/console/").
 		Msg("Jōei starting")
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
-		Handler:      mux,
+		Handler:      root,
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}

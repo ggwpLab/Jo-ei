@@ -97,6 +97,19 @@ curl -s http://localhost:8080/health
 pip install requests==2.31.0 --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```
 
+## Admin Console
+
+Jōei ships an embedded admin console — 浄衛 *The Purification Gate* — served at
+[`http://localhost:8080/console/`](http://localhost:8080/console/). It is a single-page
+app baked into the binary (no extra files at runtime), and renders the four-gate
+pipeline (Cache → 衛 Supply Chain → 浄 CVE → 浄 Malware) along with an overview dashboard,
+a live request feed, the 24h quarantine queue, a threat-detail drawer, a policy editor,
+and a registries & cache view.
+
+The console is currently driven by client-side sample data for visualizing the gate flow;
+it does not yet read live proxy state. It loads React + Babel from a CDN, so the browser
+needs outbound internet access the first time it is opened.
+
 ## How it Works
 
 Every package download goes through this pipeline:
