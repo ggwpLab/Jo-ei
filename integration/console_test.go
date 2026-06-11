@@ -122,7 +122,7 @@ func TestConsole_EndToEnd(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	// 6. Second fetch is a cache hit; overview KPIs reflect all four requests.
+	// 6. Second fetch is a cache hit; overview KPIs reflect all three proxy requests.
 	resp, err = http.Get(url)
 	require.NoError(t, err)
 	resp.Body.Close()
