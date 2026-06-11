@@ -15,11 +15,13 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 	"github.com/ggwpLab/Jo-ei/web"
 )
 
@@ -49,6 +51,7 @@ type sharedDeps struct {
 	cveScanner proxy.CVEScanner
 	policy     proxy.PolicyDecider
 	avScanner  proxy.AVScanner
+	recorder   proxy.Recorder
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
@@ -94,18 +97,28 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
 	}
 
-	var allowlist *supplychain.Allowlist
+	var fileAllow []string
 	if cfg.SupplyChain.AllowlistPath != "" {
-		allowlist, err = supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
+		allowlist, err := supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
 		if err != nil {
 			return err
 		}
+		fileAllow = allowlist.Entries()
 	}
 
+	// Runtime policy: engine + supply-chain filter behind an atomic swap so
+	// the console can apply edits without restart (runtime-only; the YAML
+	// config wins again after restart).
+	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
+
+	store := telemetry.NewStore(500)
+	broadcaster := telemetry.NewBroadcaster()
+
 	shared := sharedDeps{
-		filter: supplychain.NewFilter(cfg.SupplyChain, allowlist),
-		cache:  &cacheAdapter{c: artifactCache},
-		logger: logger,
+		filter:   policyRuntime,
+		cache:    &cacheAdapter{c: artifactCache},
+		logger:   logger,
+		recorder: &telemetry.Hub{Store: store, Broadcaster: broadcaster},
 	}
 
 	// CVE scanner + policy (optional).
@@ -121,7 +134,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
 		defer func() { _ = osvScanner.Close() }()
 		shared.cveScanner = osvScanner
-		shared.policy = policy.NewEngine(cfg.CVE, profile)
+		shared.policy = policyRuntime
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
@@ -163,6 +176,16 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// and its routing free of UI concerns.
 	root := http.NewServeMux()
 	root.Handle("/console/", web.ConsoleHandler())
+	root.Handle("/api/", console.NewHandler(console.Config{
+		Store:         store,
+		Broadcaster:   broadcaster,
+		Policy:        policyRuntime,
+		Cache:         artifactCache,
+		CacheMaxBytes: int64(cfg.Cache.Local.MaxSizeGB) << 30,
+		Registries:    registryInfo(cfg),
+		Scanners:      scannerInfo(cfg, profile),
+		Logger:        logger,
+	}))
 	root.Handle("/", mux)
 
 	logger.Info().
@@ -172,6 +195,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
 		Str("console", "/console/").
+		Str("api", "/api/").
 		Msg("Jōei starting")
 
 	srv := &http.Server{
@@ -216,6 +240,7 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 		CVEScanner: shared.cveScanner,
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,
+		Recorder:   shared.recorder,
 	})
 }
 
@@ -241,4 +266,31 @@ func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool
 
 func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
 	return a.c.Invalidate(ref)
+}
+
+// registryInfo flattens the registry config for GET /api/registries.
+func registryInfo(cfg *config.Config) []console.RegistryInfo {
+	return []console.RegistryInfo{
+		{Ecosystem: "pypi", Enabled: cfg.Registries.PyPI.Enabled, Upstreams: cfg.Registries.PyPI.Upstreams},
+		{Ecosystem: "npm", Enabled: cfg.Registries.NPM.Enabled, Upstreams: cfg.Registries.NPM.Upstreams},
+		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
+		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
+	}
+}
+
+// scannerInfo lists configured scan engines for the overview (static config,
+// no health probes this phase).
+func scannerInfo(cfg *config.Config, profile config.PolicyProfile) []console.ScannerInfo {
+	var out []console.ScannerInfo
+	if cfg.CVE.Enabled {
+		base := cfg.CVE.BaseURL
+		if base == "" {
+			base = "https://api.osv.dev"
+		}
+		out = append(out, console.ScannerInfo{Name: "osv.dev", Detail: base, Enabled: true})
+	}
+	for _, sc := range cfg.Malware.Scanners {
+		out = append(out, console.ScannerInfo{Name: sc.Type, Detail: sc.Address, Enabled: profile.MalwareBlock})
+	}
+	return out
 }
