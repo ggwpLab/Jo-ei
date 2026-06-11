@@ -21,6 +21,8 @@ type malwareJSON struct {
 	Signature string `json:"signature"`
 }
 
+// supplyJSON carries the supply-chain hold facts. The SPA derives display
+// values (age_hours, min_age_hours) from published_at and GET /api/policy.
 type supplyJSON struct {
 	PublishedAt time.Time  `json:"published_at"`
 	BlockUntil  *time.Time `json:"block_until,omitempty"`

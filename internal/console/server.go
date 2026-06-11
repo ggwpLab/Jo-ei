@@ -4,6 +4,7 @@
 package console
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,9 +76,15 @@ func NewHandler(cfg Config) http.Handler {
 }
 
 func (s *server) writeJSON(w http.ResponseWriter, status int, v any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		s.cfg.Logger.Error().Err(err).Msg("console: encoding JSON response")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if _, err := buf.WriteTo(w); err != nil {
 		s.cfg.Logger.Error().Err(err).Msg("console: writing JSON response")
 	}
 }
@@ -183,10 +190,18 @@ func (s *server) getPolicy(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
 	var p policy.RuntimeParams
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error": "invalid_policy", "field": "body", "message": "request body too large",
+			})
+			return
+		}
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "invalid_policy", "field": "body", "message": err.Error(),
 		})
@@ -226,7 +241,13 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	// Initial comment line: tells clients (and tests) the subscription is
+	// live, and defeats reverse-proxy response buffering.
+	if _, err := fmt.Fprint(w, ": connected\n\n"); err != nil {
+		return
+	}
 	fl.Flush()
 
 	for {

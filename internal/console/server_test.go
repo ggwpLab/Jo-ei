@@ -229,11 +229,22 @@ func TestEventsSSE(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 
-	// Give the handler goroutine a moment to subscribe before publishing.
-	time.Sleep(100 * time.Millisecond)
+	reader := bufio.NewReader(resp.Body)
+	// The handler sends ": connected" once the subscription is registered.
+	for {
+		line, err := reader.ReadString('\n')
+		require.NoError(t, err)
+		if strings.HasPrefix(line, ": connected") {
+			break
+		}
+	}
+	// Drain the comment's trailing blank line before the first event.
+	_, err = reader.ReadString('\n')
+	require.NoError(t, err)
+
 	f.hub.Record(proxy.Event{RequestID: "req_sse", Verdict: proxy.VerdictPass, Gate: proxy.GateMalware, Time: time.Now()})
 
-	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	line, err := reader.ReadString('\n')
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(line, "data: "), "got %q", line)
 	assert.Contains(t, line, `"request_id":"req_sse"`)
