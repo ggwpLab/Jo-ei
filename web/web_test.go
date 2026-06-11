@@ -31,7 +31,7 @@ func TestConsoleHandlerServesAssets(t *testing.T) {
 	srv := http.NewServeMux()
 	srv.Handle("/console/", ConsoleHandler())
 
-	for _, asset := range []string{"styles.css", "screens.css", "data.js", "app.jsx"} {
+	for _, asset := range []string{"styles.css", "screens.css", "api.js", "app.jsx"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/console/"+asset, nil)
 		srv.ServeHTTP(rec, req)

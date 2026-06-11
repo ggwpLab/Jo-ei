@@ -29,6 +29,20 @@ function fmtCountdown(target) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+/* re-render when api.js refreshes window.JOEI */
+function useJoeiData() {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setTick((t) => t + 1);
+    window.addEventListener("joei:data", fn);
+    window.addEventListener("joei:policy", fn);
+    return () => {
+      window.removeEventListener("joei:data", fn);
+      window.removeEventListener("joei:policy", fn);
+    };
+  }, []);
+}
+
 /* ---------- icons (1.6 stroke, currentColor) ---------- */
 function Ico({ d, size = 18, fill = false, stroke = true, vb = 24, children }) {
   return (
@@ -139,6 +153,7 @@ const GATE_LABEL = {
 
 Object.assign(window, {
   fmtNum, fmtCompact, fmtClock, fmtAgo, fmtCountdown,
+  useJoeiData,
   Ico, Icons, Torii, ToriiMark, Eco, Verdict, Spark, GATE_LABEL,
   useState, useEffect, useRef, useMemo, useCallback,
 });
