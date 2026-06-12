@@ -8,17 +8,16 @@ services:
     volumes:
       - ./config.yaml:/etc/jo-ei/config.yaml:ro
       - cache-data:/var/cache/jo-ei
-      - clamav-socket:/var/run/clamav
     environment:
       - JOEI_LOGGING_LEVEL=info
     depends_on:
-      - clamav
+      clamav:
+        condition: service_healthy
     restart: unless-stopped
 
   clamav:
     image: clamav/clamav:stable
     volumes:
-      - clamav-socket:/var/run/clamav
       - clamav-db:/var/lib/clamav
     restart: unless-stopped
 
@@ -30,5 +29,4 @@ services:
 
 volumes:
   cache-data:
-  clamav-socket:
   clamav-db:

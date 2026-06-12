@@ -276,6 +276,46 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 	assert.Contains(t, line, `"request_id":"req_late"`)
 }
 
+// An idle SSE stream must emit periodic heartbeat comments: with no traffic
+// the stream is otherwise silent for hours, and idle TCP connections get
+// dropped by intermediaries (Docker port-forwards, AV web filters) — the
+// console then shows its "no connection" banner although the API is healthy.
+func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
+	store := telemetry.NewStore(16)
+	h := console.NewHandler(console.Config{
+		Store:        store,
+		Broadcaster:  telemetry.NewBroadcaster(),
+		Logger:       zerolog.Nop(),
+		SSEHeartbeat: 50 * time.Millisecond,
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": connected"), "got %q", line)
+	_, err = reader.ReadString('\n')
+	require.NoError(t, err)
+
+	// No events are published; the next bytes on the wire must be heartbeats.
+	for i := 0; i < 2; i++ {
+		line, err = reader.ReadString('\n')
+		require.NoError(t, err, "idle stream produced no heartbeat")
+		assert.True(t, strings.HasPrefix(line, ": ping"), "got %q", line)
+		_, err = reader.ReadString('\n') // trailing blank line
+		require.NoError(t, err)
+	}
+}
+
 // Regression: disabled registries have no upstreams configured; the wire
 // shape must stay an array — null crashes the SPA's Registries screen.
 func TestRegistries_NilUpstreams(t *testing.T) {

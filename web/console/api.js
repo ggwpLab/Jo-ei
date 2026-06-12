@@ -45,6 +45,7 @@
     gateStats: emptyGateStats(),
     scanners: [],
     connected: false,
+    ready: false, // true once the initial load() has settled (either way)
   });
 
   function fire(name, detail) {
@@ -123,6 +124,7 @@
     applyOverview(overview);
     J.requests = (requests.requests || []).map(reviveEvent);
     J.registries = (registries.registries || []).map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams || [] }));
+    J.ready = true;
     setConnected(true);
     fire("joei:data");
   }
@@ -149,6 +151,17 @@
     return J.policy;
   }
 
+  // An SSE drop alone does not mean the API is down: EventSource reconnects
+  // transparently and every panel is refreshed by the 15s polls regardless.
+  // Probe the API once per error burst; only a failing probe shows the
+  // "no connection" banner.
+  let probing = false;
+  function probeConnection() {
+    if (probing) return;
+    probing = true;
+    load().catch(() => setConnected(false)).finally(() => { probing = false; });
+  }
+
   function connectEvents() {
     const es = new EventSource("/api/events");
     es.onmessage = (m) => {
@@ -157,17 +170,24 @@
       fire("joei:event", r);
     };
     es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false); // EventSource reconnects on its own
+    es.onerror = () => probeConnection(); // EventSource reconnects on its own
   }
 
   J.load = load;
   J.savePolicy = savePolicy;
 
   // Initial load; fire joei:data even on failure so the app shell can leave
-  // the loader and show the connection banner.
-  load().catch(() => { setConnected(false); fire("joei:data"); }).finally(connectEvents);
+  // the loader and show the connection banner. J.ready marks the attempt as
+  // settled — the app reads it on mount because both events can fire before
+  // React subscribes (fetches finish while Babel is still compiling the app).
+  load().catch(() => { J.ready = true; setConnected(false); fire("joei:data"); }).finally(connectEvents);
   // Counters and quarantine are not pushed over SSE — refresh periodically.
   setInterval(() => {
     if (!document.hidden) load().catch(() => setConnected(false));
   }, 15000);
+  // Returning to a backgrounded tab: timers were paused and the SSE socket may
+  // have died silently — refresh now instead of waiting for the next poll.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) load().catch(() => setConnected(false));
+  });
 })();
