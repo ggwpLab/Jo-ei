@@ -103,7 +103,7 @@ Jōei ships an embedded admin console — 浄衛 *The Purification Gate* — ser
 [`http://localhost:8080/console/`](http://localhost:8080/console/). It is a single-page
 app baked into the binary (no extra files at runtime), and renders the four-gate
 pipeline (Cache → 衛 Supply Chain → 浄 CVE → 浄 Malware) along with an overview dashboard,
-a live request feed, the 24h quarantine queue, a threat-detail drawer, a policy editor,
+a live request feed, the min-age quarantine queue, a threat-detail drawer, a policy editor,
 and a registries & cache view.
 
 The console reads live proxy state via the JSON API described below. It loads React + Babel
