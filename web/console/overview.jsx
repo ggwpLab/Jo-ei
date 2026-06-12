@@ -13,8 +13,17 @@ function KpiCard({ label, value, accent, delta, spark, sparkColor, watermark }) 
 }
 
 function Overview({ treatment, setTreatment, openThreat }) {
+  useJoeiData();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setTick((t) => t + 1);
+    window.addEventListener("joei:event", fn);
+    return () => window.removeEventListener("joei:event", fn);
+  }, []);
+
   const k = JOEI.kpis;
   const recent = JOEI.requests.slice(0, 6);
+  const uptime = k.started_at ? fmtAgo(k.started_at).replace(" ago", "") : "—";
 
   return (
     <div className="content-inner">
@@ -25,31 +34,27 @@ function Overview({ treatment, setTreatment, openThreat }) {
       <div className="section-head" style={{ marginTop: 28 }}>
         <span className="head-kanji kanji">衛</span>
         <div>
-          <div className="eyebrow">Today · {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}</div>
+          <div className="eyebrow">Since start · uptime {uptime}</div>
           <h2>Gate throughput</h2>
         </div>
       </div>
 
       <div className="kpi-grid">
-        <KpiCard label="Requests today" value={fmtCompact(k.requests_today)}
-          delta={<><b>{fmtNum(k.requests_today)}</b> total · +8.2% vs yesterday</>}
-          spark={k.requests_spark} sparkColor="var(--washi-mut)" watermark="求" />
+        <KpiCard label="Requests · since start" value={fmtCompact(k.requests_total)}
+          delta={<><b>{fmtNum(k.requests_total)}</b> total · {fmtNum(k.errors)} errors</>} watermark="求" />
         <KpiCard label="Served from cache" value={(k.hit_rate * 100).toFixed(1) + "%"} accent="jade"
-          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits · LRU, 64 GB</>}
-          spark={[68,70,69,72,71,73,72,74,73,75,73,73]} sparkColor="var(--jade)" watermark="蔵" />
-        <KpiCard label="Blocked total" value={fmtNum(k.blocked_total)} accent="verm"
-          delta={<>423 Locked + 403 Forbidden · +12% spike</>}
-          spark={k.blocked_spark} sparkColor="var(--vermilion)" watermark="封" />
-        <KpiCard label="Quarantined · 24h" value={fmtNum(k.quarantined_24h)} accent="gold"
-          delta={<>held &lt; 24h old · awaiting maturity</>}
-          spark={[8,11,9,14,12,16,15,19,17,15,18,14]} sparkColor="var(--gold)" watermark="守" />
+          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits since start</>} watermark="蔵" />
+        <KpiCard label="Blocked · since start" value={fmtNum(k.blocked_total)} accent="verm"
+          delta={<>423 Locked + 403 Forbidden</>} watermark="封" />
+        <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"
+          delta={<>held until min-age maturity</>} watermark="守" />
       </div>
 
       {/* block breakdown */}
       <div className="card breakdown" style={{ marginTop: 14 }}>
         <div className="bd">
-          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(k.quarantined_24h)}</span>
-          <span className="l">衛 Quarantined (24h) · 423</span>
+          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(k.supply_blocked)}</span>
+          <span className="l">衛 Supply-chain · 423</span>
         </div>
         <div className="bd">
           <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(k.cve_blocked)}</span>

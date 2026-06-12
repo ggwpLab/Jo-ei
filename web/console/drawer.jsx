@@ -96,13 +96,13 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
               <div className="label-h">Vulnerabilities · blocking ≥ {JOEI.policy.cve_block_on}</div>
               <div className="col" style={{ gap: 10 }}>
                 {r.cves.map((id) => {
-                  const c = JOEI.CVES[id];
+                  const c = JOEI.CVES[id] || { id, severity: "UNKNOWN", cvss: 0, summary: "" };
                   return (
                     <div className="cve-card" key={id}>
                       <div className="cve-top">
                         <span className={`sev ${c.severity}`}>{c.severity}</span>
                         <span className="cve-id">{c.id}</span>
-                        <span className="right mono muted" style={{ fontSize: 11.5 }}>CVSS {c.cvss.toFixed(1)}</span>
+                        <span className="right mono muted" style={{ fontSize: 11.5 }}>CVSS {(c.cvss || 0).toFixed(1)}</span>
                       </div>
                       <div className="cve-sum">{c.summary}</div>
                       <a className="cve-link" href={`https://osv.dev/vulnerability/${c.id}`} target="_blank" rel="noreferrer">

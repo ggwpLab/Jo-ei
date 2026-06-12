@@ -149,23 +149,24 @@ function InkScroll({ flow, stats }) {
 
 /* ---------- scanner fail-closed strip ---------- */
 function ScannerStrip() {
-  const allOk = JOEI.scanners.every((s) => s.status === "ok");
+  useJoeiData();
   return (
     <div className="scanner-strip">
       <span className="fc-label">
-        <span style={{ color: allOk ? "var(--jade-l)" : "var(--gold-l)" }}>● </span>
+        <span style={{ color: "var(--jade-l)" }}>● </span>
         Fail-closed
       </span>
       <span className="muted" style={{ fontSize: 12 }}>
-        {allOk ? "All scanners reachable — gate enforcing." : "Degraded upstream — requests held rather than served."}
+        Scanner errors hold requests rather than serving unscanned artifacts.
       </span>
       <div className="right row" style={{ gap: 20 }}>
-        {JOEI.scanners.map((s) => (
-          <span className={`health ${s.status}`} key={s.name}>
-            <i className="hdot"></i>{s.name}
-            <span className="faint">{s.latency}</span>
-          </span>
-        ))}
+        {JOEI.scanners.length === 0
+          ? <span className="muted" style={{ fontSize: 12 }}>no scanners configured</span>
+          : JOEI.scanners.map((s) => (
+              <span className={`health ${s.status}`} key={s.name + s.detail} title={s.detail}>
+                <i className="hdot"></i>{s.name}
+              </span>
+            ))}
       </div>
     </div>
   );
@@ -173,6 +174,7 @@ function ScannerStrip() {
 
 /* ---------- the hero card ---------- */
 function GateHero({ treatment, setTreatment }) {
+  useJoeiData();
   const enabled = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const flow = useGateFlow(enabled);
   const stats = JOEI.gateStats;

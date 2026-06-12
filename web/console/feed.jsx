@@ -30,25 +30,25 @@ const FILTERS = [
 ];
 
 function LiveFeed({ openThreat }) {
-  const [rows, setRows] = useState(() => JOEI.requests.slice());
+  const [rows, setRows] = useState(() => JOEI.requests.slice(0, 120));
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [paused, setPaused] = useState(false);
   const [newId, setNewId] = useState(null);
-  const seqRef = useRef(2000);
 
   useEffect(() => {
-    if (paused) return;
-    const enabled = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!enabled) return;
-    const id = setInterval(() => {
-      const pool = JOEI.STREAM_POOL;
-      const base = pool[Math.floor(Math.random() * pool.length)];
-      const rec = { ...base, request_id: JOEI.rid(), seq: seqRef.current++, ts: new Date() };
-      setNewId(rec.request_id);
-      setRows((rs) => [rec, ...rs].slice(0, 120));
-    }, 2600);
-    return () => clearInterval(id);
+    const onEvent = (e) => {
+      if (paused) return;
+      setNewId(e.detail.request_id);
+      setRows((rs) => [e.detail, ...rs].slice(0, 120));
+    };
+    const onData = () => { if (!paused) setRows(JOEI.requests.slice(0, 120)); };
+    window.addEventListener("joei:event", onEvent);
+    window.addEventListener("joei:data", onData);
+    return () => {
+      window.removeEventListener("joei:event", onEvent);
+      window.removeEventListener("joei:data", onData);
+    };
   }, [paused]);
 
   const shown = rows.filter((r) => {
@@ -98,7 +98,9 @@ function LiveFeed({ openThreat }) {
           <div className="empty">
             <span className="e-kanji">無</span>
             <div className="e-title">No matching requests</div>
-            <div className="e-sub">Nothing in the stream matches “{q || filter}”. Clear the filter to see all traffic flowing through the gate.</div>
+            <div className=”e-sub”>{q || filter !== “all”
+              ? <>Nothing in the stream matches “{q || filter}”. Clear the filter to see all traffic.</>
+              : <>No requests have passed through the gate yet. Point a package manager at the proxy and traffic will appear here live.</>}</div>
           </div>
         ) : (
           shown.map((r) => (

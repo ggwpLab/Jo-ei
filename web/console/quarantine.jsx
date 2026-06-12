@@ -8,7 +8,7 @@ function QuarantineCard({ q, onAllowlist }) {
     return () => clearInterval(id);
   }, []);
 
-  const total = 24 * 3600 * 1000;
+  const total = Math.max(1, q.block_until.getTime() - q.published_at.getTime());
   const remaining = Math.max(0, q.block_until.getTime() - Date.now());
   const matured = (total - remaining) / total; // 0..1
   const pct = Math.min(100, Math.max(0, matured * 100));
@@ -27,7 +27,7 @@ function QuarantineCard({ q, onAllowlist }) {
 
       <div>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
-          <span className="muted" style={{ fontSize: 11.5 }}>maturing to 24h</span>
+          <span className="muted" style={{ fontSize: 11.5 }}>maturing to {JOEI.policy.min_age_hours}h</span>
           <span className="countdown">{fmtCountdown(q.block_until)}</span>
         </div>
         <div className="hourglass-bar"><i style={{ width: pct + "%" }}></i></div>
@@ -44,7 +44,13 @@ function QuarantineCard({ q, onAllowlist }) {
 }
 
 function Quarantine({ onAllowlist }) {
+  useJoeiData();
   const [items, setItems] = useState(() => JOEI.quarantine.slice());
+  useEffect(() => {
+    const fn = () => setItems(JOEI.quarantine.slice());
+    window.addEventListener("joei:data", fn);
+    return () => window.removeEventListener("joei:data", fn);
+  }, []);
   const handle = (q) => {
     setItems((xs) => xs.filter((x) => x !== q));
     onAllowlist(q);
@@ -63,7 +69,7 @@ function Quarantine({ onAllowlist }) {
       </div>
 
       <p className="muted" style={{ maxWidth: 680, marginTop: -4, marginBottom: 22, fontSize: 13.5, lineHeight: 1.6 }}>
-        Packages published less than <b style={{ color: "var(--washi)" }}>{JOEI.policy.supply_chain.min_age_hours} hours</b> ago are held at the 衛 gate
+        Packages published less than <b style={{ color: "var(--washi)" }}>{JOEI.policy.min_age_hours} hours</b> ago are held at the 衛 gate
         until they mature — the window where most malicious releases are caught and yanked. Trust one early by adding it to the allowlist.
       </p>
 
