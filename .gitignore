@@ -1,5 +1,5 @@
 bin/
 *.test
 *.db
-.claude
-.vscode
+.claude/
+.vscode/
