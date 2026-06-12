@@ -2,6 +2,7 @@ package console_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -232,6 +233,72 @@ func TestRegistries(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, body.Registries, 1)
 	assert.Equal(t, "pypi", body.Registries[0].Ecosystem)
+}
+
+// Regression: the SSE stream must outlive the http.Server Read/WriteTimeouts
+// (cmd/jo-ei sets 120s). The deadlines are armed once at request start, so
+// without per-stream deadline management the first event written after the
+// timeout kills the connection and the event is silently lost.
+func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
+	store := telemetry.NewStore(16)
+	bcast := telemetry.NewBroadcaster()
+	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
+	h := console.NewHandler(console.Config{
+		Store: store, Broadcaster: bcast, Logger: zerolog.Nop(),
+	})
+	srv := httptest.NewUnstartedServer(h)
+	srv.Config.ReadTimeout = 300 * time.Millisecond
+	srv.Config.WriteTimeout = 300 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": connected"), "got %q", line)
+	_, err = reader.ReadString('\n')
+	require.NoError(t, err)
+
+	// Outlive both server deadlines, then publish.
+	time.Sleep(600 * time.Millisecond)
+	hub.Record(proxy.Event{RequestID: "req_late", Verdict: proxy.VerdictPass, Gate: proxy.GateCache, Time: time.Now()})
+
+	line, err = reader.ReadString('\n')
+	require.NoError(t, err, "stream died after the server write deadline")
+	assert.Contains(t, line, `"request_id":"req_late"`)
+}
+
+// Regression: disabled registries have no upstreams configured; the wire
+// shape must stay an array — null crashes the SPA's Registries screen.
+func TestRegistries_NilUpstreams(t *testing.T) {
+	store := telemetry.NewStore(16)
+	h := console.NewHandler(console.Config{
+		Store:       store,
+		Broadcaster: telemetry.NewBroadcaster(),
+		Registries: []console.RegistryInfo{
+			{Ecosystem: "npm", Enabled: false, Upstreams: nil},
+		},
+		Logger: zerolog.Nop(),
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/registries")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var raw bytes.Buffer
+	_, err = raw.ReadFrom(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, raw.String(), `"upstreams":[]`)
+	assert.NotContains(t, raw.String(), `"upstreams":null`)
 }
 
 func TestEventsSSE(t *testing.T) {

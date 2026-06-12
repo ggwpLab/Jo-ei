@@ -101,7 +101,7 @@
       hit_rate: o.cache.hit_rate,
       evictions: o.cache.evictions,
     };
-    J.scanners = o.scanners.map((s) => ({
+    J.scanners = (o.scanners || []).map((s) => ({
       name: s.name, detail: s.detail, status: s.enabled ? "ok" : "off", latency: "",
     }));
   }
@@ -115,12 +115,14 @@
       getJSON("/api/registries"),
     ]);
     applyPolicy(pol);
-    J.quarantine = quarantine.quarantine.map((q) => ({
+    // "|| []" guards: one unexpected null must degrade a panel, not fail the
+    // whole load() (a rejected load shows the no-connection banner).
+    J.quarantine = (quarantine.quarantine || []).map((q) => ({
       ...q, published_at: new Date(q.published_at), block_until: new Date(q.block_until),
     }));
     applyOverview(overview);
-    J.requests = requests.requests.map(reviveEvent);
-    J.registries = registries.registries.map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams }));
+    J.requests = (requests.requests || []).map(reviveEvent);
+    J.registries = (registries.registries || []).map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams || [] }));
     setConnected(true);
     fire("joei:data");
   }

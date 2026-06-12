@@ -63,6 +63,13 @@ func NewHandler(cfg Config) http.Handler {
 	if cfg.Registries == nil {
 		cfg.Registries = []RegistryInfo{}
 	}
+	for i := range cfg.Registries {
+		// Disabled registries carry no upstreams; keep the wire shape an
+		// array — null crashes the SPA's Registries screen.
+		if cfg.Registries[i].Upstreams == nil {
+			cfg.Registries[i].Upstreams = []string{}
+		}
+	}
 	s := &server{cfg: cfg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/overview", s.overview)
@@ -234,8 +241,7 @@ func (s *server) registries(w http.ResponseWriter, _ *http.Request) {
 }
 
 // events streams new telemetry over SSE. The browser EventSource reconnects
-// automatically (including after the server's WriteTimeout closes the
-// connection).
+// automatically if the connection drops.
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
@@ -244,6 +250,16 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, cancel := s.cfg.Broadcaster.Subscribe()
 	defer cancel()
+
+	// The server-wide Read/WriteTimeouts (cmd/jo-ei sets 120s) are armed once
+	// at request start, which poisons a long-lived stream: the first event
+	// written after the deadline kills the connection and is silently lost.
+	// Drop the read deadline and bound each write individually instead, so a
+	// stalled client still cannot pin this goroutine forever.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	armWrite := func() { _ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second)) }
+	armWrite()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -268,6 +284,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			armWrite()
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 				return
 			}
