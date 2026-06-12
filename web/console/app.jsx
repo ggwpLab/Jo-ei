@@ -70,6 +70,11 @@ function App() {
     window.addEventListener("joei:data", onData);
     window.addEventListener("joei:policy", onData);
     window.addEventListener("joei:connection", onConn);
+    // The initial load can settle before this subscription exists (the
+    // fetches finish while Babel is still compiling the app), so the events
+    // above may already have fired into the void — sync from current state.
+    if (JOEI.ready) onData();
+    onConn();
     return () => {
       window.removeEventListener("joei:data", onData);
       window.removeEventListener("joei:policy", onData);
@@ -97,8 +102,11 @@ function App() {
       }));
   };
 
+  // target: { eco, pkg, ver }. Entries added from the console always pin the
+  // exact version — a bare eco/pkg entry would trust every future release of
+  // a package that was just blocked.
   const onAllowlist = (target) => {
-    const t = typeof target === "string" ? target : `${target.eco}/${target.pkg}@${target.ver}`;
+    const t = `${target.eco}/${target.pkg}@${target.ver}`;
     saveLists(() => {
       const list = JOEI.policy.allowlist;
       return { allowlist: list.includes(t) ? list : [...list, t] };

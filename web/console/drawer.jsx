@@ -154,9 +154,9 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
         <div className="drawer-foot">
           {confirm === "allow" ? (
             <>
-              <span className="muted grow" style={{ fontSize: 12.5 }}>Trust <b className="mono" style={{ color: "var(--washi)" }}>{target}</b> on all gates?</span>
+              <span className="muted grow" style={{ fontSize: 12.5 }}>Trust <b className="mono" style={{ color: "var(--washi)" }}>{target}@{r.ver}</b> on all gates?</span>
               <button className="btn ghost sm" onClick={() => setConfirm(null)}>Cancel</button>
-              <button className="btn jade sm" onClick={() => { onAllowlist(target); onClose(); }}>Confirm allowlist</button>
+              <button className="btn jade sm" onClick={() => { onAllowlist({ eco: r.eco, pkg: r.pkg, ver: r.ver }); onClose(); }}>Confirm allowlist</button>
             </>
           ) : confirm === "deny" ? (
             <>

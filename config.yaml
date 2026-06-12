@@ -33,7 +33,9 @@ cve:
 malware:
   scanners:
     - type: clamav
-      address: "unix:///var/run/clamav/clamd.sock"
+      # clamav/clamav image listens on TCP 3310 by default; its unix socket
+      # lives at /tmp/clamd.sock inside its own container and is not shareable.
+      address: "tcp:clamav:3310"
       timeout_seconds: 30
     # Add a commercial engine over ICAP (Kaspersky, Dr.Web, …):
     # - type: icap

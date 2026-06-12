@@ -49,6 +49,11 @@ type Config struct {
 	Registries    []RegistryInfo
 	Scanners      []ScannerInfo
 	Logger        zerolog.Logger
+	// SSEHeartbeat is the idle keep-alive interval for /api/events. With no
+	// traffic the stream is otherwise silent for hours and intermediaries
+	// (Docker port-forwards, AV web filters) drop the idle connection.
+	// Zero means the 25s default.
+	SSEHeartbeat time.Duration
 }
 
 type server struct {
@@ -272,10 +277,23 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	fl.Flush()
 
+	heartbeat := s.cfg.SSEHeartbeat
+	if heartbeat <= 0 {
+		heartbeat = 25 * time.Second
+	}
+	ticker := time.NewTicker(heartbeat)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ticker.C:
+			armWrite()
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			fl.Flush()
 		case ev, open := <-ch:
 			if !open {
 				return
