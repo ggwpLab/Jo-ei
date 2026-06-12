@@ -22,7 +22,7 @@ function QuarantineCard({ q, onAllowlist }) {
       </div>
       <div>
         <div className="q-pkg">{q.pkg}<span className="muted">@{q.ver}</span></div>
-        <div className="q-pub">published <b>{fmtAgo(q.published_at)}</b> · {JOEI.ECO[q.eco].name}</div>
+        <div className="q-pub">published <b>{fmtAgo(q.published_at)}</b> · {(JOEI.ECO[q.eco] || { name: q.eco }).name}</div>
       </div>
 
       <div>

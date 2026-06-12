@@ -179,7 +179,7 @@ function App() {
           {page === "feed" && <LiveFeed openThreat={openThreat} />}
           {page === "quarantine" && <Quarantine onAllowlist={onAllowlist} />}
           {page === "policy" && <Policy notify={notify} />}
-          {page === "registries" && <Registries notify={notify} />}
+          {page === "registries" && <Registries />}
         </div>
       </div>
 
