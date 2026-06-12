@@ -98,7 +98,7 @@ function LiveFeed({ openThreat }) {
           <div className="empty">
             <span className="e-kanji">無</span>
             <div className="e-title">No matching requests</div>
-            <div className=”e-sub”>{q || filter !== “all”
+            <div className="e-sub">{q || filter !== "all"
               ? <>Nothing in the stream matches “{q || filter}”. Clear the filter to see all traffic.</>
               : <>No requests have passed through the gate yet. Point a package manager at the proxy and traffic will appear here live.</>}</div>
           </div>
