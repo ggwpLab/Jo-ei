@@ -106,9 +106,31 @@ pipeline (Cache → 衛 Supply Chain → 浄 CVE → 浄 Malware) along with an 
 a live request feed, the 24h quarantine queue, a threat-detail drawer, a policy editor,
 and a registries & cache view.
 
-The console is currently driven by client-side sample data for visualizing the gate flow;
-it does not yet read live proxy state. It loads React + Babel from a CDN, so the browser
-needs outbound internet access the first time it is opened.
+The console reads live proxy state via the JSON API described below. It loads React + Babel
+from a CDN, so the browser needs outbound internet access the first time it is opened.
+
+### Admin console & API
+
+The embedded console at `/console/` shows live proxy state and lets you edit
+the effective policy at runtime. It is backed by a JSON API under `/api/`:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/overview` | GET | KPIs, per-gate counters, cache stats, configured scanners (since process start) |
+| `/api/requests?limit=N` | GET | recent request events, newest first (in-memory ring, last 500) |
+| `/api/events` | GET | Server-Sent Events stream of new request events |
+| `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
+| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |
+| `/api/registries` | GET | configured registries and upstreams |
+
+Policy edits made through the console are **runtime-only**: they apply
+immediately without restart, but the YAML config wins again after a restart.
+Event history and counters are in-memory and reset on restart.
+
+> ⚠️ **Known risk — no authentication.** The console and the `/api/`
+> endpoints (including `PUT /api/policy`) are open to anyone who can reach
+> the proxy port. Run Jōei on a trusted network or behind an authenticating
+> reverse proxy. Console/API authentication is planned for a later phase.
 
 ## How it Works
 
