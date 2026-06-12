@@ -122,11 +122,13 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 			"denylisted":      snap.Denylisted,
 		},
 		"gates": snap.Gates,
+		// LocalCache.Stats does not track per-object hits; the request-level
+		// rate (cache_hits/requests) is the meaningful cache hit rate here.
 		"cache": map[string]any{
 			"objects":    cs.Entries,
 			"size_bytes": cs.SizeBytes,
 			"max_bytes":  s.cfg.CacheMaxBytes,
-			"hit_rate":   cs.HitRatio,
+			"hit_rate":   hitRate,
 			"evictions":  cs.Evictions,
 		},
 		"scanners": s.cfg.Scanners,
@@ -191,10 +193,13 @@ func (s *server) getPolicy(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
-	var p policy.RuntimeParams
+	var in struct {
+		policy.RuntimeParams
+		Persistence string `json:"persistence"` // read-only field from GET; accepted and ignored so GET→PUT round-trips
+	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&p); err != nil {
+	if err := dec.Decode(&in); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			s.writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
@@ -207,6 +212,7 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	p := in.RuntimeParams
 	if err := s.cfg.Policy.Apply(p); err != nil {
 		var verr *policy.ValidationError
 		if errors.As(err, &verr) {

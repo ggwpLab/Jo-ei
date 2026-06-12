@@ -93,8 +93,9 @@ func TestOverview(t *testing.T) {
 		} `json:"kpis"`
 		Gates map[string]telemetry.GateCounts `json:"gates"`
 		Cache struct {
-			Objects  int64 `json:"objects"`
-			MaxBytes int64 `json:"max_bytes"`
+			Objects  int64   `json:"objects"`
+			MaxBytes int64   `json:"max_bytes"`
+			HitRate  float64 `json:"hit_rate"`
 		} `json:"cache"`
 		Scanners []console.ScannerInfo `json:"scanners"`
 	}
@@ -106,6 +107,9 @@ func TestOverview(t *testing.T) {
 	assert.Equal(t, telemetry.GateCounts{Pass: 1}, body.Gates["cache"])
 	assert.Equal(t, int64(42), body.Cache.Objects)
 	assert.Equal(t, int64(64<<30), body.Cache.MaxBytes)
+	// cache.hit_rate must equal kpis.hit_rate: LocalCache does not track
+	// per-object hits, so the request-level rate is used for both.
+	assert.InDelta(t, body.KPIs.HitRate, body.Cache.HitRate, 0.001)
 	require.Len(t, body.Scanners, 1)
 	assert.False(t, body.StartedAt.IsZero())
 }
@@ -183,6 +187,19 @@ func TestPolicyGetAndPut(t *testing.T) {
 		require.NoError(t, err)
 		return resp
 	}
+
+	// GET → PUT round-trip: echo the GET response body back via PUT; must succeed
+	// because "persistence" is a read-only field that PUT accepts and ignores.
+	rawResp, err := http.Get(f.srv.URL + "/api/policy")
+	require.NoError(t, err)
+	var rawPolicy map[string]any
+	require.NoError(t, json.NewDecoder(rawResp.Body).Decode(&rawPolicy))
+	rawResp.Body.Close()
+	rawBytes, err := json.Marshal(rawPolicy)
+	require.NoError(t, err)
+	roundTrip := put(string(rawBytes))
+	defer roundTrip.Body.Close()
+	require.Equal(t, http.StatusOK, roundTrip.StatusCode, "GET→PUT round-trip must succeed when persistence field is present")
 
 	resp := put(`{"mode":"dry_run","min_age_hours":48,"cve_block_on":"CRITICAL","allowlist":["pypi/requests"],"denylist":[]}`)
 	defer resp.Body.Close()

@@ -34,7 +34,6 @@
     policy: {
       mode: "off", min_age_hours: 0, cve_block_on: "CRITICAL",
       allowlist: [], denylist: [], persistence: "runtime",
-      supply_chain: { min_age_hours: 0, mode: "off" },
     },
     registries: [],
     cache: { used_gb: 0, max_gb: 0, objects: "0", hit_rate: 0, evictions: 0 },
@@ -84,8 +83,7 @@
   }
 
   function applyPolicy(p) {
-    // supply_chain alias keeps older field paths in the screens working.
-    J.policy = { ...p, supply_chain: { min_age_hours: p.min_age_hours, mode: p.mode } };
+    J.policy = { ...p };
   }
 
   function applyOverview(o) {

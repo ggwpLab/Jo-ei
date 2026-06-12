@@ -78,7 +78,7 @@ function Quarantine({ onAllowlist }) {
           <div className="empty">
             <span className="e-kanji">空</span>
             <div className="e-title">The gate is clear</div>
-            <div className="e-sub">No packages are currently held for maturity. New releases will appear here automatically while they age toward the 24h threshold.</div>
+            <div className="e-sub">No packages are currently held for maturity. New releases will appear here automatically while they age toward the {JOEI.policy.min_age_hours}h threshold.</div>
           </div>
         </div>
       ) : (
