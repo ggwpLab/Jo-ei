@@ -2,6 +2,32 @@
 
 const GATE_ORDER = ["cache", "supply", "cve", "malware"];
 
+// Maps a blocked request's gate key to its index in GATE_ORDER. Several keys
+// collapse onto the Supply Chain gate: min-age holds, denylist, and the
+// alternate "supply_chain" spelling all surface there.
+const GATE_BLOCK_INDEX = {
+  cache: 0, supply: 1, supply_chain: 1, denylist: 1, cve: 2, malware: 3,
+};
+
+// How many recent requests the procession cycles through before re-snapshotting.
+const FLOW_LEN = 12;
+
+// Builds the procession token list { pkg, eco, block } from the live request
+// history. block === null means "passed every gate"; a number is the gate index
+// the package was rejected at. Returns [] when there is no history yet.
+function buildFlow() {
+  const reqs = (window.JOEI.requests || []).slice(0, FLOW_LEN);
+  return reqs.map((r) => {
+    const eco = window.JOEI.ECO[r.eco] ? r.eco : "pypi"; // guard unknown ecosystem
+    let block = null;
+    if (r.verdict === "BLOCK") {
+      const key = (r.blocked_by && r.blocked_by[0]) || "supply";
+      block = GATE_BLOCK_INDEX[key] != null ? GATE_BLOCK_INDEX[key] : 1;
+    }
+    return { pkg: r.pkg, eco, block };
+  });
+}
+
 // scripted procession of packages through the gates
 const FLOW = [
   { pkg: "requests", eco: "pypi", block: null },
