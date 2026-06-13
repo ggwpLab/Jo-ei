@@ -64,6 +64,7 @@ function useGateFlow(enabled) {
   useEffect(() => {
     if (!enabled || idle) return;
     let blocked = false;
+    let timeoutId = null;
     // Advance to the next package; at the end of the list re-snapshot the live
     // history and restart the loop ("new requests picked up on the next cycle").
     const advanceRun = () => setRun((r) => {
@@ -77,7 +78,7 @@ function useGateFlow(enabled) {
         // if just arrived at a block gate, hold then advance run
         if (f.block !== null && s === f.block + 1) {
           blocked = true;
-          setTimeout(() => { advanceRun(); setStep(0); blocked = false; }, 1700);
+          timeoutId = setTimeout(() => { advanceRun(); setStep(0); blocked = false; }, 1700);
           return s;
         }
         if (s >= 5) { advanceRun(); return 0; }
@@ -85,7 +86,7 @@ function useGateFlow(enabled) {
       });
     };
     const id = setInterval(() => { if (!blocked) tick(); }, 1150);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); if (timeoutId !== null) clearTimeout(timeoutId); };
   }, [run, enabled, idle, flowList]);
 
   const cur = idle ? null : flowList[run % flowList.length];
