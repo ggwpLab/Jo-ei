@@ -28,18 +28,6 @@ function buildFlow() {
   });
 }
 
-// scripted procession of packages through the gates
-const FLOW = [
-  { pkg: "requests", eco: "pypi", block: null },
-  { pkg: "log4j-core", eco: "maven", block: 2 },   // blocked at CVE
-  { pkg: "lodash", eco: "npm", block: null },
-  { pkg: "event-stream", eco: "npm", block: 3 },    // blocked at Malware
-  { pkg: "numpy", eco: "pypi", block: null },
-  { pkg: "freshtelemetry", eco: "npm", block: 1 },  // blocked at Supply Chain (423)
-  { pkg: "cryptography", eco: "pypi", block: 2 },    // CVE
-  { pkg: "axios", eco: "npm", block: null },
-];
-
 // drives the left→right token + per-gate glow, fed by real request history
 function useGateFlow(enabled) {
   const [flowList, setFlowList] = useState(buildFlow);
@@ -271,4 +259,4 @@ function GateHero({ treatment, setTreatment }) {
   );
 }
 
-Object.assign(window, { GateHero, useGateFlow, GATE_ORDER, FLOW });
+Object.assign(window, { GateHero, useGateFlow, GATE_ORDER });
