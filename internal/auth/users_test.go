@@ -62,6 +62,9 @@ func TestNewUsersValidationErrors(t *testing.T) {
 
 	_, err = auth.NewUsers(nil, "no-colon-entry")
 	require.Error(t, err, "env entry without ':'")
+
+	_, err = auth.NewUsers(nil, "admin:")
+	require.Error(t, err, "env entry with empty hash")
 }
 
 func TestVerifyUnknownUser(t *testing.T) {

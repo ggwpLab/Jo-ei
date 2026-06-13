@@ -87,7 +87,8 @@ func (u *Users) Locked() bool { return len(u.byName) == 0 }
 
 // Verify reports whether username/password match a configured user. For an
 // unknown username it still performs a bcrypt comparison against a dummy hash
-// so timing does not reveal which usernames exist.
+// so timing does not reveal which usernames exist. It is safe to call on a
+// locked (empty) set — it simply returns false.
 func (u *Users) Verify(username, password string) bool {
 	h, ok := u.byName[username]
 	if !ok {
