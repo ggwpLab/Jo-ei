@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
@@ -186,9 +187,16 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// other path (registry prefixes, /health) falls through to the proxy mux
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
+	authUsers, err := auth.NewUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"))
+	if err != nil {
+		return err
+	}
+	if authUsers.Locked() {
+		logger.Warn().Msg("console auth not configured — /console/ and /api/ are disabled (HTTP 503) until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+	}
 	root := http.NewServeMux()
-	root.Handle("/console/", web.ConsoleHandler())
-	root.Handle("/api/", console.NewHandler(console.Config{
+	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
+	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
 		Store:         store,
 		Broadcaster:   broadcaster,
 		Policy:        policyRuntime,
@@ -197,7 +205,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Registries:    registryInfo(cfg),
 		Scanners:      scannerInfo(cfg, profile),
 		Logger:        logger,
-	}))
+	})))
 	root.Handle("/", mux)
 
 	logger.Info().
@@ -278,6 +286,15 @@ func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool
 
 func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
 	return a.c.Invalidate(ref)
+}
+
+// toAuthUsers converts the config credential list into auth.User values.
+func toAuthUsers(in []config.AuthUser) []auth.User {
+	out := make([]auth.User, len(in))
+	for i, u := range in {
+		out[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
+	}
+	return out
 }
 
 // registryInfo flattens the registry config for GET /api/registries.
