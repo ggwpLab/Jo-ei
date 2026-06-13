@@ -45,6 +45,8 @@ func runHashpw(cmd *cobra.Command, _ []string) error {
 		// bcrypt rejects passwords longer than 72 bytes.
 		return fmt.Errorf("hashing password: %w", err)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), string(hash))
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), string(hash)); err != nil {
+		return fmt.Errorf("writing hash: %w", err)
+	}
 	return nil
 }
