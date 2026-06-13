@@ -25,9 +25,9 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
-// authConsoleStack mirrors cmd/jo-ei wiring with auth.Middleware in front of
-// /console/ and /api/. users==nil yields the locked (fail-closed) state. The
-// console handler logs into logBuf so attribution can be asserted.
+// authConsoleStack mirrors cmd/jo-ei wiring with auth.Middleware wrapping the
+// /api/ handler. users==nil yields the locked (fail-closed) state. The console
+// handler logs into logBuf so attribution can be asserted.
 func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users, logBuf *bytes.Buffer) *httptest.Server {
 	t.Helper()
 
@@ -87,7 +87,8 @@ func TestConsoleAuth_RequiresCredentials(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("WWW-Authenticate"), "Basic realm=")
 
 	// Wrong password -> 401.
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "wrong")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -95,7 +96,8 @@ func TestConsoleAuth_RequiresCredentials(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 
 	// Correct credentials -> 200.
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "s3cret")
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -136,7 +138,8 @@ func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
 	srv := authConsoleStack(t, upstream, testUsers(t), &logBuf)
 
 	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", strings.NewReader(body))
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "s3cret")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
