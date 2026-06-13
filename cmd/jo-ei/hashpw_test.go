@@ -31,5 +31,17 @@ func TestHashpwEmptyPasswordErrors(t *testing.T) {
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 
-	assert.Error(t, cmd.Execute())
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "empty password")
+}
+
+func TestHashpwNoTrailingNewline(t *testing.T) {
+	cmd := newHashpwCmd()
+	cmd.SetIn(strings.NewReader("mypassword")) // no newline
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	require.NoError(t, cmd.Execute())
+	assert.NoError(t, bcrypt.CompareHashAndPassword(
+		[]byte(strings.TrimSpace(out.String())), []byte("mypassword")))
 }
