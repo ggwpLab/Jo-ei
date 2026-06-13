@@ -38,8 +38,17 @@ from cache without contacting the upstream registry.
 
 ```bash
 git clone <repo-url> && cd Jo-ei
+```
+
+**Create a console user** (the console is fail-closed until you do):
+
+```bash
+# bcrypt-hash a password, then start the proxy with the credential in the env
+export JOEI_CONSOLE_AUTH_USERS="admin:$(printf '%s' 'change-me' | jo-ei hashpw)"
 docker-compose up -d
 ```
+
+Then open the console and log in as `admin`.
 
 The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
 malware scanning is active when the selected policy profile sets `malware_block: true`.
@@ -127,10 +136,45 @@ Policy edits made through the console are **runtime-only**: they apply
 immediately without restart, but the YAML config wins again after a restart.
 Event history and counters are in-memory and reset on restart.
 
-> ⚠️ **Known risk — no authentication.** The console and the `/api/`
-> endpoints (including `PUT /api/policy`) are open to anyone who can reach
-> the proxy port. Run Jōei on a trusted network or behind an authenticating
-> reverse proxy. Console/API authentication is planned for a later phase.
+### Console authentication
+
+The console and `/api/` require HTTP Basic authentication. Configure one or more
+operator accounts; the proxy data path (`/pypi/`, `/npm/`, …) and `/health`
+stay open.
+
+**Fail-closed:** with no users configured, `/console/` and `/api/` return
+**HTTP 503** until you add at least one user. The proxy keeps serving.
+
+Generate a bcrypt hash:
+
+```bash
+printf '%s' 'choose-a-strong-password' | jo-ei hashpw
+# -> $2a$10$... (copy this)
+```
+
+Configure users in `config.yaml`:
+
+```yaml
+console:
+  auth:
+    users:
+      - username: admin
+        password_hash: "$2a$10$...."
+```
+
+Or inject them via the environment (preferred for secrets — keeps hashes out of
+committed config). Entries are `username:hash`, separated by `;`:
+
+```bash
+export JOEI_CONSOLE_AUTH_USERS='admin:$2a$10$...;alice:$2a$10$...'
+```
+
+Env entries override file entries with the same username.
+
+> **TLS:** Jōei serves plain HTTP. Basic credentials are only as private as the
+> transport — for any non-loopback or public deployment, terminate TLS at a
+> reverse proxy (nginx, Traefik, Caddy) in front of Jōei. In-binary TLS is not
+> provided.
 
 ## How it Works
 

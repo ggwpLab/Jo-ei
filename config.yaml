@@ -81,3 +81,13 @@ logging:
   level: "info"
   format: "json"
   output: "stdout"
+
+# Admin console / API authentication (HTTP Basic).
+# Without at least one user, /console/ and /api/ return HTTP 503 (fail-closed).
+# Generate a hash with:  printf '%s' 'your-password' | jo-ei hashpw
+# Prefer the JOEI_CONSOLE_AUTH_USERS env var so hashes stay out of this file.
+# console:
+#   auth:
+#     users:
+#       - username: admin
+#         password_hash: "$2a$10$REPLACE_WITH_A_REAL_BCRYPT_HASH"
