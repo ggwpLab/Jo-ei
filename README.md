@@ -43,8 +43,9 @@ git clone <repo-url> && cd Jo-ei
 **Create a console user** (the console is fail-closed until you do):
 
 ```bash
-# bcrypt-hash a password, then start the proxy with the credential in the env
-export JOEI_CONSOLE_AUTH_USERS="admin:$(printf '%s' 'change-me' | jo-ei hashpw)"
+# bcrypt-hash a password via the container image, then start the proxy
+HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
+export JOEI_CONSOLE_AUTH_USERS="admin:$HASH"
 docker-compose up -d
 ```
 
@@ -151,6 +152,8 @@ Generate a bcrypt hash:
 printf '%s' 'choose-a-strong-password' | jo-ei hashpw
 # -> $2a$10$... (copy this)
 ```
+
+(Docker users: `printf '%s' 'choose-a-strong-password' | docker-compose run --rm -T jo-ei hashpw`)
 
 Configure users in `config.yaml`:
 
