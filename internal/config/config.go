@@ -16,6 +16,7 @@ type Config struct {
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
 	Logging     LoggingConfig     `mapstructure:"logging"`
+	Console     ConsoleConfig     `mapstructure:"console"`
 }
 
 // Validate checks cross-field invariants after loading.
@@ -52,6 +53,24 @@ func (c *Config) Validate() error {
 
 type ServerConfig struct {
 	Listen string `mapstructure:"listen"`
+}
+
+// ConsoleConfig holds admin-console settings.
+type ConsoleConfig struct {
+	Auth AuthConfig `mapstructure:"auth"`
+}
+
+// AuthConfig holds the console/API Basic-auth credential list. An empty Users
+// list means authentication is unconfigured; the server then serves the
+// console and API as 503 (fail-closed).
+type AuthConfig struct {
+	Users []AuthUser `mapstructure:"users"`
+}
+
+// AuthUser is one console credential: a username and a bcrypt password hash.
+type AuthUser struct {
+	Username     string `mapstructure:"username"`
+	PasswordHash string `mapstructure:"password_hash"`
 }
 
 type RegistriesConfig struct {
