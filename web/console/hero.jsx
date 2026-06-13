@@ -40,45 +40,71 @@ const FLOW = [
   { pkg: "axios", eco: "npm", block: null },
 ];
 
-// drives the left→right token + per-gate glow
+// drives the left→right token + per-gate glow, fed by real request history
 function useGateFlow(enabled) {
+  const [flowList, setFlowList] = useState(buildFlow);
   const [run, setRun] = useState(0);
   const [step, setStep] = useState(0); // 0 entering, 1..4 at gate, 5 exited
-  const cur = FLOW[run % FLOW.length];
+
+  const idle = flowList.length === 0;
+
+  // While idle (no history yet) the loop never runs, so it can't re-snapshot on
+  // its own. Listen for fresh data and rebuild once traffic appears so the
+  // animation comes to life. When already running, the loop boundary refreshes.
+  useEffect(() => {
+    const onData = () => setFlowList((prev) => (prev.length === 0 ? buildFlow() : prev));
+    window.addEventListener("joei:data", onData);
+    window.addEventListener("joei:event", onData);
+    return () => {
+      window.removeEventListener("joei:data", onData);
+      window.removeEventListener("joei:event", onData);
+    };
+  }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || idle) return;
     let blocked = false;
+    // Advance to the next package; at the end of the list re-snapshot the live
+    // history and restart the loop ("new requests picked up on the next cycle").
+    const advanceRun = () => setRun((r) => {
+      const next = r + 1;
+      if (next >= flowList.length) { setFlowList(buildFlow()); return 0; }
+      return next;
+    });
     const tick = () => {
       setStep((s) => {
-        const f = FLOW[run % FLOW.length];
+        const f = flowList[run % flowList.length];
         // if just arrived at a block gate, hold then advance run
         if (f.block !== null && s === f.block + 1) {
           blocked = true;
-          setTimeout(() => { setRun((r) => r + 1); setStep(0); blocked = false; }, 1700);
+          setTimeout(() => { advanceRun(); setStep(0); blocked = false; }, 1700);
           return s;
         }
-        if (s >= 5) { setRun((r) => r + 1); return 0; }
+        if (s >= 5) { advanceRun(); return 0; }
         return s + 1;
       });
     };
     const id = setInterval(() => { if (!blocked) tick(); }, 1150);
     return () => clearInterval(id);
-  }, [run, enabled]);
+  }, [run, enabled, idle, flowList]);
+
+  const cur = idle ? null : flowList[run % flowList.length];
 
   // token horizontal position (%)
   const leftPct = [2, 12.5, 37.5, 62.5, 87.5, 102][Math.min(step, 5)];
   const atGate = step >= 1 && step <= 4 ? step - 1 : -1;
-  const blockedHere = cur.block !== null && atGate === cur.block;
+  const blockedHere = !idle && cur.block !== null && atGate === cur.block;
   const tokenState = blockedHere ? "rejected" : step >= 5 ? "purified" : "";
 
-  // per-gate glow: pass while token currently sits at it (not blocked), block if stuck
+  // per-gate glow: pass while token currently sits at it (not blocked), block if
+  // stuck. All gates rest while idle.
   const glow = GATE_ORDER.map((_, i) => {
+    if (idle) return "idle";
     if (atGate === i) return blockedHere ? "block" : "pass";
     return "idle";
   });
 
-  return { cur, step, leftPct, atGate, tokenState, glow };
+  return { cur, idle, step, leftPct, atGate, tokenState, glow };
 }
 
 /* ---------- Treatment 1: PROCESSION ---------- */
@@ -108,10 +134,12 @@ function Procession({ flow, stats }) {
           );
         })}
       </div>
-      {/* traveling package token */}
-      <div className={`token ${flow.tokenState}`} style={{ left: flow.leftPct + "%", top: "78px" }}>
-        {JOEI.ECO[flow.cur.eco].label}
-      </div>
+      {/* traveling package token — hidden until there is real traffic */}
+      {!flow.idle && (
+        <div className={`token ${flow.tokenState}`} style={{ left: flow.leftPct + "%", top: "78px" }}>
+          {JOEI.ECO[flow.cur.eco].label}
+        </div>
+      )}
     </div>
   );
 }
@@ -205,7 +233,9 @@ function GateHero({ treatment, setTreatment }) {
   const flow = useGateFlow(enabled);
   const stats = JOEI.gateStats;
 
-  const stateLabel = flow.tokenState === "rejected"
+  const stateLabel = flow.idle
+    ? "Awaiting traffic — no requests yet"
+    : flow.tokenState === "rejected"
     ? `✕ ${flow.cur.pkg} rejected at ${stats[GATE_ORDER[flow.cur.block]].label}`
     : flow.tokenState === "purified"
     ? `✓ ${flow.cur.pkg} purified — served`
