@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/textproto"
 	"strings"
@@ -45,8 +44,9 @@ func (s *ClamAVScanner) Probe(ctx context.Context) error {
 	if _, err := conn.Write([]byte("zPING\x00")); err != nil {
 		return fmt.Errorf("sending PING: %w", err)
 	}
-	resp, err := io.ReadAll(conn)
-	if err != nil {
+	r := bufio.NewReader(conn)
+	resp, err := r.ReadBytes(0x00) // clamd terminates the reply with NUL
+	if err != nil && len(resp) == 0 {
 		return fmt.Errorf("reading clamd ping reply: %w", err)
 	}
 	if !strings.Contains(string(resp), "PONG") {
@@ -67,6 +67,8 @@ func (s *ICAPScanner) Probe(ctx context.Context) error {
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return fmt.Errorf("sending OPTIONS: %w", err)
 	}
+	// A fresh connection is opened per probe and closed on return, so reading
+	// only the status line (not the OPTIONS response headers) is sufficient.
 	tp := textproto.NewReader(bufio.NewReader(conn))
 	statusLine, err := tp.ReadLine()
 	if err != nil {

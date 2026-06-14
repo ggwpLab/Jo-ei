@@ -30,7 +30,9 @@ func newMockClamdPing(t *testing.T, response string) string {
 				defer c.Close()
 				r := bufio.NewReader(c)
 				_, _ = r.ReadBytes(0x00) // zPING\x00
-				c.Write([]byte(response))
+				if _, err := c.Write([]byte(response)); err != nil {
+					t.Logf("mock write: %v", err)
+				}
 			}(conn)
 		}
 	}()
@@ -59,7 +61,9 @@ func newMockICAPOptions(t *testing.T, response string) string {
 						break
 					}
 				}
-				c.Write([]byte(response))
+				if _, err := c.Write([]byte(response)); err != nil {
+					t.Logf("mock write: %v", err)
+				}
 			}(conn)
 		}
 	}()
@@ -109,3 +113,10 @@ func TestICAPProbe_ConnRefused(t *testing.T) {
 // Compile-time check that both socket scanners satisfy Prober.
 var _ scanner.Prober = (*scanner.ClamAVScanner)(nil)
 var _ scanner.Prober = (*scanner.ICAPScanner)(nil)
+
+func TestICAPProbe_MalformedStatus(t *testing.T) {
+	addr := newMockICAPOptions(t, "garbage\r\n\r\n")
+	sc, err := scanner.NewICAPScanner(addr, "srv", 2*time.Second)
+	require.NoError(t, err)
+	assert.Error(t, sc.Probe(context.Background()))
+}
