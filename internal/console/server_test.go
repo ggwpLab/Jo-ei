@@ -373,3 +373,27 @@ func TestEventsSSE(t *testing.T) {
 	assert.True(t, strings.HasPrefix(line, "data: "), "got %q", line)
 	assert.Contains(t, line, `"request_id":"req_sse"`)
 }
+
+func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := zerolog.New(&logBuf)
+
+	rt := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{}, config.PolicyProfile{}, nil,
+	)
+	h := console.NewHandler(console.Config{
+		Store: telemetry.NewStore(8), Broadcaster: telemetry.NewBroadcaster(),
+		Policy: rt, Logger: logger,
+	})
+
+	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	// No authenticating middleware in front, so the log line must not carry a
+	// "user" field (and must not panic building it).
+	assert.NotContains(t, logBuf.String(), `"user"`)
+}

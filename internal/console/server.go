@@ -1,6 +1,7 @@
 // Package console serves the admin console HTTP API over live proxy state:
 // telemetry from internal/telemetry, the runtime policy, registry config and
-// cache stats. No authentication this phase — documented as a known risk.
+// cache stats. Authentication is enforced by auth.Middleware in cmd/jo-ei,
+// which mounts this handler behind HTTP Basic auth at /api/.
 package console
 
 import (
@@ -14,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
@@ -237,7 +239,11 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
 		return
 	}
-	s.cfg.Logger.Info().Interface("policy", s.cfg.Policy.Current()).Msg("runtime policy updated via console")
+	logEvent := s.cfg.Logger.Info().Interface("policy", s.cfg.Policy.Current())
+	if user, ok := auth.UserFromContext(r.Context()); ok && user != "" {
+		logEvent = logEvent.Str("user", user)
+	}
+	logEvent.Msg("runtime policy updated via console")
 	s.writePolicy(w, http.StatusOK)
 }
 
