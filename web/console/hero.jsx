@@ -207,7 +207,7 @@ function ScannerStrip() {
           ? <span className="muted" style={{ fontSize: 12 }}>no scanners configured</span>
           : JOEI.scanners.map((s) => (
               <span className={`health ${s.status}`} key={s.name + s.detail} title={s.detail}>
-                <i className="hdot"></i>{s.name}
+                <i className="hdot"></i>{s.name}{s.latency ? ` · ${s.latency}` : ""}
               </span>
             ))}
       </div>
