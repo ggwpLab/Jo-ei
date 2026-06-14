@@ -112,6 +112,23 @@ func TestMonitor_CloseStopsProbing(t *testing.T) {
 	assert.Equal(t, after, calls.Load(), "probing must stop after Close")
 }
 
+func TestMonitor_AddAfterStartPanics(t *testing.T) {
+	m := NewMonitor(time.Minute, time.Second)
+	m.Start()
+	defer m.Close()
+	assert.Panics(t, func() {
+		m.AddDisabled("late", "x")
+	})
+}
+
+func TestMonitor_DoubleStartIsSafe(t *testing.T) {
+	m := NewMonitor(time.Minute, time.Second)
+	m.AddActive("x", "a", true, func(context.Context) error { return nil })
+	m.Start()
+	m.Start() // must not spawn a second goroutine or panic
+	assert.NoError(t, m.Close())
+}
+
 var errFail = errTest("probe failed")
 
 type errTest string

@@ -6,6 +6,7 @@ package health
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -97,6 +98,8 @@ type Monitor struct {
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+	startOnce sync.Once
+	started   atomic.Bool
 }
 
 // NewMonitor returns a monitor that probes every interval and flags latencies
@@ -112,8 +115,15 @@ func NewMonitor(interval, slow time.Duration) *Monitor {
 	return &Monitor{interval: interval, slow: slow, stop: make(chan struct{})}
 }
 
+func (m *Monitor) assertNotStarted() {
+	if m.started.Load() {
+		panic("health.Monitor: Add* called after Start")
+	}
+}
+
 // AddActive registers a socket scanner probed on the background timer.
 func (m *Monitor) AddActive(name, detail string, enabled bool, probe Probe) {
+	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
 		meta:  ScannerHealth{Name: name, Detail: detail, Enabled: enabled},
 		kind:  kindActive,
@@ -123,6 +133,7 @@ func (m *Monitor) AddActive(name, detail string, enabled bool, probe Probe) {
 
 // AddPassive registers an engine that reports its own last outcome.
 func (m *Monitor) AddPassive(name, detail string, enabled bool, report Reporter) {
+	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
 		meta:   ScannerHealth{Name: name, Detail: detail, Enabled: enabled},
 		kind:   kindPassive,
@@ -132,16 +143,21 @@ func (m *Monitor) AddPassive(name, detail string, enabled bool, report Reporter)
 
 // AddDisabled registers a configured-but-unattached engine (always reported off).
 func (m *Monitor) AddDisabled(name, detail string) {
+	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
 		meta: ScannerHealth{Name: name, Detail: detail, Enabled: false},
 		kind: kindDisabled,
 	})
 }
 
-// Start launches the background probe loop. Call Add* before Start.
+// Start launches the background probe loop. Safe to call once; extra calls are
+// no-ops. Call all Add* methods before Start.
 func (m *Monitor) Start() {
-	m.wg.Add(1)
-	go m.loop()
+	m.startOnce.Do(func() {
+		m.started.Store(true)
+		m.wg.Add(1)
+		go m.loop()
+	})
 }
 
 func (m *Monitor) loop() {
