@@ -2,14 +2,17 @@ package telemetry_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
@@ -175,4 +178,52 @@ func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 	assert.Equal(t, today, daily[0].Day)
 	assert.Equal(t, uint64(1), daily[0].Requests)
 	assert.Equal(t, uint64(1), daily[0].Errors)
+}
+
+func TestPersistentStore_SeedsFromRepoAndPersists(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
+	require.NoError(t, err)
+
+	s1, err := telemetry.NewPersistentStore(100, repo, zerolog.Nop())
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, Reason: "x",
+		Ecosystem: "npm", Package: "p", Version: "1", BlockUntil: now.Add(time.Hour)})
+	require.NoError(t, s1.Close())
+
+	s2, err := telemetry.NewPersistentStore(100, repo, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+
+	snap := s2.Snapshot()
+	assert.Equal(t, uint64(2), snap.Requests)
+	assert.Equal(t, uint64(1), snap.CacheHits)
+	assert.Equal(t, uint64(1), snap.Blocked)
+
+	require.Len(t, s2.Recent(0), 2)
+
+	q := s2.Quarantine(now)
+	require.Len(t, q, 1)
+	assert.Equal(t, "p", q[0].Package)
+
+	daily, err := s2.DailyMetrics(0)
+	require.NoError(t, err)
+	require.Len(t, daily, 1)
+	assert.Equal(t, uint64(2), daily[0].Requests)
+}
+
+func TestPersistentStore_CloseIdempotent(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
+	require.NoError(t, err)
+	s, err := telemetry.NewPersistentStore(10, repo, zerolog.Nop())
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	require.NoError(t, s.Close()) // no-op
 }

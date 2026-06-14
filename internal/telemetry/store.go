@@ -1,12 +1,16 @@
 // Package telemetry collects per-request events from the proxy handlers for
 // the admin console: an in-memory ring buffer plus aggregate counters.
-// History is process-lifetime only and is lost on restart by design.
+// When a Repo is provided via NewPersistentStore, history is seeded from and
+// persisted to the backing store across restarts.
 package telemetry
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
@@ -145,6 +149,35 @@ func (a *aggregate) dailyMetric(day string) DailyMetric {
 	}
 }
 
+func gatesToPtr(src map[string]GateCounts) map[string]*GateCounts {
+	out := map[string]*GateCounts{
+		proxy.GateCache: {}, proxy.GateSupply: {}, proxy.GateCVE: {}, proxy.GateMalware: {},
+	}
+	for k, v := range src {
+		vv := v
+		out[k] = &vv
+	}
+	return out
+}
+
+func aggregateFromSnapshot(s Snapshot) *aggregate {
+	return &aggregate{
+		requests: s.Requests, cacheHits: s.CacheHits, blocked: s.Blocked, errors: s.Errors,
+		supplyBlocked: s.SupplyBlocked, cveBlocked: s.CVEBlocked,
+		malwareBlocked: s.MalwareBlocked, denylisted: s.Denylisted,
+		gates: gatesToPtr(s.Gates),
+	}
+}
+
+func aggregateFromDaily(d DailyMetric) *aggregate {
+	return &aggregate{
+		requests: d.Requests, cacheHits: d.CacheHits, blocked: d.Blocked, errors: d.Errors,
+		supplyBlocked: d.SupplyBlocked, cveBlocked: d.CVEBlocked,
+		malwareBlocked: d.MalwareBlocked, denylisted: d.Denylisted,
+		gates: gatesToPtr(d.Gates),
+	}
+}
+
 // dayKey is the UTC calendar-day bucket for an event. A zero event time falls
 // back to the current time so malformed events still bucket somewhere.
 func dayKey(ev proxy.Event) string {
@@ -166,6 +199,15 @@ type Store struct {
 
 	lifetime *aggregate
 	daily    map[string]*aggregate // key: UTC YYYY-MM-DD
+
+	// Persistence (nil repo ⇒ in-memory only).
+	repo       Repo
+	logger     zerolog.Logger
+	eventCh    chan proxy.Event
+	stop       chan struct{}
+	wg         sync.WaitGroup
+	closeOnce  sync.Once
+	flushEvery time.Duration
 }
 
 // NewStore creates a Store holding the last capacity events.
@@ -178,6 +220,52 @@ func NewStore(capacity int) *Store {
 		started:  time.Now(),
 		lifetime: newAggregate(),
 		daily:    map[string]*aggregate{},
+	}
+}
+
+const (
+	persistFlushInterval = 10 * time.Second
+	persistEventBuffer   = 1024
+)
+
+// NewPersistentStore creates a Store backed by repo: it seeds in-memory state
+// from repo.LoadState, then runs a background writer that batches event inserts
+// and periodically flushes counters + daily rows. Close performs a final flush.
+func NewPersistentStore(capacity int, repo Repo, logger zerolog.Logger) (*Store, error) {
+	s := NewStore(capacity)
+	s.repo = repo
+	s.logger = logger
+	s.eventCh = make(chan proxy.Event, persistEventBuffer)
+	s.stop = make(chan struct{})
+	s.flushEvery = persistFlushInterval
+
+	state, err := repo.LoadState(capacity)
+	if err != nil {
+		return nil, fmt.Errorf("loading telemetry state: %w", err)
+	}
+	s.seed(state)
+
+	s.wg.Add(1)
+	go s.writer()
+	return s, nil
+}
+
+// seed loads persisted state into the in-memory model without re-counting.
+func (s *Store) seed(state State) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if state.HasLifetime {
+		s.lifetime = aggregateFromSnapshot(state.Lifetime)
+	}
+	if state.Today != nil {
+		s.daily[state.Today.Day] = aggregateFromDaily(*state.Today)
+	}
+	for _, ev := range state.Events { // oldest first
+		s.buf[s.next] = ev
+		s.next = (s.next + 1) % len(s.buf)
+		if s.count < len(s.buf) {
+			s.count++
+		}
 	}
 }
 
@@ -197,14 +285,11 @@ func pipelineIndex(gate string) int {
 // Record stores ev and updates counters. Safe for concurrent use.
 func (s *Store) Record(ev proxy.Event) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.buf[s.next] = ev
 	s.next = (s.next + 1) % len(s.buf)
 	if s.count < len(s.buf) {
 		s.count++
 	}
-
 	s.lifetime.record(ev)
 	day := dayKey(ev)
 	d := s.daily[day]
@@ -213,6 +298,14 @@ func (s *Store) Record(ev proxy.Event) {
 		s.daily[day] = d
 	}
 	d.record(ev)
+	s.mu.Unlock()
+
+	if s.repo != nil {
+		select {
+		case s.eventCh <- ev:
+		default: // queue full: event counted in memory; skip persistence
+		}
+	}
 }
 
 // Recent returns up to limit events, newest first. limit ≤ 0 means all.
@@ -237,9 +330,12 @@ func (s *Store) Snapshot() Snapshot {
 }
 
 // DailyMetrics returns per-UTC-day tallies, newest day first. days<=0 returns
-// all known days; otherwise the most recent days. The error return is reserved
-// for the persistence layer and is always nil for the in-memory implementation.
+// all known days; otherwise the most recent days. When a repo is present its
+// data is preferred (it includes rows flushed by previous processes).
 func (s *Store) DailyMetrics(days int) ([]DailyMetric, error) {
+	if s.repo != nil {
+		return s.repo.DailyMetrics(days)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]DailyMetric, 0, len(s.daily))
@@ -279,4 +375,84 @@ func (s *Store) Quarantine(now time.Time) []proxy.Event {
 		out = append(out, ev)
 	}
 	return out
+}
+
+// inMemoryDaily returns all in-memory day buckets as DailyMetric (for flushing).
+func (s *Store) inMemoryDaily() []DailyMetric {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]DailyMetric, 0, len(s.daily))
+	for day, a := range s.daily {
+		out = append(out, a.dailyMetric(day))
+	}
+	return out
+}
+
+// evictOldDaily drops in-memory day buckets other than today after they are
+// durably flushed, bounding memory for long-running processes.
+func (s *Store) evictOldDaily() {
+	today := time.Now().UTC().Format("2006-01-02")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for day := range s.daily {
+		if day != today {
+			delete(s.daily, day)
+		}
+	}
+}
+
+func (s *Store) flush(pending []proxy.Event) {
+	if len(pending) > 0 {
+		if err := s.repo.AppendEvents(pending); err != nil {
+			s.logger.Warn().Err(err).Msg("telemetry: persisting events")
+		}
+	}
+	if err := s.repo.Flush(s.Snapshot(), s.inMemoryDaily()); err != nil {
+		s.logger.Warn().Err(err).Msg("telemetry: flushing counters/daily")
+	}
+	if err := s.repo.Prune(); err != nil {
+		s.logger.Warn().Err(err).Msg("telemetry: pruning")
+	}
+	s.evictOldDaily()
+}
+
+func (s *Store) writer() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(s.flushEvery)
+	defer ticker.Stop()
+	var pending []proxy.Event
+	for {
+		select {
+		case <-s.stop:
+			for {
+				select {
+				case ev := <-s.eventCh:
+					pending = append(pending, ev)
+					continue
+				default:
+				}
+				break
+			}
+			s.flush(pending)
+			return
+		case ev := <-s.eventCh:
+			pending = append(pending, ev)
+		case <-ticker.C:
+			s.flush(pending)
+			pending = pending[:0]
+		}
+	}
+}
+
+// Close stops the writer after a final flush. Safe to call once; extra calls are
+// no-ops. In-memory-only stores (no repo) need no Close, but calling it is safe.
+func (s *Store) Close() error {
+	if s.repo == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		s.wg.Wait()
+	})
+	return nil
 }
