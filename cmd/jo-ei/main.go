@@ -22,6 +22,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 	"github.com/ggwpLab/Jo-ei/web"
@@ -121,7 +122,8 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// config wins again after restart).
 	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
 
-	store := telemetry.NewStore(eventHistorySize)
+	store := buildTelemetryStore(cfg, logger)
+	defer func() { _ = store.Close() }()
 	broadcaster := telemetry.NewBroadcaster()
 
 	shared := sharedDeps{
@@ -335,4 +337,34 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
 		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
 	}
+}
+
+// buildTelemetryStore returns a persistent telemetry Store when a database path
+// is configured, falling back to in-memory on any error (telemetry must never
+// block the proxy). The returned store's Close (final flush) is deferred by the
+// caller; Close is a no-op for the in-memory fallback.
+func buildTelemetryStore(cfg *config.Config, logger zerolog.Logger) *telemetry.Store {
+	if cfg.Database.Path == "" {
+		return telemetry.NewStore(eventHistorySize)
+	}
+	sdb, err := storage.Open(cfg.Database.Path)
+	if err != nil {
+		logger.Warn().Err(err).Str("path", cfg.Database.Path).
+			Msg("telemetry persistence disabled — could not open database; running in-memory")
+		return telemetry.NewStore(eventHistorySize)
+	}
+	repo, err := telemetry.NewSQLiteRepo(sdb, cfg.Database.EventRetentionDays, cfg.Database.DailyRetentionDays)
+	if err != nil {
+		logger.Warn().Err(err).Msg("telemetry persistence disabled — schema init failed; running in-memory")
+		_ = sdb.Close()
+		return telemetry.NewStore(eventHistorySize)
+	}
+	store, err := telemetry.NewPersistentStore(eventHistorySize, repo, logger)
+	if err != nil {
+		logger.Warn().Err(err).Msg("telemetry persistence disabled — state load failed; running in-memory")
+		_ = sdb.Close()
+		return telemetry.NewStore(eventHistorySize)
+	}
+	logger.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
+	return store
 }

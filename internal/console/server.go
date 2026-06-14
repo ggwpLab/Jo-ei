@@ -82,6 +82,7 @@ func NewHandler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/policy", s.getPolicy)
 	mux.HandleFunc("PUT /api/policy", s.putPolicy)
 	mux.HandleFunc("GET /api/registries", s.registries)
+	mux.HandleFunc("GET /api/metrics/daily", s.dailyMetrics)
 	return mux
 }
 
@@ -148,6 +149,33 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 		},
 		"scanners": scanners,
 	})
+}
+
+// dailyMetrics serves per-UTC-day telemetry tallies. ?days=N (default 30) limits
+// the window; the store reads from persistent storage when configured.
+func (s *server) dailyMetrics(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if q := r.URL.Query().Get("days"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n < 1 {
+			s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_days"})
+			return
+		}
+		if n > 365 {
+			n = 365
+		}
+		days = n
+	}
+	daily, err := s.cfg.Store.DailyMetrics(days)
+	if err != nil {
+		s.cfg.Logger.Error().Err(err).Msg("console: daily metrics")
+		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "metrics_unavailable"})
+		return
+	}
+	if daily == nil {
+		daily = []telemetry.DailyMetric{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"daily": daily})
 }
 
 func (s *server) requests(w http.ResponseWriter, r *http.Request) {

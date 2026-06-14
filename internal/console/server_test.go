@@ -383,6 +383,27 @@ func TestEventsSSE(t *testing.T) {
 	assert.Contains(t, line, `"request_id":"req_sse"`)
 }
 
+func TestDailyMetrics(t *testing.T) {
+	f := newFixture(t)
+	f.store.Record(proxy.Event{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC), Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+	f.store.Record(proxy.Event{Time: time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC), Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+
+	var body struct {
+		Daily []telemetry.DailyMetric `json:"daily"`
+	}
+	code := getJSON(t, f.srv.URL+"/api/metrics/daily?days=1", &body)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, body.Daily, 1)
+	assert.Equal(t, "2026-01-02", body.Daily[0].Day) // newest first, limited to 1
+}
+
+func TestDailyMetrics_InvalidDays(t *testing.T) {
+	f := newFixture(t)
+	var body map[string]any
+	code := getJSON(t, f.srv.URL+"/api/metrics/daily?days=abc", &body)
+	assert.Equal(t, http.StatusBadRequest, code)
+}
+
 func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := zerolog.New(&logBuf)

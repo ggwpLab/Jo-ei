@@ -18,6 +18,7 @@ type Config struct {
 	Logging     LoggingConfig     `mapstructure:"logging"`
 	Console     ConsoleConfig     `mapstructure:"console"`
 	Health      HealthConfig      `mapstructure:"health"`
+	Database    DatabaseConfig    `mapstructure:"database"`
 }
 
 // Validate checks cross-field invariants after loading.
@@ -54,6 +55,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Health.SlowThresholdMS < 0 {
 		return fmt.Errorf("health.slow_threshold_ms must not be negative")
+	}
+	if c.Database.EventRetentionDays < 0 {
+		return fmt.Errorf("database.event_retention_days must not be negative")
+	}
+	if c.Database.DailyRetentionDays < 0 {
+		return fmt.Errorf("database.daily_retention_days must not be negative")
 	}
 	return nil
 }
@@ -155,6 +162,15 @@ type ScannerConfig struct {
 type HealthConfig struct {
 	ProbeIntervalSeconds int `mapstructure:"probe_interval_seconds"`
 	SlowThresholdMS      int `mapstructure:"slow_threshold_ms"`
+}
+
+// DatabaseConfig configures the embedded SQLite persistence layer. An empty Path
+// disables persistence (telemetry runs in-memory only). Retention values ≤ 0 use
+// defaults (events 30 days, daily metrics 365 days).
+type DatabaseConfig struct {
+	Path               string `mapstructure:"path"`
+	EventRetentionDays int    `mapstructure:"event_retention_days"`
+	DailyRetentionDays int    `mapstructure:"daily_retention_days"`
 }
 
 type LoggingConfig struct {

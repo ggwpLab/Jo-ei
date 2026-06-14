@@ -193,6 +193,21 @@ Status is `ok` (reachable, fast), `warn` (reachable but slower than
 `unknown` (no data yet), or `off` (configured but not attached by the active
 profile).
 
+### Persistent telemetry
+
+By default the request feed, KPI counters and quarantine list live in memory and
+reset on restart. Set `database.path` to an embedded SQLite file to persist them
+across restarts, along with **per-calendar-day metrics** exposed at
+`GET /api/metrics/daily?days=N` (default 30, max 365, newest first).
+
+The proxy hot path never does synchronous database I/O: counters update in
+memory, events are written asynchronously, and aggregates flush every 10s and on
+graceful shutdown. If the database cannot be opened, Jōei logs a warning and runs
+in-memory only — persistence never blocks the proxy.
+
+Retention is configurable via `database.event_retention_days` (default 30) and
+`database.daily_retention_days` (default 365).
+
 ## How it Works
 
 Every package download goes through this pipeline:

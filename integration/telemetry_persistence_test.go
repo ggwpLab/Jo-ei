@@ -1,0 +1,65 @@
+//go:build integration
+
+package integration_test
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+)
+
+func TestTelemetryPersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jo-ei.db")
+	now := time.Now().UTC()
+
+	// First "process": record then close (final flush).
+	{
+		db, err := storage.Open(path)
+		require.NoError(t, err)
+		repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
+		require.NoError(t, err)
+		s, err := telemetry.NewPersistentStore(500, repo, zerolog.Nop())
+		require.NoError(t, err)
+		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
+			Reason: "package_younger_than_min_age", Ecosystem: "npm", Package: "p", Version: "1",
+			BlockUntil: now.Add(time.Hour)})
+		require.NoError(t, s.Close())
+		require.NoError(t, db.Close())
+	}
+
+	// Second "process": reopen the same file; state restored.
+	db, err := storage.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
+	require.NoError(t, err)
+	s, err := telemetry.NewPersistentStore(500, repo, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	snap := s.Snapshot()
+	assert.Equal(t, uint64(2), snap.Requests)
+	assert.Equal(t, uint64(1), snap.CacheHits)
+	assert.Equal(t, uint64(1), snap.Blocked)
+	assert.Equal(t, uint64(1), snap.SupplyBlocked)
+
+	require.Len(t, s.Recent(0), 2)
+
+	q := s.Quarantine(now)
+	require.Len(t, q, 1)
+	assert.Equal(t, "p", q[0].Package)
+
+	daily, err := s.DailyMetrics(0)
+	require.NoError(t, err)
+	require.Len(t, daily, 1)
+	assert.Equal(t, uint64(2), daily[0].Requests)
+}
