@@ -61,7 +61,7 @@ func newFixture(t *testing.T) *fixture {
 		Health: stubHealth{scanners: []health.ScannerHealth{
 			{Name: "osv.dev", Detail: "https://api.osv.dev", Enabled: true, Status: health.StatusOK, LatencyMS: 42},
 		}},
-		Logger:   zerolog.Nop(),
+		Logger: zerolog.Nop(),
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

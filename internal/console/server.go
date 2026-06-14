@@ -45,7 +45,7 @@ type Config struct {
 	Store         *telemetry.Store
 	Broadcaster   *telemetry.Broadcaster
 	Policy        *policy.Runtime
-	Cache         CacheStatsProvider    // optional; nil reports zero stats
+	Cache         CacheStatsProvider // optional; nil reports zero stats
 	CacheMaxBytes int64
 	Registries    []RegistryInfo
 	Health        ScannerHealthProvider // optional; nil reports no scanners
