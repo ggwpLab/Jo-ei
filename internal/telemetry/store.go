@@ -4,6 +4,7 @@
 package telemetry
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -30,6 +31,130 @@ type Snapshot struct {
 	Gates          map[string]GateCounts // keys: cache, supply, cve, malware
 }
 
+// DailyMetric is one UTC calendar day's tallies.
+type DailyMetric struct {
+	Day            string                `json:"day"` // UTC YYYY-MM-DD
+	Requests       uint64                `json:"requests"`
+	CacheHits      uint64                `json:"cache_hits"`
+	Blocked        uint64                `json:"blocked"`
+	Errors         uint64                `json:"errors"`
+	SupplyBlocked  uint64                `json:"supply_blocked"`
+	CVEBlocked     uint64                `json:"cve_blocked"`
+	MalwareBlocked uint64                `json:"malware_blocked"`
+	Denylisted     uint64                `json:"denylisted"`
+	Gates          map[string]GateCounts `json:"gates"`
+}
+
+// aggregate holds the counter tallies shared by lifetime totals and per-day
+// buckets. Not safe for concurrent use; callers hold Store.mu.
+type aggregate struct {
+	requests, cacheHits, blocked, errors                  uint64
+	supplyBlocked, cveBlocked, malwareBlocked, denylisted uint64
+	gates                                                 map[string]*GateCounts
+}
+
+func newAggregate() *aggregate {
+	return &aggregate{gates: map[string]*GateCounts{
+		proxy.GateCache:   {},
+		proxy.GateSupply:  {},
+		proxy.GateCVE:     {},
+		proxy.GateMalware: {},
+	}}
+}
+
+// record applies one event to the tallies (formerly inline in Store.Record).
+func (a *aggregate) record(ev proxy.Event) {
+	a.requests++
+	switch ev.Verdict {
+	case proxy.VerdictCache:
+		a.cacheHits++
+		a.gates[proxy.GateCache].Pass++
+	case proxy.VerdictPass:
+		idx := pipelineIndex(ev.Gate)
+		if idx < 0 {
+			idx = len(gatePipeline) - 1
+		}
+		for _, g := range gatePipeline[:idx+1] {
+			a.gates[g].Pass++
+		}
+	case proxy.VerdictBlock:
+		a.blocked++
+		if c, ok := a.gates[ev.Gate]; ok {
+			c.Block++
+		}
+		// Pass++ for pipeline gates cleared before the blocking gate.
+		// idx > 0 also correctly skips non-pipeline gates (cache → idx -1):
+		// a cache-gate block implies no pipeline gate was reached at all.
+		if idx := pipelineIndex(ev.Gate); idx > 0 {
+			for _, g := range gatePipeline[:idx] {
+				a.gates[g].Pass++
+			}
+		}
+		switch {
+		case ev.Reason == proxy.ReasonDenylisted:
+			a.denylisted++
+		case ev.Gate == proxy.GateSupply:
+			a.supplyBlocked++
+		case ev.Gate == proxy.GateCVE:
+			a.cveBlocked++
+		case ev.Gate == proxy.GateMalware:
+			a.malwareBlocked++
+		}
+	case proxy.VerdictError:
+		// Errors are infrastructure failures, not gate verdicts: they count
+		// toward Errors only and intentionally leave gate tallies untouched.
+		a.errors++
+	}
+}
+
+func gatesCopy(src map[string]*GateCounts) map[string]GateCounts {
+	out := make(map[string]GateCounts, len(src))
+	for k, v := range src {
+		out[k] = *v
+	}
+	return out
+}
+
+func (a *aggregate) snapshot(started time.Time) Snapshot {
+	return Snapshot{
+		StartedAt:      started,
+		Requests:       a.requests,
+		CacheHits:      a.cacheHits,
+		Blocked:        a.blocked,
+		Errors:         a.errors,
+		SupplyBlocked:  a.supplyBlocked,
+		CVEBlocked:     a.cveBlocked,
+		MalwareBlocked: a.malwareBlocked,
+		Denylisted:     a.denylisted,
+		Gates:          gatesCopy(a.gates),
+	}
+}
+
+func (a *aggregate) dailyMetric(day string) DailyMetric {
+	return DailyMetric{
+		Day:            day,
+		Requests:       a.requests,
+		CacheHits:      a.cacheHits,
+		Blocked:        a.blocked,
+		Errors:         a.errors,
+		SupplyBlocked:  a.supplyBlocked,
+		CVEBlocked:     a.cveBlocked,
+		MalwareBlocked: a.malwareBlocked,
+		Denylisted:     a.denylisted,
+		Gates:          gatesCopy(a.gates),
+	}
+}
+
+// dayKey is the UTC calendar-day bucket for an event. A zero event time falls
+// back to the current time so malformed events still bucket somewhere.
+func dayKey(ev proxy.Event) string {
+	t := ev.Time
+	if t.IsZero() {
+		t = time.Now()
+	}
+	return t.UTC().Format("2006-01-02")
+}
+
 // Store keeps the last N events in a ring buffer plus aggregate counters.
 // Record never returns an error and never blocks beyond the mutex.
 type Store struct {
@@ -39,9 +164,8 @@ type Store struct {
 	count   int // filled slots, ≤ len(buf)
 	started time.Time
 
-	requests, cacheHits, blocked, errors                  uint64
-	supplyBlocked, cveBlocked, malwareBlocked, denylisted uint64
-	gates                                                 map[string]*GateCounts
+	lifetime *aggregate
+	daily    map[string]*aggregate // key: UTC YYYY-MM-DD
 }
 
 // NewStore creates a Store holding the last capacity events.
@@ -50,14 +174,10 @@ func NewStore(capacity int) *Store {
 		capacity = 1
 	}
 	return &Store{
-		buf:     make([]proxy.Event, capacity),
-		started: time.Now(),
-		gates: map[string]*GateCounts{
-			proxy.GateCache:   {},
-			proxy.GateSupply:  {},
-			proxy.GateCVE:     {},
-			proxy.GateMalware: {},
-		},
+		buf:      make([]proxy.Event, capacity),
+		started:  time.Now(),
+		lifetime: newAggregate(),
+		daily:    map[string]*aggregate{},
 	}
 }
 
@@ -85,47 +205,14 @@ func (s *Store) Record(ev proxy.Event) {
 		s.count++
 	}
 
-	s.requests++
-	switch ev.Verdict {
-	case proxy.VerdictCache:
-		s.cacheHits++
-		s.gates[proxy.GateCache].Pass++
-	case proxy.VerdictPass:
-		idx := pipelineIndex(ev.Gate)
-		if idx < 0 {
-			idx = len(gatePipeline) - 1
-		}
-		for _, g := range gatePipeline[:idx+1] {
-			s.gates[g].Pass++
-		}
-	case proxy.VerdictBlock:
-		s.blocked++
-		if c, ok := s.gates[ev.Gate]; ok {
-			c.Block++
-		}
-		// Pass++ for pipeline gates cleared before the blocking gate.
-		// idx > 0 also correctly skips non-pipeline gates (cache → idx -1):
-		// a cache-gate block implies no pipeline gate was reached at all.
-		if idx := pipelineIndex(ev.Gate); idx > 0 {
-			for _, g := range gatePipeline[:idx] {
-				s.gates[g].Pass++
-			}
-		}
-		switch {
-		case ev.Reason == proxy.ReasonDenylisted:
-			s.denylisted++
-		case ev.Gate == proxy.GateSupply:
-			s.supplyBlocked++
-		case ev.Gate == proxy.GateCVE:
-			s.cveBlocked++
-		case ev.Gate == proxy.GateMalware:
-			s.malwareBlocked++
-		}
-	case proxy.VerdictError:
-		// Errors are infrastructure failures, not gate verdicts: they count
-		// toward Errors only and intentionally leave gate tallies untouched.
-		s.errors++
+	s.lifetime.record(ev)
+	day := dayKey(ev)
+	d := s.daily[day]
+	if d == nil {
+		d = newAggregate()
+		s.daily[day] = d
 	}
+	d.record(ev)
 }
 
 // Recent returns up to limit events, newest first. limit ≤ 0 means all.
@@ -146,22 +233,23 @@ func (s *Store) Recent(limit int) []proxy.Event {
 func (s *Store) Snapshot() Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	gates := make(map[string]GateCounts, len(s.gates))
-	for k, v := range s.gates {
-		gates[k] = *v
+	return s.lifetime.snapshot(s.started)
+}
+
+// DailyMetrics returns per-UTC-day tallies, newest day first. days<=0 returns
+// all known days; otherwise the most recent days.
+func (s *Store) DailyMetrics(days int) ([]DailyMetric, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]DailyMetric, 0, len(s.daily))
+	for day, a := range s.daily {
+		out = append(out, a.dailyMetric(day))
 	}
-	return Snapshot{
-		StartedAt:      s.started,
-		Requests:       s.requests,
-		CacheHits:      s.cacheHits,
-		Blocked:        s.blocked,
-		Errors:         s.errors,
-		SupplyBlocked:  s.supplyBlocked,
-		CVEBlocked:     s.cveBlocked,
-		MalwareBlocked: s.malwareBlocked,
-		Denylisted:     s.denylisted,
-		Gates:          gates,
+	sort.Slice(out, func(i, j int) bool { return out[i].Day > out[j].Day })
+	if days > 0 && len(out) > days {
+		out = out[:days]
 	}
+	return out, nil
 }
 
 // Quarantine derives the active supply-chain holds from the buffer: BLOCK

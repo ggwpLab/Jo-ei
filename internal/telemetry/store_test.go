@@ -140,3 +140,26 @@ func TestStoreConcurrent(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, uint64(1600), s.Snapshot().Requests)
 }
+
+func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
+	s := telemetry.NewStore(100)
+	day1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	s.Record(proxy.Event{Time: day1, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+	s.Record(proxy.Event{Time: day1, Verdict: proxy.VerdictPass, Gate: proxy.GateMalware})
+	s.Record(proxy.Event{Time: day2, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+
+	daily, err := s.DailyMetrics(0)
+	require.NoError(t, err)
+	require.Len(t, daily, 2)
+	assert.Equal(t, "2026-01-02", daily[0].Day) // newest first
+	assert.Equal(t, uint64(1), daily[0].Requests)
+	assert.Equal(t, "2026-01-01", daily[1].Day)
+	assert.Equal(t, uint64(2), daily[1].Requests)
+	assert.Equal(t, uint64(1), daily[1].CacheHits)
+
+	limited, err := s.DailyMetrics(1)
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+	assert.Equal(t, "2026-01-02", limited[0].Day)
+}
