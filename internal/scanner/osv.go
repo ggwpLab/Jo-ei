@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
@@ -62,6 +63,11 @@ type OSVScanner struct {
 
 	mu    sync.Mutex
 	cache map[string]*cveEntry
+
+	healthMu      sync.Mutex
+	healthLatency time.Duration
+	healthOK      bool
+	healthHasData bool
 
 	stop      chan struct{}
 	wg        sync.WaitGroup
@@ -132,7 +138,9 @@ func (s *OSVScanner) Scan(ctx context.Context, ref *proxy.PackageRef) (*proxy.Sc
 	}
 	s.mu.Unlock()
 
+	start := time.Now()
 	result, err := s.queryOSV(ctx, ref)
+	s.recordHealth(time.Since(start), err)
 	if err != nil {
 		return nil, err
 	}
@@ -237,4 +245,24 @@ func aliasesWithout(primaryID string, aliases []string, canonicalID string) []st
 		}
 	}
 	return out
+}
+
+// recordHealth stores the outcome of the most recent live OSV query for the
+// passive health probe. Cache hits do not call this, so health reflects the real
+// reachability of api.osv.dev.
+func (s *OSVScanner) recordHealth(latency time.Duration, err error) {
+	s.healthMu.Lock()
+	s.healthLatency = latency
+	s.healthOK = err == nil
+	s.healthHasData = true
+	s.healthMu.Unlock()
+}
+
+// Health reports the result of the last live query as a passive health sample.
+// Before any live query runs, HasData is false (status unknown). Cache hits do
+// not update it.
+func (s *OSVScanner) Health() health.Sample {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	return health.Sample{OK: s.healthOK, Latency: s.healthLatency, HasData: s.healthHasData}
 }

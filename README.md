@@ -38,8 +38,18 @@ from cache without contacting the upstream registry.
 
 ```bash
 git clone <repo-url> && cd Jo-ei
+```
+
+**Create a console user** (the console is fail-closed until you do):
+
+```bash
+# bcrypt-hash a password via the container image, then start the proxy
+HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
+export JOEI_CONSOLE_AUTH_USERS="admin:$HASH"
 docker-compose up -d
 ```
+
+Then open the console and log in as `admin`.
 
 The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
 malware scanning is active when the selected policy profile sets `malware_block: true`.
@@ -96,6 +106,92 @@ curl -s http://localhost:8080/health
 # Install a well-known package (should pass)
 pip install requests==2.31.0 --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```
+
+## Admin Console
+
+Jōei ships an embedded admin console — 浄衛 *The Purification Gate* — served at
+[`http://localhost:8080/console/`](http://localhost:8080/console/). It is a single-page
+app baked into the binary (no extra files at runtime), and renders the four-gate
+pipeline (Cache → 衛 Supply Chain → 浄 CVE → 浄 Malware) along with an overview dashboard,
+a live request feed, the min-age quarantine queue, a threat-detail drawer, a policy editor,
+and a registries & cache view.
+
+The console reads live proxy state via the JSON API described below. It loads React + Babel
+from a CDN, so the browser needs outbound internet access the first time it is opened.
+
+### Admin console & API
+
+The embedded console at `/console/` shows live proxy state and lets you edit
+the effective policy at runtime. It is backed by a JSON API under `/api/`:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/overview` | GET | KPIs, per-gate counters, cache stats, configured scanners (since process start) |
+| `/api/requests?limit=N` | GET | recent request events, newest first (in-memory ring, last 500) |
+| `/api/events` | GET | Server-Sent Events stream of new request events |
+| `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
+| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |
+| `/api/registries` | GET | configured registries and upstreams |
+
+Policy edits made through the console are **runtime-only**: they apply
+immediately without restart, but the YAML config wins again after a restart.
+Event history and counters are in-memory and reset on restart.
+
+### Console authentication
+
+The console and `/api/` require HTTP Basic authentication. Configure one or more
+operator accounts; the proxy data path (`/pypi/`, `/npm/`, …) and `/health`
+stay open.
+
+**Fail-closed:** with no users configured, `/console/` and `/api/` return
+**HTTP 503** until you add at least one user. The proxy keeps serving.
+
+Generate a bcrypt hash:
+
+```bash
+printf '%s' 'choose-a-strong-password' | jo-ei hashpw
+# -> $2a$10$... (copy this)
+```
+
+(Docker users: `printf '%s' 'choose-a-strong-password' | docker-compose run --rm -T jo-ei hashpw`)
+
+Configure users in `config.yaml`:
+
+```yaml
+console:
+  auth:
+    users:
+      - username: admin
+        password_hash: "$2a$10$...."
+```
+
+Or inject them via the environment (preferred for secrets — keeps hashes out of
+committed config). Entries are `username:hash`, separated by `;`:
+
+```bash
+export JOEI_CONSOLE_AUTH_USERS='admin:$2a$10$...;alice:$2a$10$...'
+```
+
+Env entries override file entries with the same username.
+
+> **TLS:** Jōei serves plain HTTP. Basic credentials are only as private as the
+> transport — for any non-loopback or public deployment, terminate TLS at a
+> reverse proxy (nginx, Traefik, Caddy) in front of Jōei. In-binary TLS is not
+> provided.
+
+### Scanner health
+
+The console overview shows live health for each scan engine:
+
+- **ClamAV / ICAP** are actively probed (clamd `PING`, ICAP `OPTIONS`) every
+  `health.probe_interval_seconds` (default 30s).
+- **osv.dev** health is derived passively from real scan traffic — no extra
+  requests are sent to the public API.
+
+Status is `ok` (reachable, fast), `warn` (reachable but slower than
+`health.slow_threshold_ms`, default 2000ms), `down` (last check failed),
+`unknown` (no data yet), or `off` (configured but not attached by the active
+profile).
 
 ## How it Works
 

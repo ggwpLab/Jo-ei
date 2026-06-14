@@ -16,6 +16,8 @@ type Config struct {
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
 	Logging     LoggingConfig     `mapstructure:"logging"`
+	Console     ConsoleConfig     `mapstructure:"console"`
+	Health      HealthConfig      `mapstructure:"health"`
 }
 
 // Validate checks cross-field invariants after loading.
@@ -47,11 +49,35 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("malware.scanners[%d]: icap scanner requires a service", i)
 		}
 	}
+	if c.Health.ProbeIntervalSeconds < 0 {
+		return fmt.Errorf("health.probe_interval_seconds must not be negative")
+	}
+	if c.Health.SlowThresholdMS < 0 {
+		return fmt.Errorf("health.slow_threshold_ms must not be negative")
+	}
 	return nil
 }
 
 type ServerConfig struct {
 	Listen string `mapstructure:"listen"`
+}
+
+// ConsoleConfig holds admin-console settings.
+type ConsoleConfig struct {
+	Auth AuthConfig `mapstructure:"auth"`
+}
+
+// AuthConfig holds the console/API Basic-auth credential list. An empty Users
+// list means authentication is unconfigured; the server then serves the
+// console and API as 503 (fail-closed).
+type AuthConfig struct {
+	Users []AuthUser `mapstructure:"users"`
+}
+
+// AuthUser is one console credential: a username and a bcrypt password hash.
+type AuthUser struct {
+	Username     string `mapstructure:"username"`
+	PasswordHash string `mapstructure:"password_hash"`
 }
 
 type RegistriesConfig struct {
@@ -122,6 +148,13 @@ type ScannerConfig struct {
 	Address        string `mapstructure:"address"`         // unix:///path | tcp:host:port
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 30
 	Service        string `mapstructure:"service"`         // ICAP service name (icap only)
+}
+
+// HealthConfig tunes the scanner health probes. Zero values use defaults
+// (30s probe interval, 2000ms slow threshold), applied at wiring time.
+type HealthConfig struct {
+	ProbeIntervalSeconds int `mapstructure:"probe_interval_seconds"`
+	SlowThresholdMS      int `mapstructure:"slow_threshold_ms"`
 }
 
 type LoggingConfig struct {

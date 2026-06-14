@@ -123,3 +123,11 @@ func TestFilter_BlockUntilIsPublishedAtPlusMinAge(t *testing.T) {
 	expected := publishedAt.Add(24 * time.Hour)
 	assert.WithinDuration(t, expected, result.BlockUntil, time.Second)
 }
+
+func TestAllowlistEntries(t *testing.T) {
+	a := supplychain.NewAllowlist([]string{"pypi/requests", " npm/lodash@4.17.21 "})
+	assert.Equal(t, []string{"npm/lodash@4.17.21", "pypi/requests"}, a.Entries())
+
+	var nilList *supplychain.Allowlist
+	assert.Nil(t, nilList.Entries())
+}

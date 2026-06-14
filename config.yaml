@@ -33,13 +33,20 @@ cve:
 malware:
   scanners:
     - type: clamav
-      address: "unix:///var/run/clamav/clamd.sock"
+      # clamav/clamav image listens on TCP 3310 by default; its unix socket
+      # lives at /tmp/clamd.sock inside its own container and is not shareable.
+      address: "tcp:clamav:3310"
       timeout_seconds: 30
     # Add a commercial engine over ICAP (Kaspersky, Dr.Web, …):
     # - type: icap
     #   address: "tcp:kaspersky-icap:1344"
     #   service: "avscan"
     #   timeout_seconds: 30
+
+# Scanner health probes (optional). Surfaced in the console overview.
+# health:
+#   probe_interval_seconds: 30   # how often socket scanners (clamd/ICAP) are probed
+#   slow_threshold_ms: 2000      # latency above which a scanner shows "warn"
 
 cache:
   backend: "local"
@@ -79,3 +86,13 @@ logging:
   level: "info"
   format: "json"
   output: "stdout"
+
+# Admin console / API authentication (HTTP Basic).
+# Without at least one user, /console/ and /api/ return HTTP 503 (fail-closed).
+# Generate a hash with:  printf '%s' 'your-password' | jo-ei hashpw
+# Prefer the JOEI_CONSOLE_AUTH_USERS env var so hashes stay out of this file.
+# console:
+#   auth:
+#     users:
+#       - username: admin
+#         password_hash: "$2a$10$REPLACE_WITH_A_REAL_BCRYPT_HASH"

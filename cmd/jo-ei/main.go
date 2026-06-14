@@ -13,16 +13,29 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/console"
+	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
+	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/web"
 )
 
 var cfgFile string
+
+// eventHistorySize is the telemetry ring-buffer capacity backing the console
+// request feed (process-lifetime, in-memory).
+const eventHistorySize = 500
+
+// defaultOSVBaseURL is used for both the live scanner and the console's
+// scanner listing when cve.base_url is unset.
+const defaultOSVBaseURL = "https://api.osv.dev"
 
 var rootCmd = &cobra.Command{
 	Use:   "jo-ei",
@@ -48,6 +61,7 @@ type sharedDeps struct {
 	cveScanner proxy.CVEScanner
 	policy     proxy.PolicyDecider
 	avScanner  proxy.AVScanner
+	recorder   proxy.Recorder
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
@@ -93,53 +107,96 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
 	}
 
-	var allowlist *supplychain.Allowlist
+	var fileAllow []string
 	if cfg.SupplyChain.AllowlistPath != "" {
-		allowlist, err = supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
+		allowlist, err := supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
 		if err != nil {
 			return err
 		}
+		fileAllow = allowlist.Entries()
 	}
 
+	// Runtime policy: engine + supply-chain filter behind an atomic swap so
+	// the console can apply edits without restart (runtime-only; the YAML
+	// config wins again after restart).
+	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
+
+	store := telemetry.NewStore(eventHistorySize)
+	broadcaster := telemetry.NewBroadcaster()
+
 	shared := sharedDeps{
-		filter: supplychain.NewFilter(cfg.SupplyChain, allowlist),
-		cache:  &cacheAdapter{c: artifactCache},
-		logger: logger,
+		filter:   policyRuntime,
+		cache:    &cacheAdapter{c: artifactCache},
+		logger:   logger,
+		recorder: &telemetry.Hub{Store: store, Broadcaster: broadcaster},
 	}
 
 	// CVE scanner + policy (optional).
+	var osvScanner *scanner.OSVScanner
 	if cfg.CVE.Enabled {
 		baseURL := cfg.CVE.BaseURL
 		if baseURL == "" {
-			baseURL = "https://api.osv.dev"
+			baseURL = defaultOSVBaseURL
 		}
 		ttl := time.Duration(cfg.CVE.CacheTTLMinutes) * time.Minute
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
+		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
 		defer func() { _ = osvScanner.Close() }()
 		shared.cveScanner = osvScanner
-		shared.policy = policy.NewEngine(cfg.CVE, profile)
+		shared.policy = policyRuntime
+	}
+
+	if !cfg.CVE.Enabled {
+		logger.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on and denylist have no effect (supply-chain mode/min-age/allowlist still apply)")
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
+	var avScanners []proxy.AVScanner
 	engineCount := 0
 	if profile.MalwareBlock && len(cfg.Malware.Scanners) > 0 {
-		scanners := make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
+		avScanners = make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
 		for _, sc := range cfg.Malware.Scanners {
 			av, err := scanner.New(sc)
 			if err != nil {
 				return err
 			}
-			scanners = append(scanners, av)
+			avScanners = append(avScanners, av)
 		}
-		shared.avScanner = scanner.NewMultiScanner(scanners...)
-		engineCount = len(scanners)
+		shared.avScanner = scanner.NewMultiScanner(avScanners...)
+		engineCount = len(avScanners)
 	} else if len(cfg.Malware.Scanners) > 0 {
 		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
 			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
 	}
+
+	// Scanner health monitor: active probes for socket engines, passive
+	// tracking for the remote osv.dev API.
+	interval := time.Duration(cfg.Health.ProbeIntervalSeconds) * time.Second
+	slow := time.Duration(cfg.Health.SlowThresholdMS) * time.Millisecond
+	if slow <= 0 {
+		slow = 2000 * time.Millisecond
+	}
+	healthMon := health.NewMonitor(interval, slow) // interval<=0 → 30s default
+	if cfg.CVE.Enabled && osvScanner != nil {
+		base := cfg.CVE.BaseURL
+		if base == "" {
+			base = defaultOSVBaseURL
+		}
+		healthMon.AddPassive("osv.dev", base, true, osvScanner.Health)
+	}
+	for i, sc := range cfg.Malware.Scanners {
+		if profile.MalwareBlock && i < len(avScanners) {
+			if pr, ok := avScanners[i].(scanner.Prober); ok {
+				healthMon.AddActive(sc.Type, sc.Address, true, pr.Probe)
+				continue
+			}
+		}
+		healthMon.AddDisabled(sc.Type, sc.Address)
+	}
+	healthMon.Start()
+	defer healthMon.Close() //nolint:errcheck
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
@@ -156,17 +213,44 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	mux := proxy.NewMux(handlers, logger)
 
+	// Wrap the proxy mux so the admin console is served at /console/ while every
+	// other path (registry prefixes, /health) falls through to the proxy mux
+	// untouched. Keeping the console in a parent mux leaves the proxy package
+	// and its routing free of UI concerns.
+	authUsers, err := auth.NewUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"))
+	if err != nil {
+		return err
+	}
+	if authUsers.Locked() {
+		logger.Warn().Msg("console auth not configured — /console/ and /api/ are disabled (HTTP 503) until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+	}
+	root := http.NewServeMux()
+	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
+	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
+		Store:         store,
+		Broadcaster:   broadcaster,
+		Policy:        policyRuntime,
+		Cache:         artifactCache,
+		CacheMaxBytes: int64(cfg.Cache.Local.MaxSizeGB) << 30,
+		Registries:    registryInfo(cfg),
+		Health:        healthMon,
+		Logger:        logger,
+	})))
+	root.Handle("/", mux)
+
 	logger.Info().
 		Str("listen", cfg.Server.Listen).
 		Int("registries", registryCount).
 		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
+		Str("console", "/console/").
+		Str("api", "/api/").
 		Msg("Jōei starting")
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
-		Handler:      mux,
+		Handler:      root,
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
@@ -206,6 +290,7 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 		CVEScanner: shared.cveScanner,
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,
+		Recorder:   shared.recorder,
 	})
 }
 
@@ -231,4 +316,23 @@ func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool
 
 func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
 	return a.c.Invalidate(ref)
+}
+
+// toAuthUsers converts the config credential list into auth.User values.
+func toAuthUsers(in []config.AuthUser) []auth.User {
+	out := make([]auth.User, len(in))
+	for i, u := range in {
+		out[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
+	}
+	return out
+}
+
+// registryInfo flattens the registry config for GET /api/registries.
+func registryInfo(cfg *config.Config) []console.RegistryInfo {
+	return []console.RegistryInfo{
+		{Ecosystem: "pypi", Enabled: cfg.Registries.PyPI.Enabled, Upstreams: cfg.Registries.PyPI.Upstreams},
+		{Ecosystem: "npm", Enabled: cfg.Registries.NPM.Enabled, Upstreams: cfg.Registries.NPM.Upstreams},
+		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
+		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
+	}
 }

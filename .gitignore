@@ -1,4 +1,5 @@
 bin/
-/jo-ei
 *.test
 *.db
+.claude/
+.vscode/

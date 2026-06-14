@@ -212,3 +212,61 @@ func TestOSVScanner_EcosystemMapping(t *testing.T) {
 		assert.Equal(t, c.want, capturedEcosystem, "ecosystem %q", c.ecosystem)
 	}
 }
+
+func TestOSVHealth_NoTrafficUnknown(t *testing.T) {
+	s := scanner.NewOSVScanner("https://api.osv.dev", time.Hour)
+	defer s.Close()
+	h := s.Health()
+	assert.False(t, h.HasData)
+}
+
+func TestOSVHealth_AfterSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"vulns":[]}`))
+	}))
+	defer srv.Close()
+	s := scanner.NewOSVScanner(srv.URL, time.Hour)
+	defer s.Close()
+	_, err := s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	require.NoError(t, err)
+	h := s.Health()
+	assert.True(t, h.HasData)
+	assert.True(t, h.OK)
+}
+
+func TestOSVHealth_AfterError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	s := scanner.NewOSVScanner(srv.URL, time.Hour)
+	defer s.Close()
+	_, _ = s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	h := s.Health()
+	assert.True(t, h.HasData)
+	assert.False(t, h.OK)
+}
+
+func TestOSVHealth_CacheHitDoesNotUpdate(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Write([]byte(`{"vulns":[]}`))
+	}))
+	defer srv.Close()
+	s := scanner.NewOSVScanner(srv.URL, time.Hour)
+	defer s.Close()
+
+	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
+	_, err := s.Scan(context.Background(), ref)
+	require.NoError(t, err)
+	first := s.Health()
+	require.True(t, first.HasData)
+
+	// Second Scan is a cache hit (same ref) — must not hit the network and must
+	// not change the recorded health sample.
+	_, err = s.Scan(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "second Scan should be served from cache")
+	assert.Equal(t, first, s.Health(), "cache hit must not update health")
+}
