@@ -108,7 +108,7 @@ func (r *sqliteRepo) AppendEvents(evs []proxy.Event) error {
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, ev := range evs {
 		blob, err := json.Marshal(ev)
 		if err != nil {
@@ -168,7 +168,7 @@ func (r *sqliteRepo) Flush(lifetime Snapshot, daily []DailyMetric) error {
 	if err != nil {
 		return err
 	}
-	defer dstmt.Close()
+	defer func() { _ = dstmt.Close() }()
 	for _, d := range daily {
 		gb, err := json.Marshal(d.Gates)
 		if err != nil {
