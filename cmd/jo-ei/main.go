@@ -17,6 +17,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
+	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
@@ -131,6 +132,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	// CVE scanner + policy (optional).
+	var osvScanner *scanner.OSVScanner
 	if cfg.CVE.Enabled {
 		baseURL := cfg.CVE.BaseURL
 		if baseURL == "" {
@@ -140,7 +142,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		osvScanner := scanner.NewOSVScanner(baseURL, ttl)
+		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
 		defer func() { _ = osvScanner.Close() }()
 		shared.cveScanner = osvScanner
 		shared.policy = policyRuntime
@@ -151,22 +153,50 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
+	var avScanners []proxy.AVScanner
 	engineCount := 0
 	if profile.MalwareBlock && len(cfg.Malware.Scanners) > 0 {
-		scanners := make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
+		avScanners = make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
 		for _, sc := range cfg.Malware.Scanners {
 			av, err := scanner.New(sc)
 			if err != nil {
 				return err
 			}
-			scanners = append(scanners, av)
+			avScanners = append(avScanners, av)
 		}
-		shared.avScanner = scanner.NewMultiScanner(scanners...)
-		engineCount = len(scanners)
+		shared.avScanner = scanner.NewMultiScanner(avScanners...)
+		engineCount = len(avScanners)
 	} else if len(cfg.Malware.Scanners) > 0 {
 		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
 			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
 	}
+
+	// Scanner health monitor: active probes for socket engines, passive
+	// tracking for the remote osv.dev API.
+	interval := time.Duration(cfg.Health.ProbeIntervalSeconds) * time.Second
+	slow := time.Duration(cfg.Health.SlowThresholdMS) * time.Millisecond
+	if slow <= 0 {
+		slow = 2000 * time.Millisecond
+	}
+	healthMon := health.NewMonitor(interval, slow) // interval<=0 → 30s default
+	if cfg.CVE.Enabled && osvScanner != nil {
+		base := cfg.CVE.BaseURL
+		if base == "" {
+			base = defaultOSVBaseURL
+		}
+		healthMon.AddPassive("osv.dev", base, true, osvScanner.Health)
+	}
+	for i, sc := range cfg.Malware.Scanners {
+		if profile.MalwareBlock && i < len(avScanners) {
+			if pr, ok := avScanners[i].(scanner.Prober); ok {
+				healthMon.AddActive(sc.Type, sc.Address, true, pr.Probe)
+				continue
+			}
+		}
+		healthMon.AddDisabled(sc.Type, sc.Address)
+	}
+	healthMon.Start()
+	defer healthMon.Close() //nolint:errcheck
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
@@ -203,7 +233,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Cache:         artifactCache,
 		CacheMaxBytes: int64(cfg.Cache.Local.MaxSizeGB) << 30,
 		Registries:    registryInfo(cfg),
-		Scanners:      scannerInfo(cfg, profile),
+		Health:        healthMon,
 		Logger:        logger,
 	})))
 	root.Handle("/", mux)
@@ -305,21 +335,4 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
 		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
 	}
-}
-
-// scannerInfo lists configured scan engines for the overview (static config,
-// no health probes this phase).
-func scannerInfo(cfg *config.Config, profile config.PolicyProfile) []console.ScannerInfo {
-	var out []console.ScannerInfo
-	if cfg.CVE.Enabled {
-		base := cfg.CVE.BaseURL
-		if base == "" {
-			base = defaultOSVBaseURL
-		}
-		out = append(out, console.ScannerInfo{Name: "osv.dev", Detail: base, Enabled: true})
-	}
-	for _, sc := range cfg.Malware.Scanners {
-		out = append(out, console.ScannerInfo{Name: sc.Type, Detail: sc.Address, Enabled: profile.MalwareBlock})
-	}
-	return out
 }
