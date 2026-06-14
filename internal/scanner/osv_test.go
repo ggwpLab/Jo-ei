@@ -212,3 +212,37 @@ func TestOSVScanner_EcosystemMapping(t *testing.T) {
 		assert.Equal(t, c.want, capturedEcosystem, "ecosystem %q", c.ecosystem)
 	}
 }
+
+func TestOSVHealth_NoTrafficUnknown(t *testing.T) {
+	s := scanner.NewOSVScanner("https://api.osv.dev", time.Hour)
+	defer s.Close()
+	h := s.Health()
+	assert.False(t, h.HasData)
+}
+
+func TestOSVHealth_AfterSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"vulns":[]}`))
+	}))
+	defer srv.Close()
+	s := scanner.NewOSVScanner(srv.URL, time.Hour)
+	defer s.Close()
+	_, err := s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	require.NoError(t, err)
+	h := s.Health()
+	assert.True(t, h.HasData)
+	assert.True(t, h.OK)
+}
+
+func TestOSVHealth_AfterError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	s := scanner.NewOSVScanner(srv.URL, time.Hour)
+	defer s.Close()
+	_, _ = s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	h := s.Health()
+	assert.True(t, h.HasData)
+	assert.False(t, h.OK)
+}
