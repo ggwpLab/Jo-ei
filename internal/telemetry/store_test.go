@@ -157,9 +157,22 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	assert.Equal(t, "2026-01-01", daily[1].Day)
 	assert.Equal(t, uint64(2), daily[1].Requests)
 	assert.Equal(t, uint64(1), daily[1].CacheHits)
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, daily[1].Gates[proxy.GateCache])
 
 	limited, err := s.DailyMetrics(1)
 	require.NoError(t, err)
 	require.Len(t, limited, 1)
 	assert.Equal(t, "2026-01-02", limited[0].Day)
+}
+
+func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
+	s := telemetry.NewStore(10)
+	s.Record(proxy.Event{Verdict: proxy.VerdictError}) // zero Time
+	daily, err := s.DailyMetrics(0)
+	require.NoError(t, err)
+	require.Len(t, daily, 1)
+	today := time.Now().UTC().Format("2006-01-02")
+	assert.Equal(t, today, daily[0].Day)
+	assert.Equal(t, uint64(1), daily[0].Requests)
+	assert.Equal(t, uint64(1), daily[0].Errors)
 }

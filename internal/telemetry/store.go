@@ -237,7 +237,8 @@ func (s *Store) Snapshot() Snapshot {
 }
 
 // DailyMetrics returns per-UTC-day tallies, newest day first. days<=0 returns
-// all known days; otherwise the most recent days.
+// all known days; otherwise the most recent days. The error return is reserved
+// for the persistence layer and is always nil for the in-memory implementation.
 func (s *Store) DailyMetrics(days int) ([]DailyMetric, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
