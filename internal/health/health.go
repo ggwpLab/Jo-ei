@@ -32,16 +32,18 @@ type ScannerHealth struct {
 	LatencyMS int64  `json:"latency_ms"`
 }
 
-// classify maps a raw Sample to a Status + latency in milliseconds. A slow
-// threshold of zero disables the warn state.
+// classify maps a raw Sample to a Status + latency in milliseconds. Latency is
+// only reported for reachable scanners; unknown and down both report 0, since a
+// round-trip to a host that then failed is not a meaningful latency to display.
+// A slow threshold of zero disables the warn state.
 func classify(s Sample, slow time.Duration) (Status, int64) {
 	if !s.HasData {
 		return StatusUnknown, 0
 	}
-	ms := s.Latency.Milliseconds()
 	if !s.OK {
-		return StatusDown, ms
+		return StatusDown, 0
 	}
+	ms := s.Latency.Milliseconds()
 	if slow > 0 && s.Latency > slow {
 		return StatusWarn, ms
 	}
