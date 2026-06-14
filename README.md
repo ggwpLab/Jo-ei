@@ -179,6 +179,20 @@ Env entries override file entries with the same username.
 > reverse proxy (nginx, Traefik, Caddy) in front of Jōei. In-binary TLS is not
 > provided.
 
+### Scanner health
+
+The console overview shows live health for each scan engine:
+
+- **ClamAV / ICAP** are actively probed (clamd `PING`, ICAP `OPTIONS`) every
+  `health.probe_interval_seconds` (default 30s).
+- **osv.dev** health is derived passively from real scan traffic — no extra
+  requests are sent to the public API.
+
+Status is `ok` (reachable, fast), `warn` (reachable but slower than
+`health.slow_threshold_ms`, default 2000ms), `down` (last check failed),
+`unknown` (no data yet), or `off` (configured but not attached by the active
+profile).
+
 ## How it Works
 
 Every package download goes through this pipeline:

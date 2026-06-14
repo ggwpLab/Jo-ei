@@ -17,6 +17,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
@@ -33,12 +34,10 @@ type RegistryInfo struct {
 	Upstreams []string `json:"upstreams"`
 }
 
-// ScannerInfo describes one configured scan engine. Static configuration
-// only — no live health probes this phase.
-type ScannerInfo struct {
-	Name    string `json:"name"`
-	Detail  string `json:"detail"`
-	Enabled bool   `json:"enabled"`
+// ScannerHealthProvider supplies live scan-engine health for the overview.
+// *health.Monitor satisfies it.
+type ScannerHealthProvider interface {
+	Snapshot() []health.ScannerHealth
 }
 
 // Config wires the API to runtime state.
@@ -49,7 +48,7 @@ type Config struct {
 	Cache         CacheStatsProvider // optional; nil reports zero stats
 	CacheMaxBytes int64
 	Registries    []RegistryInfo
-	Scanners      []ScannerInfo
+	Health        ScannerHealthProvider // optional; nil reports no scanners
 	Logger        zerolog.Logger
 	// SSEHeartbeat is the idle keep-alive interval for /api/events. With no
 	// traffic the stream is otherwise silent for hours and intermediaries
@@ -64,9 +63,6 @@ type server struct {
 
 // NewHandler returns the console API handler; mount it at "/api/".
 func NewHandler(cfg Config) http.Handler {
-	if cfg.Scanners == nil {
-		cfg.Scanners = []ScannerInfo{}
-	}
 	if cfg.Registries == nil {
 		cfg.Registries = []RegistryInfo{}
 	}
@@ -121,6 +117,11 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 		hitRate = float64(snap.CacheHits) / float64(snap.Requests)
 	}
 
+	scanners := []health.ScannerHealth{}
+	if s.cfg.Health != nil {
+		scanners = s.cfg.Health.Snapshot()
+	}
+
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"started_at":     snap.StartedAt,
 		"uptime_seconds": int64(time.Since(snap.StartedAt).Seconds()),
@@ -145,7 +146,7 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 			"hit_rate":   hitRate,
 			"evictions":  cs.Evictions,
 		},
-		"scanners": s.cfg.Scanners,
+		"scanners": scanners,
 	})
 }
 

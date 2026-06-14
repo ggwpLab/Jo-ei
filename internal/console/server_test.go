@@ -18,10 +18,15 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
+	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
+
+type stubHealth struct{ scanners []health.ScannerHealth }
+
+func (s stubHealth) Snapshot() []health.ScannerHealth { return s.scanners }
 
 type fakeStats struct{ stats cache.CacheStats }
 
@@ -53,8 +58,10 @@ func newFixture(t *testing.T) *fixture {
 		Registries: []console.RegistryInfo{
 			{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
 		},
-		Scanners: []console.ScannerInfo{{Name: "osv.dev", Detail: "https://api.osv.dev", Enabled: true}},
-		Logger:   zerolog.Nop(),
+		Health: stubHealth{scanners: []health.ScannerHealth{
+			{Name: "osv.dev", Detail: "https://api.osv.dev", Enabled: true, Status: health.StatusOK, LatencyMS: 42},
+		}},
+		Logger: zerolog.Nop(),
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -98,7 +105,7 @@ func TestOverview(t *testing.T) {
 			MaxBytes int64   `json:"max_bytes"`
 			HitRate  float64 `json:"hit_rate"`
 		} `json:"cache"`
-		Scanners []console.ScannerInfo `json:"scanners"`
+		Scanners []health.ScannerHealth `json:"scanners"`
 	}
 	code := getJSON(t, f.srv.URL+"/api/overview", &body)
 	require.Equal(t, http.StatusOK, code)
@@ -112,6 +119,8 @@ func TestOverview(t *testing.T) {
 	// per-object hits, so the request-level rate is used for both.
 	assert.InDelta(t, body.KPIs.HitRate, body.Cache.HitRate, 0.001)
 	require.Len(t, body.Scanners, 1)
+	assert.Equal(t, health.StatusOK, body.Scanners[0].Status)
+	assert.Equal(t, int64(42), body.Scanners[0].LatencyMS)
 	assert.False(t, body.StartedAt.IsZero())
 }
 

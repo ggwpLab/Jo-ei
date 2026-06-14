@@ -43,6 +43,11 @@ malware:
     #   service: "avscan"
     #   timeout_seconds: 30
 
+# Scanner health probes (optional). Surfaced in the console overview.
+# health:
+#   probe_interval_seconds: 30   # how often socket scanners (clamd/ICAP) are probed
+#   slow_threshold_ms: 2000      # latency above which a scanner shows "warn"
+
 cache:
   backend: "local"
   local:

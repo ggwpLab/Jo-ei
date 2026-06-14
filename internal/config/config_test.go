@@ -243,6 +243,20 @@ console:
 	assert.Equal(t, "alice", cfg.Console.Auth.Users[1].Username)
 }
 
+func TestValidate_RejectsNegativeHealth(t *testing.T) {
+	c := &config.Config{}
+	c.Health.ProbeIntervalSeconds = -1
+	err := c.Validate()
+	require.Error(t, err)
+}
+
+func TestValidate_RejectsNegativeSlowThreshold(t *testing.T) {
+	c := &config.Config{}
+	c.Health.SlowThresholdMS = -5
+	err := c.Validate()
+	require.Error(t, err)
+}
+
 func TestLoadConfig_CVESection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:

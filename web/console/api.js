@@ -103,7 +103,9 @@
       evictions: o.cache.evictions,
     };
     J.scanners = (o.scanners || []).map((s) => ({
-      name: s.name, detail: s.detail, status: s.enabled ? "ok" : "off", latency: "",
+      name: s.name, detail: s.detail,
+      status: s.status || (s.enabled ? "ok" : "off"),
+      latency: s.latency_ms ? `${s.latency_ms}ms` : "",
     }));
   }
 
