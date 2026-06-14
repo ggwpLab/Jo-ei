@@ -332,6 +332,8 @@ func (s *Store) Snapshot() Snapshot {
 // DailyMetrics returns per-UTC-day tallies, newest day first. days<=0 returns
 // all known days; otherwise the most recent days. When a repo is present its
 // data is preferred (it includes rows flushed by previous processes).
+// When persistence is enabled, today's row is read from storage and may lag the
+// live Snapshot total by up to one flush interval (10s); that is by design.
 func (s *Store) DailyMetrics(days int) ([]DailyMetric, error) {
 	if s.repo != nil {
 		return s.repo.DailyMetrics(days)
@@ -439,7 +441,7 @@ func (s *Store) writer() {
 			pending = append(pending, ev)
 		case <-ticker.C:
 			s.flush(pending)
-			pending = pending[:0]
+			pending = nil
 		}
 	}
 }

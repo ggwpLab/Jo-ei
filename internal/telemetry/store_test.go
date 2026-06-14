@@ -203,6 +203,8 @@ func TestPersistentStore_SeedsFromRepoAndPersists(t *testing.T) {
 	assert.Equal(t, uint64(2), snap.Requests)
 	assert.Equal(t, uint64(1), snap.CacheHits)
 	assert.Equal(t, uint64(1), snap.Blocked)
+	assert.Equal(t, uint64(1), snap.SupplyBlocked)
+	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[proxy.GateSupply])
 
 	require.Len(t, s2.Recent(0), 2)
 
