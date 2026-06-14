@@ -257,6 +257,16 @@ func TestValidate_RejectsNegativeSlowThreshold(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidate_RejectsNegativeRetention(t *testing.T) {
+	c := &config.Config{}
+	c.Database.EventRetentionDays = -1
+	require.Error(t, c.Validate())
+
+	c2 := &config.Config{}
+	c2.Database.DailyRetentionDays = -5
+	require.Error(t, c2.Validate())
+}
+
 func TestLoadConfig_CVESection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
