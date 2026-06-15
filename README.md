@@ -222,6 +222,11 @@ reset on restart. Set `database.path` to an embedded SQLite file to persist them
 across restarts, along with **per-calendar-day metrics** exposed at
 `GET /api/metrics/daily?days=N` (default 30, max 365, newest first).
 
+When persistence is enabled, the console **Overview** renders these daily metrics
+as sparklines on the Requests, Cache-hit and Blocked KPI cards, with a 7-day /
+30-day window toggle. Without a `database.path`, the cards show current counters
+only and the Overview notes that no history is available.
+
 The proxy hot path never does synchronous database I/O: counters update in
 memory, events are written asynchronously, and aggregates flush every 10s and on
 graceful shutdown. If the database cannot be opened, Jōei logs a warning and runs
