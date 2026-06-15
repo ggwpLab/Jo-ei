@@ -31,6 +31,7 @@
     ECO, GATES, CVES: {},
     requests: [],
     quarantine: [],
+    daily: [], // per-UTC-day metric rows, oldest-first (for left→right sparklines)
     policy: {
       mode: "off", min_age_hours: 0, cve_block_on: "CRITICAL",
       allowlist: [], denylist: [], persistence: "runtime",
@@ -110,12 +111,13 @@
   }
 
   async function load() {
-    const [overview, requests, quarantine, pol, registries] = await Promise.all([
+    const [overview, requests, quarantine, pol, registries, daily] = await Promise.all([
       getJSON("/api/overview"),
       getJSON("/api/requests?limit=500"),
       getJSON("/api/quarantine"),
       getJSON("/api/policy"),
       getJSON("/api/registries"),
+      getJSON("/api/metrics/daily?days=30"),
     ]);
     applyPolicy(pol);
     // "|| []" guards: one unexpected null must degrade a panel, not fail the
@@ -126,6 +128,10 @@
     applyOverview(overview);
     J.requests = (requests.requests || []).map(reviveEvent);
     J.registries = (registries.registries || []).map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams || [] }));
+    // The endpoint returns newest-first; reverse to oldest-first so sparklines
+    // read left→right in time order. "|| []" degrades only the sparklines (e.g.
+    // when persistence is off and the array is empty), never the whole load().
+    J.daily = (daily.daily || []).slice().reverse();
     J.ready = true;
     setConnected(true);
     fire("joei:data");
