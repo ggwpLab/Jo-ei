@@ -25,6 +25,16 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const recent = JOEI.requests.slice(0, 6);
   const uptime = k.started_at ? fmtAgo(k.started_at).replace(" ago", "") : "—";
 
+  const [win, setWin] = useState(30);
+  // Toggling the window only re-slices the already-loaded array — no refetch.
+  const rows = JOEI.daily.slice(-win);
+  // Spark breaks on <2 points (Math.max(...[]) === -Infinity, divide by len-1).
+  // With fewer points pass `undefined` so the card renders exactly as before.
+  const haveTrend = rows.length >= 2;
+  const reqSpark = haveTrend ? rows.map((r) => r.requests) : undefined;
+  const hitSpark = haveTrend ? rows.map((r) => (r.requests ? r.cache_hits / r.requests : 0)) : undefined;
+  const blkSpark = haveTrend ? rows.map((r) => r.blocked) : undefined;
+
   return (
     <div className="content-inner">
       {/* hero */}
@@ -37,15 +47,28 @@ function Overview({ treatment, setTreatment, openThreat }) {
           <div className="eyebrow">Since start · uptime {uptime}</div>
           <h2>Gate throughput</h2>
         </div>
+        <div className="spacer"></div>
+        {JOEI.daily.length > 0 ? (
+          <div className="seg" role="group" aria-label="Sparkline window">
+            {[7, 30].map((n) => (
+              <button key={n} className={win === n ? "active" : ""} onClick={() => setWin(n)}>{n}d</button>
+            ))}
+          </div>
+        ) : (
+          <span className="faint" style={{ fontSize: 11 }}>no history yet · set database.path to persist daily metrics</span>
+        )}
       </div>
 
       <div className="kpi-grid">
         <KpiCard label="Requests · since start" value={fmtCompact(k.requests_total)}
-          delta={<><b>{fmtNum(k.requests_total)}</b> total · {fmtNum(k.errors)} errors</>} watermark="求" />
+          delta={<><b>{fmtNum(k.requests_total)}</b> total · {fmtNum(k.errors)} errors</>} watermark="求"
+          spark={reqSpark} sparkColor="var(--washi-mut)" />
         <KpiCard label="Served from cache" value={(k.hit_rate * 100).toFixed(1) + "%"} accent="jade"
-          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits since start</>} watermark="蔵" />
+          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits since start</>} watermark="蔵"
+          spark={hitSpark} sparkColor="var(--jade)" />
         <KpiCard label="Blocked · since start" value={fmtNum(k.blocked_total)} accent="verm"
-          delta={<>423 Locked + 403 Forbidden</>} watermark="封" />
+          delta={<>423 Locked + 403 Forbidden</>} watermark="封"
+          spark={blkSpark} sparkColor="var(--vermilion)" />
         <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"
           delta={<>held until min-age maturity</>} watermark="守" />
       </div>
