@@ -3,3 +3,4 @@ bin/
 *.db
 .claude/
 .vscode/
+.env

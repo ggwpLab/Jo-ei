@@ -40,16 +40,26 @@ from cache without contacting the upstream registry.
 git clone <repo-url> && cd Jo-ei
 ```
 
-**Create a console user** (the console is fail-closed until you do):
+**Configure secrets** — copy the example env file and fill it in:
 
 ```bash
-# bcrypt-hash a password via the container image, then start the proxy
+cp .env.example .env
+```
+
+**Create a console user** (the console is fail-closed until you do). bcrypt-hash a
+password and write the `username:hash` pair into `.env`:
+
+```bash
+# Generate a hash (pick your own strong password)
 HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
-export JOEI_CONSOLE_AUTH_USERS="admin:$HASH"
+
+# Put it in .env as JOEI_CONSOLE_AUTH_USERS, then start the proxy
+echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
 ```
 
-Then open the console and log in as `admin`.
+`docker-compose` reads `.env` automatically. `.env` is gitignored — your secrets
+stay out of git. Then open the console and log in as `admin`.
 
 The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
 malware scanning is active when the selected policy profile sets `malware_block: true`.
@@ -173,6 +183,18 @@ export JOEI_CONSOLE_AUTH_USERS='admin:$2a$10$...;alice:$2a$10$...'
 ```
 
 Env entries override file entries with the same username.
+
+**With Docker Compose**, set the same variable in `.env` (see
+[`.env.example`](./.env.example)) instead of exporting it — Compose loads `.env`
+automatically and substitutes it into `docker-compose.yaml`:
+
+```dotenv
+JOEI_CONSOLE_AUTH_USERS=admin:$2a$10$...;alice:$2a$10$...
+```
+
+Write the hash **literally** in `.env` — values there are not interpolated. Only
+when you hardcode a hash *inline* in `docker-compose.yaml` must each `$` be
+doubled to `$$` to escape Compose variable substitution.
 
 > **TLS:** Jōei serves plain HTTP. Basic credentials are only as private as the
 > transport — for any non-loopback or public deployment, terminate TLS at a
