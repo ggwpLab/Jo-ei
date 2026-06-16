@@ -7,7 +7,7 @@ function KpiCard({ label, value, accent, delta, spark, sparkColor, watermark }) 
       <div className="kpi-label">{label}</div>
       <div className={`kpi-val ${accent || ""}`}>{value}</div>
       {delta && <div className="kpi-delta">{delta}</div>}
-      {spark && <div className="kpi-spark"><Spark data={spark} color={sparkColor} /></div>}
+      {spark && <div className="kpi-spark"><Spark data={spark} color={sparkColor} h={44} /></div>}
     </div>
   );
 }
@@ -48,14 +48,18 @@ function Overview({ treatment, setTreatment, openThreat }) {
           <h2>Gate throughput</h2>
         </div>
         <div className="spacer"></div>
-        {JOEI.daily.length > 0 ? (
+        {JOEI.daily.length >= 2 ? (
           <div className="seg" role="group" aria-label="Sparkline window">
             {[7, 30].map((n) => (
               <button key={n} className={win === n ? "active" : ""} onClick={() => setWin(n)}>{n}d</button>
             ))}
           </div>
         ) : (
-          <span className="faint" style={{ fontSize: 11 }}>no history yet · set database.path to persist daily metrics</span>
+          <span className="faint" style={{ fontSize: 11 }}>
+            {JOEI.daily.length === 0
+              ? "no history yet · set database.path to persist daily metrics"
+              : "charts appear after 2+ days of history"}
+          </span>
         )}
       </div>
 
@@ -70,7 +74,8 @@ function Overview({ treatment, setTreatment, openThreat }) {
           delta={<>423 Locked + 403 Forbidden</>} watermark="封"
           spark={blkSpark} sparkColor="var(--vermilion)" />
         <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"
-          delta={<>held until min-age maturity</>} watermark="守" />
+          delta={<>held until min-age maturity</>} watermark="守"
+          spark={qSpark} sparkColor="var(--gold)" />
       </div>
 
       {/* block breakdown */}

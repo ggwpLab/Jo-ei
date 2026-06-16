@@ -393,7 +393,7 @@ input, select, textarea { font-family: inherit; }
 .kpi .kpi-val.gold { color: var(--gold-l); }
 .kpi .kpi-delta { font-size: 12px; color: var(--washi-mut); margin-top: 2px; }
 .kpi .kpi-delta b { font-family: var(--mono); font-weight: 600; }
-.kpi .kpi-spark { margin-top: 8px; height: 30px; }
+.kpi .kpi-spark { margin-top: 10px; height: 44px; }
 .kpi-watermark {
   position: absolute; right: -8px; bottom: -14px;
   font-family: var(--mincho); font-size: 64px; color: rgba(237,231,218,.03);
