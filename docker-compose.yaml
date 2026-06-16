@@ -6,13 +6,10 @@ services:
     volumes:
       - ./config.yaml:/etc/jo-ei/config.yaml:ro
       - cache-data:/var/cache/jo-ei
+      - jo-ei-db:/var/lib/jo-ei
     environment:
       - JOEI_LOGGING_LEVEL=info
-      # CHANGE THIS — example only. Generate your own with `jo-ei hashpw`.
-      # Without it the console is fail-closed (HTTP 503). Format: user:bcrypt-hash[;user:hash]
-      # Note: in docker-compose a literal '$' must be written '$$' to avoid
-      # variable interpolation, so a real hash '$2a$10$...' becomes '$$2a$$10$$...'.
-      - "JOEI_CONSOLE_AUTH_USERS=${JOEI_CONSOLE_AUTH_USERS}"
+      - JOEI_CONSOLE_AUTH_USERS=${JOEI_CONSOLE_AUTH_USERS}
     depends_on:
       clamav:
         condition: service_healthy
@@ -33,3 +30,4 @@ services:
 volumes:
   cache-data:
   clamav-db:
+  jo-ei-db:

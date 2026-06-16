@@ -63,10 +63,10 @@ cache:
 # Persistent state (optional). Stores telemetry — event history, lifetime
 # counters and per-day metrics — in an embedded SQLite database so they survive
 # restarts. Empty/absent path keeps telemetry in memory only (the default).
-# database:
-#   path: "/var/lib/jo-ei/jo-ei.db"
-#   event_retention_days: 30    # prune persisted events older than this
-#   daily_retention_days: 365   # prune per-day metric rows older than this
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+  event_retention_days: 30    # prune persisted events older than this
+  daily_retention_days: 365   # prune per-day metric rows older than this
 
 policy:
   active_profile: "production"
