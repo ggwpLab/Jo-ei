@@ -34,6 +34,9 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const reqSpark = haveTrend ? rows.map((r) => r.requests) : undefined;
   const hitSpark = haveTrend ? rows.map((r) => (r.requests ? r.cache_hits / r.requests : 0)) : undefined;
   const blkSpark = haveTrend ? rows.map((r) => r.blocked) : undefined;
+  // Quarantine has no daily counter; supply_blocked (423 min-age holds) is its
+  // daily flow — the new "awaiting maturity" holds per day.
+  const qSpark = haveTrend ? rows.map((r) => r.supply_blocked) : undefined;
 
   return (
     <div className="content-inner">
