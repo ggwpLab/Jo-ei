@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,8 +21,20 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
+
+func newTelemetryStore(t *testing.T) *telemetry.Store {
+	t.Helper()
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
 
 // consoleStack mirrors the cmd/jo-ei wiring: handler + recorder hub +
 // runtime policy + console API behind one mux.
@@ -43,7 +56,7 @@ func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *p
 		config.PolicyProfile{},
 		nil,
 	)
-	store := telemetry.NewStore(100)
+	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
 

@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS counters (
 	denylisted      INTEGER NOT NULL DEFAULT 0,
 	gates_json      TEXT    NOT NULL DEFAULT '{}'
 );
+`, `
+CREATE INDEX IF NOT EXISTS idx_events_verdict_gate ON events(verdict, gate);
 `}
 
 const defaultEventRetentionDays = 30
@@ -84,116 +86,18 @@ func NewSQLiteRepo(db *storage.DB, eventRetentionDays, dailyRetentionDays int) (
 	}, nil
 }
 
+// querier is the subset of *sql.DB / *sql.Tx used by the row helpers, so the
+// same read/write code works inside and outside a transaction.
+type querier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 func unixNanoOrZero(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}
 	return t.UnixNano()
-}
-
-func (r *sqliteRepo) AppendEvents(evs []proxy.Event) error {
-	if len(evs) == 0 {
-		return nil
-	}
-	tx, err := r.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	stmt, err := tx.Prepare(`
-		INSERT INTO events
-			(ts, request_id, ecosystem, package, version, verdict, gate, reason,
-			 http_status, published_at, block_until, detail_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	for _, ev := range evs {
-		blob, err := json.Marshal(ev)
-		if err != nil {
-			return fmt.Errorf("marshalling event: %w", err)
-		}
-		if _, err := stmt.Exec(
-			unixNanoOrZero(ev.Time), ev.RequestID, ev.Ecosystem, ev.Package, ev.Version,
-			ev.Verdict, ev.Gate, ev.Reason, ev.HTTPStatus,
-			unixNanoOrZero(ev.PublishedAt), unixNanoOrZero(ev.BlockUntil), string(blob),
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (r *sqliteRepo) Flush(lifetime Snapshot, daily []DailyMetric) error {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	gatesBlob, err := json.Marshal(lifetime.Gates)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO counters
-			(id, requests, cache_hits, blocked, errors, supply_blocked,
-			 cve_blocked, malware_blocked, denylisted, gates_json)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			requests=excluded.requests, cache_hits=excluded.cache_hits,
-			blocked=excluded.blocked, errors=excluded.errors,
-			supply_blocked=excluded.supply_blocked, cve_blocked=excluded.cve_blocked,
-			malware_blocked=excluded.malware_blocked, denylisted=excluded.denylisted,
-			gates_json=excluded.gates_json`,
-		lifetime.Requests, lifetime.CacheHits, lifetime.Blocked, lifetime.Errors,
-		lifetime.SupplyBlocked, lifetime.CVEBlocked, lifetime.MalwareBlocked,
-		lifetime.Denylisted, string(gatesBlob),
-	); err != nil {
-		return err
-	}
-
-	dstmt, err := tx.Prepare(`
-		INSERT INTO daily_metrics
-			(day, requests, cache_hits, blocked, errors, supply_blocked,
-			 cve_blocked, malware_blocked, denylisted, gates_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(day) DO UPDATE SET
-			requests=excluded.requests, cache_hits=excluded.cache_hits,
-			blocked=excluded.blocked, errors=excluded.errors,
-			supply_blocked=excluded.supply_blocked, cve_blocked=excluded.cve_blocked,
-			malware_blocked=excluded.malware_blocked, denylisted=excluded.denylisted,
-			gates_json=excluded.gates_json`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dstmt.Close() }()
-	for _, d := range daily {
-		gb, err := json.Marshal(d.Gates)
-		if err != nil {
-			return err
-		}
-		if _, err := dstmt.Exec(
-			d.Day, d.Requests, d.CacheHits, d.Blocked, d.Errors,
-			d.SupplyBlocked, d.CVEBlocked, d.MalwareBlocked, d.Denylisted, string(gb),
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (r *sqliteRepo) Prune() error {
-	eventCutoff := time.Now().Add(-r.eventRetention).UnixNano()
-	if _, err := r.db.Exec(`DELETE FROM events WHERE ts < ?`, eventCutoff); err != nil {
-		return err
-	}
-	dayCutoff := time.Now().Add(-r.dailyRetention).UTC().Format("2006-01-02")
-	if _, err := r.db.Exec(`DELETE FROM daily_metrics WHERE day < ?`, dayCutoff); err != nil {
-		return err
-	}
-	return nil
 }
 
 func parseGates(blob string) map[string]GateCounts {
@@ -207,12 +111,60 @@ func parseGates(blob string) map[string]GateCounts {
 	return g
 }
 
-func (r *sqliteRepo) LoadState(eventLimit int) (State, error) {
-	var st State
+// RecordEvent inserts the event and folds its one-event delta into the
+// cumulative counters and the event's UTC-day row, all in one transaction.
+func (r *sqliteRepo) RecordEvent(ev proxy.Event) error {
+	delta := newAggregate()
+	delta.record(ev)
 
-	var gatesJSON string
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshalling event: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO events
+			(ts, request_id, ecosystem, package, version, verdict, gate, reason,
+			 http_status, published_at, block_until, detail_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		unixNanoOrZero(ev.Time), ev.RequestID, ev.Ecosystem, ev.Package, ev.Version,
+		ev.Verdict, ev.Gate, ev.Reason, ev.HTTPStatus,
+		unixNanoOrZero(ev.PublishedAt), unixNanoOrZero(ev.BlockUntil), string(blob),
+	); err != nil {
+		return err
+	}
+
+	counters, err := readCounters(tx)
+	if err != nil {
+		return err
+	}
+	counters.add(delta)
+	if err := upsertCounters(tx, counters.snapshot(time.Time{})); err != nil {
+		return err
+	}
+
+	day := dayKey(ev)
+	dailyAgg, err := readDaily(tx, day)
+	if err != nil {
+		return err
+	}
+	dailyAgg.add(delta)
+	if err := upsertDaily(tx, dailyAgg.dailyMetric(day)); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func readCounters(q querier) (*aggregate, error) {
 	var snap Snapshot
-	err := r.db.QueryRow(`
+	var gatesJSON string
+	err := q.QueryRow(`
 		SELECT requests, cache_hits, blocked, errors, supply_blocked,
 		       cve_blocked, malware_blocked, denylisted, gates_json
 		FROM counters WHERE id = 1`).Scan(
@@ -221,69 +173,143 @@ func (r *sqliteRepo) LoadState(eventLimit int) (State, error) {
 		&snap.Denylisted, &gatesJSON)
 	switch {
 	case err == sql.ErrNoRows:
-		// fresh DB — leave HasLifetime false
+		return newAggregate(), nil
 	case err != nil:
-		return st, fmt.Errorf("loading counters: %w", err)
-	default:
-		snap.Gates = parseGates(gatesJSON)
-		st.Lifetime = snap
-		st.HasLifetime = true
+		return nil, err
 	}
-
-	today := time.Now().UTC().Format("2006-01-02")
-	d, err := r.dailyRow(today)
-	if err != nil {
-		return st, err
-	}
-	st.Today = d
-
-	if eventLimit < 1 {
-		eventLimit = 1
-	}
-	rows, err := r.db.Query(`SELECT detail_json FROM events ORDER BY ts DESC, id DESC LIMIT ?`, eventLimit)
-	if err != nil {
-		return st, fmt.Errorf("loading events: %w", err)
-	}
-	defer rows.Close()
-	var newestFirst []proxy.Event
-	for rows.Next() {
-		var blob string
-		if err := rows.Scan(&blob); err != nil {
-			return st, err
-		}
-		var ev proxy.Event
-		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
-			continue
-		}
-		newestFirst = append(newestFirst, ev)
-	}
-	if err := rows.Err(); err != nil {
-		return st, err
-	}
-	st.Events = make([]proxy.Event, 0, len(newestFirst))
-	for i := len(newestFirst) - 1; i >= 0; i-- {
-		st.Events = append(st.Events, newestFirst[i])
-	}
-	return st, nil
+	snap.Gates = parseGates(gatesJSON)
+	return aggregateFromSnapshot(snap), nil
 }
 
-func (r *sqliteRepo) dailyRow(day string) (*DailyMetric, error) {
+func upsertCounters(q querier, s Snapshot) error {
+	gatesBlob, err := json.Marshal(s.Gates)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(`
+		INSERT INTO counters
+			(id, requests, cache_hits, blocked, errors, supply_blocked,
+			 cve_blocked, malware_blocked, denylisted, gates_json)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			requests=excluded.requests, cache_hits=excluded.cache_hits,
+			blocked=excluded.blocked, errors=excluded.errors,
+			supply_blocked=excluded.supply_blocked, cve_blocked=excluded.cve_blocked,
+			malware_blocked=excluded.malware_blocked, denylisted=excluded.denylisted,
+			gates_json=excluded.gates_json`,
+		s.Requests, s.CacheHits, s.Blocked, s.Errors,
+		s.SupplyBlocked, s.CVEBlocked, s.MalwareBlocked, s.Denylisted, string(gatesBlob))
+	return err
+}
+
+func readDaily(q querier, day string) (*aggregate, error) {
 	var d DailyMetric
 	var gatesJSON string
-	err := r.db.QueryRow(`
+	err := q.QueryRow(`
 		SELECT day, requests, cache_hits, blocked, errors, supply_blocked,
 		       cve_blocked, malware_blocked, denylisted, gates_json
 		FROM daily_metrics WHERE day = ?`, day).Scan(
 		&d.Day, &d.Requests, &d.CacheHits, &d.Blocked, &d.Errors,
 		&d.SupplyBlocked, &d.CVEBlocked, &d.MalwareBlocked, &d.Denylisted, &gatesJSON)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
+	switch {
+	case err == sql.ErrNoRows:
+		return newAggregate(), nil
+	case err != nil:
 		return nil, err
 	}
 	d.Gates = parseGates(gatesJSON)
-	return &d, nil
+	return aggregateFromDaily(d), nil
+}
+
+func upsertDaily(q querier, d DailyMetric) error {
+	gatesBlob, err := json.Marshal(d.Gates)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(`
+		INSERT INTO daily_metrics
+			(day, requests, cache_hits, blocked, errors, supply_blocked,
+			 cve_blocked, malware_blocked, denylisted, gates_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(day) DO UPDATE SET
+			requests=excluded.requests, cache_hits=excluded.cache_hits,
+			blocked=excluded.blocked, errors=excluded.errors,
+			supply_blocked=excluded.supply_blocked, cve_blocked=excluded.cve_blocked,
+			malware_blocked=excluded.malware_blocked, denylisted=excluded.denylisted,
+			gates_json=excluded.gates_json`,
+		d.Day, d.Requests, d.CacheHits, d.Blocked, d.Errors,
+		d.SupplyBlocked, d.CVEBlocked, d.MalwareBlocked, d.Denylisted, string(gatesBlob))
+	return err
+}
+
+func (r *sqliteRepo) Snapshot(started time.Time) (Snapshot, error) {
+	agg, err := readCounters(r.db)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return agg.snapshot(started), nil
+}
+
+func (r *sqliteRepo) Recent(limit int) ([]proxy.Event, error) {
+	query := `SELECT detail_json FROM events ORDER BY ts DESC, id DESC`
+	var args []any
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []proxy.Event
+	for rows.Next() {
+		var blob string
+		if err := rows.Scan(&blob); err != nil {
+			return nil, err
+		}
+		var ev proxy.Event
+		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+func (r *sqliteRepo) Quarantine(now time.Time) ([]proxy.Event, error) {
+	rows, err := r.db.Query(`
+		SELECT detail_json FROM events
+		WHERE verdict = ? AND gate = ?
+		ORDER BY ts DESC, id DESC`, proxy.VerdictBlock, proxy.GateSupply)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []proxy.Event
+	for rows.Next() {
+		var blob string
+		if err := rows.Scan(&blob); err != nil {
+			return nil, err
+		}
+		var ev proxy.Event
+		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
+			continue
+		}
+		// Deduplicate by eco/pkg@ver BEFORE the expiry filter, so the newest
+		// record for a package decides whether it is held at all.
+		key := ev.Ecosystem + "/" + ev.Package + "@" + ev.Version
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if !ev.BlockUntil.After(now) {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
 }
 
 func (r *sqliteRepo) DailyMetrics(days int) ([]DailyMetric, error) {
@@ -315,4 +341,16 @@ func (r *sqliteRepo) DailyMetrics(days int) ([]DailyMetric, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (r *sqliteRepo) Prune() error {
+	eventCutoff := time.Now().Add(-r.eventRetention).UnixNano()
+	if _, err := r.db.Exec(`DELETE FROM events WHERE ts < ?`, eventCutoff); err != nil {
+		return err
+	}
+	dayCutoff := time.Now().Add(-r.dailyRetention).UTC().Format("2006-01-02")
+	if _, err := r.db.Exec(`DELETE FROM daily_metrics WHERE day < ?`, dayCutoff); err != nil {
+		return err
+	}
+	return nil
 }

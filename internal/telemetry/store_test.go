@@ -24,26 +24,37 @@ func evt(id, verdict, gate, reason string) proxy.Event {
 	}
 }
 
-func TestStoreRingOverflowAndOrder(t *testing.T) {
-	s := telemetry.NewStore(4)
+// newStore returns a SQLite-backed Store on a fresh temp-file database.
+func newStore(t *testing.T) *telemetry.Store {
+	t.Helper()
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func TestStoreRecentOrderAndLimit(t *testing.T) {
+	s := newStore(t)
 	for i := 1; i <= 6; i++ {
 		s.Record(evt(fmt.Sprintf("r%d", i), proxy.VerdictPass, proxy.GateSupply, "ok"))
 	}
 
 	got := s.Recent(10)
-	require.Len(t, got, 4, "ring keeps only the last 4")
+	require.Len(t, got, 6, "all events are retained (no ring buffer)")
 	assert.Equal(t, "r6", got[0].RequestID, "newest first")
 	assert.Equal(t, "r5", got[1].RequestID)
-	assert.Equal(t, "r4", got[2].RequestID)
-	assert.Equal(t, "r3", got[3].RequestID)
 
 	got = s.Recent(2)
 	require.Len(t, got, 2)
 	assert.Equal(t, "r6", got[0].RequestID)
+	assert.Equal(t, "r5", got[1].RequestID)
 }
 
 func TestStoreCounters(t *testing.T) {
-	s := telemetry.NewStore(16)
+	s := newStore(t)
 	s.Record(evt("r1", proxy.VerdictCache, proxy.GateCache, "cache_hit"))
 	s.Record(evt("r2", proxy.VerdictPass, proxy.GateMalware, "ok"))
 	s.Record(evt("r3", proxy.VerdictBlock, proxy.GateCVE, "cve_found"))
@@ -63,12 +74,6 @@ func TestStoreCounters(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.MalwareBlocked)
 	assert.False(t, snap.StartedAt.IsZero())
 
-	// Per-gate pipeline accounting (supply → cve → malware):
-	// r1 CACHE: cache+1 pass
-	// r2 PASS@malware: supply+1 cve+1 malware+1 pass
-	// r3,r4 BLOCK@cve: supply+1 each pass, cve+2 block
-	// r5 BLOCK@supply: supply+1 block
-	// r6 BLOCK@malware: supply+1 cve+1 pass, malware+1 block
 	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, snap.Gates[proxy.GateCache])
 	assert.Equal(t, telemetry.GateCounts{Pass: 4, Block: 1}, snap.Gates[proxy.GateSupply])
 	assert.Equal(t, telemetry.GateCounts{Pass: 2, Block: 2}, snap.Gates[proxy.GateCVE])
@@ -76,7 +81,7 @@ func TestStoreCounters(t *testing.T) {
 }
 
 func TestStoreCacheScanFailedBlockDoesNotCountPipelinePasses(t *testing.T) {
-	s := telemetry.NewStore(4)
+	s := newStore(t)
 	s.Record(evt("r1", proxy.VerdictBlock, proxy.GateCache, "scan_failed"))
 
 	snap := s.Snapshot()
@@ -87,7 +92,7 @@ func TestStoreCacheScanFailedBlockDoesNotCountPipelinePasses(t *testing.T) {
 
 func TestStoreQuarantine(t *testing.T) {
 	now := time.Now()
-	s := telemetry.NewStore(16)
+	s := newStore(t)
 
 	active := evt("r1", proxy.VerdictBlock, proxy.GateSupply, "package_younger_than_min_age")
 	active.BlockUntil = now.Add(6 * time.Hour)
@@ -98,7 +103,6 @@ func TestStoreQuarantine(t *testing.T) {
 	expired.BlockUntil = now.Add(-time.Hour)
 	s.Record(expired)
 
-	// Duplicate of the first package — newest wins, deduped by eco/pkg@ver.
 	dup := active
 	dup.RequestID = "r3"
 	s.Record(dup)
@@ -110,8 +114,6 @@ func TestStoreQuarantine(t *testing.T) {
 	assert.Equal(t, "r3", q[0].RequestID, "newest duplicate wins")
 	assert.Equal(t, "requests", q[0].Package)
 
-	// A newer expired record for the same package hides the older active one:
-	// dedup happens before the expiry filter, newest record wins outright.
 	gone := active
 	gone.RequestID = "r5"
 	gone.BlockUntil = now.Add(-time.Minute)
@@ -120,7 +122,7 @@ func TestStoreQuarantine(t *testing.T) {
 }
 
 func TestStoreConcurrent(t *testing.T) {
-	s := telemetry.NewStore(64)
+	s := newStore(t)
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
 		wg.Add(1)
@@ -131,7 +133,7 @@ func TestStoreConcurrent(t *testing.T) {
 				if i%10 == 0 {
 					ev.Verdict = proxy.VerdictBlock
 					ev.BlockUntil = time.Now().Add(time.Hour)
-					ev.Version = fmt.Sprintf("1.0.%d", i) // distinct quarantine keys
+					ev.Version = fmt.Sprintf("1.0.%d", i)
 				}
 				s.Record(ev)
 				s.Recent(10)
@@ -145,7 +147,7 @@ func TestStoreConcurrent(t *testing.T) {
 }
 
 func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
-	s := telemetry.NewStore(100)
+	s := newStore(t)
 	day1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	s.Record(proxy.Event{Time: day1, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
@@ -169,7 +171,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 }
 
 func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
-	s := telemetry.NewStore(10)
+	s := newStore(t)
 	s.Record(proxy.Event{Verdict: proxy.VerdictError}) // zero Time
 	daily, err := s.DailyMetrics(0)
 	require.NoError(t, err)
@@ -180,22 +182,24 @@ func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 	assert.Equal(t, uint64(1), daily[0].Errors)
 }
 
-func TestPersistentStore_SeedsFromRepoAndPersists(t *testing.T) {
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
-	require.NoError(t, err)
-
-	s1, err := telemetry.NewPersistentStore(100, repo, zerolog.Nop())
-	require.NoError(t, err)
+func TestStore_PersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
 	now := time.Now().UTC()
+
+	db1, err := storage.Open(path)
+	require.NoError(t, err)
+	s1, err := telemetry.Open(db1, 30, 365, zerolog.Nop())
+	require.NoError(t, err)
 	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
 	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, Reason: "x",
 		Ecosystem: "npm", Package: "p", Version: "1", BlockUntil: now.Add(time.Hour)})
 	require.NoError(t, s1.Close())
+	require.NoError(t, db1.Close())
 
-	s2, err := telemetry.NewPersistentStore(100, repo, zerolog.Nop())
+	db2, err := storage.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db2.Close() })
+	s2, err := telemetry.Open(db2, 30, 365, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 
@@ -218,14 +222,8 @@ func TestPersistentStore_SeedsFromRepoAndPersists(t *testing.T) {
 	assert.Equal(t, uint64(2), daily[0].Requests)
 }
 
-func TestPersistentStore_CloseIdempotent(t *testing.T) {
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
-	require.NoError(t, err)
-	s, err := telemetry.NewPersistentStore(10, repo, zerolog.Nop())
-	require.NoError(t, err)
+func TestStore_CloseIdempotent(t *testing.T) {
+	s := newStore(t)
 	require.NoError(t, s.Close())
-	require.NoError(t, s.Close()) // no-op
+	require.NoError(t, s.Close()) // no-op (also called again by t.Cleanup)
 }

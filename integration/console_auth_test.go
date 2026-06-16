@@ -40,7 +40,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
-	store := telemetry.NewStore(100)
+	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
 

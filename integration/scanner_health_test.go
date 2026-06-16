@@ -31,7 +31,7 @@ func TestOverview_ReflectsDownScanner(t *testing.T) {
 	mon.Start()
 	defer mon.Close()
 
-	store := telemetry.NewStore(100)
+	store := newTelemetryStore(t)
 	runtime := policy.NewRuntime(
 		config.SupplyChainConfig{Mode: "enforce"},
 		config.CVEConfig{},

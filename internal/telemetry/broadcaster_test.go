@@ -64,7 +64,7 @@ func TestBroadcasterSlowSubscriberLosesEventsWithoutBlocking(t *testing.T) {
 }
 
 func TestHubRecordsAndPublishes(t *testing.T) {
-	store := telemetry.NewStore(8)
+	store := newStore(t)
 	b := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: b}
 	ch, cancel := b.Subscribe()

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,20 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
+
+func newTelemetryStore(t *testing.T) *telemetry.Store {
+	t.Helper()
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
 
 type stubHealth struct{ scanners []health.ScannerHealth }
 
@@ -41,7 +54,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	store := telemetry.NewStore(16)
+	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	runtime := policy.NewRuntime(
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
@@ -249,7 +262,7 @@ func TestRegistries(t *testing.T) {
 // without per-stream deadline management the first event written after the
 // timeout kills the connection and the event is silently lost.
 func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
-	store := telemetry.NewStore(16)
+	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
 	h := console.NewHandler(console.Config{
@@ -290,7 +303,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 // dropped by intermediaries (Docker port-forwards, AV web filters) — the
 // console then shows its "no connection" banner although the API is healthy.
 func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
-	store := telemetry.NewStore(16)
+	store := newTelemetryStore(t)
 	h := console.NewHandler(console.Config{
 		Store:        store,
 		Broadcaster:  telemetry.NewBroadcaster(),
@@ -328,7 +341,7 @@ func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
 // Regression: disabled registries have no upstreams configured; the wire
 // shape must stay an array — null crashes the SPA's Registries screen.
 func TestRegistries_NilUpstreams(t *testing.T) {
-	store := telemetry.NewStore(16)
+	store := newTelemetryStore(t)
 	h := console.NewHandler(console.Config{
 		Store:       store,
 		Broadcaster: telemetry.NewBroadcaster(),
@@ -413,7 +426,7 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
 	h := console.NewHandler(console.Config{
-		Store: telemetry.NewStore(8), Broadcaster: telemetry.NewBroadcaster(),
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
 		Policy: rt, Logger: logger,
 	})
 

@@ -1,13 +1,26 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
 )
+
+func TestBuildTelemetryStore_FailsOnUnopenablePath(t *testing.T) {
+	// Parent of the db path is a regular file, so MkdirAll fails → fail fast.
+	f := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
+	cfg := &config.Config{}
+	cfg.Database.Path = filepath.Join(f, "sub", "jo-ei.db")
+	_, err := buildTelemetryStore(cfg, zerolog.Nop())
+	require.Error(t, err)
+}
 
 func TestBuildHandlers_YarnAliasesNPM(t *testing.T) {
 	cfg := &config.Config{}

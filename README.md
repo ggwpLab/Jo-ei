@@ -217,15 +217,18 @@ profile).
 
 ### Persistent telemetry
 
-By default the request feed, KPI counters and quarantine list live in memory and
-reset on restart. Set `database.path` to an embedded SQLite file to persist them
-across restarts, along with **per-calendar-day metrics** exposed at
+The request feed, KPI counters, quarantine list and **per-calendar-day metrics**
+are stored in an embedded SQLite database and are the single source of truth.
+`database.path` is **required** — the proxy fails to start if it is empty or the
+database cannot be opened. Daily metrics are exposed at
 `GET /api/metrics/daily?days=N` (default 30, max 365, newest first).
 
-The proxy hot path never does synchronous database I/O: counters update in
-memory, events are written asynchronously, and aggregates flush every 10s and on
-graceful shutdown. If the database cannot be opened, Jōei logs a warning and runs
-in-memory only — persistence never blocks the proxy.
+The console **Overview** renders these daily metrics as sparklines on the
+Requests, Cache-hit and Blocked KPI cards, with a 7-day / 30-day window toggle.
+
+Each proxied request records its telemetry event in one synchronous local SQLite
+transaction, so state is durable the moment it is written and survives restarts
+and crashes with no flush window. Old rows are pruned hourly in the background.
 
 Retention is configurable via `database.event_retention_days` (default 30) and
 `database.daily_retention_days` (default 365).
