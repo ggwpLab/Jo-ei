@@ -33,6 +33,8 @@ logging:
   level: "debug"
   format: "json"
   output: "stdout"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `
 	dir := t.TempDir()
 	f := filepath.Join(dir, "config.yaml")
@@ -54,6 +56,8 @@ logging:
 func TestLoad_DefaultValues(t *testing.T) {
 	yaml := `server:
   listen: ":8080"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `
 	dir := t.TempDir()
 	f := filepath.Join(dir, "config.yaml")
@@ -86,6 +90,8 @@ malware:
     - type: clamav
       address: "unix:///var/run/clamav/clamd.sock"
       timeout_seconds: 45
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
@@ -106,6 +112,8 @@ registries:
     upstreams:
       - "https://repo1.maven.org/maven2"
       - "https://repo.spring.io/release"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
@@ -136,6 +144,8 @@ server:
 registries:
   npm:
     enabled: false
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 	_, err := config.Load(path)
 	require.NoError(t, err)
@@ -150,6 +160,8 @@ registries:
     enabled: true
     upstreams:
       - "https://rubygems.org"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
@@ -184,6 +196,8 @@ malware:
       address: "tcp:kaspersky:1344"
       service: "avscan"
       timeout_seconds: 15
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 
 	cfg, err := config.Load(path)
@@ -216,6 +230,7 @@ func TestValidate_AcceptsGoodScanners(t *testing.T) {
 		{Type: "clamav", Address: "unix:///s.sock"},
 		{Type: "icap", Address: "tcp:k:1344", Service: "avscan"},
 	}}}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
 	assert.NoError(t, c.Validate())
 }
 
@@ -230,6 +245,8 @@ console:
         password_hash: "$2a$10$abcdefghijklmnopqrstuv"
       - username: alice
         password_hash: "$2a$10$zyxwvutsrqponmlkjihgfe"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
@@ -267,6 +284,17 @@ func TestValidate_RejectsNegativeRetention(t *testing.T) {
 	require.Error(t, c2.Validate())
 }
 
+func TestValidate_RequiresDatabasePath(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = ""
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database.path")
+
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	assert.NoError(t, c.Validate())
+}
+
 func TestLoadConfig_CVESection(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
@@ -287,6 +315,8 @@ policy:
         - "pypi/requests"
       denylist:
         - "npm/evil-pkg"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)

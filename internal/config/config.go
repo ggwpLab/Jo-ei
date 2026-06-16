@@ -62,6 +62,9 @@ func (c *Config) Validate() error {
 	if c.Database.DailyRetentionDays < 0 {
 		return fmt.Errorf("database.daily_retention_days must not be negative")
 	}
+	if c.Database.Path == "" {
+		return fmt.Errorf("database.path is required (telemetry persists to SQLite)")
+	}
 	return nil
 }
 
@@ -164,9 +167,9 @@ type HealthConfig struct {
 	SlowThresholdMS      int `mapstructure:"slow_threshold_ms"`
 }
 
-// DatabaseConfig configures the embedded SQLite persistence layer. An empty Path
-// disables persistence (telemetry runs in-memory only). Retention values ≤ 0 use
-// defaults (events 30 days, daily metrics 365 days).
+// DatabaseConfig configures the embedded SQLite persistence layer. Path is required;
+// telemetry is always persisted to SQLite (no in-memory fallback). Retention values
+// ≤ 0 use defaults (events 30 days, daily metrics 365 days).
 type DatabaseConfig struct {
 	Path               string `mapstructure:"path"`
 	EventRetentionDays int    `mapstructure:"event_retention_days"`
