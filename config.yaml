@@ -60,9 +60,9 @@ cache:
   #   bucket: "joei-cache"
   #   region: "us-east-1"
 
-# Persistent state (optional). Stores telemetry — event history, lifetime
-# counters and per-day metrics — in an embedded SQLite database so they survive
-# restarts. Empty/absent path keeps telemetry in memory only (the default).
+# Persistent state (required). Telemetry — event history, lifetime counters and
+# per-day metrics — is stored in an embedded SQLite database and is the single
+# source of truth. The path must be set; the proxy fails to start without it.
 database:
   path: "/var/lib/jo-ei/jo-ei.db"
   event_retention_days: 30    # prune persisted events older than this
