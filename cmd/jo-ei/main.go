@@ -30,10 +30,6 @@ import (
 
 var cfgFile string
 
-// eventHistorySize is the telemetry ring-buffer capacity backing the console
-// request feed (process-lifetime, in-memory).
-const eventHistorySize = 500
-
 // defaultOSVBaseURL is used for both the live scanner and the console's
 // scanner listing when cve.base_url is unset.
 const defaultOSVBaseURL = "https://api.osv.dev"
@@ -122,7 +118,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// config wins again after restart).
 	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
 
-	store := buildTelemetryStore(cfg, logger)
+	store, err := buildTelemetryStore(cfg, logger)
+	if err != nil {
+		return err
+	}
 	defer func() { _ = store.Close() }()
 	broadcaster := telemetry.NewBroadcaster()
 
@@ -339,32 +338,19 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 	}
 }
 
-// buildTelemetryStore returns a persistent telemetry Store when a database path
-// is configured, falling back to in-memory on any error (telemetry must never
-// block the proxy). The returned store's Close (final flush) is deferred by the
-// caller; Close is a no-op for the in-memory fallback.
-func buildTelemetryStore(cfg *config.Config, logger zerolog.Logger) *telemetry.Store {
-	if cfg.Database.Path == "" {
-		return telemetry.NewStore(eventHistorySize)
-	}
+// buildTelemetryStore opens the SQLite-backed telemetry store. Telemetry is
+// SQLite-only: a missing path is rejected by config validation, and any open
+// or schema error aborts startup (no in-memory fallback).
+func buildTelemetryStore(cfg *config.Config, logger zerolog.Logger) (*telemetry.Store, error) {
 	sdb, err := storage.Open(cfg.Database.Path)
 	if err != nil {
-		logger.Warn().Err(err).Str("path", cfg.Database.Path).
-			Msg("telemetry persistence disabled — could not open database; running in-memory")
-		return telemetry.NewStore(eventHistorySize)
+		return nil, fmt.Errorf("opening telemetry database at %q: %w", cfg.Database.Path, err)
 	}
-	repo, err := telemetry.NewSQLiteRepo(sdb, cfg.Database.EventRetentionDays, cfg.Database.DailyRetentionDays)
+	store, err := telemetry.Open(sdb, cfg.Database.EventRetentionDays, cfg.Database.DailyRetentionDays, logger)
 	if err != nil {
-		logger.Warn().Err(err).Msg("telemetry persistence disabled — schema init failed; running in-memory")
 		_ = sdb.Close()
-		return telemetry.NewStore(eventHistorySize)
-	}
-	store, err := telemetry.NewPersistentStore(eventHistorySize, repo, logger)
-	if err != nil {
-		logger.Warn().Err(err).Msg("telemetry persistence disabled — state load failed; running in-memory")
-		_ = sdb.Close()
-		return telemetry.NewStore(eventHistorySize)
+		return nil, fmt.Errorf("initialising telemetry store: %w", err)
 	}
 	logger.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
-	return store
+	return store, nil
 }

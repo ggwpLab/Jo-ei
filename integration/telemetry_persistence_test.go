@@ -20,13 +20,11 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jo-ei.db")
 	now := time.Now().UTC()
 
-	// First "process": record then close (final flush).
+	// First "process": record (durable at write time), then close.
 	{
 		db, err := storage.Open(path)
 		require.NoError(t, err)
-		repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
-		require.NoError(t, err)
-		s, err := telemetry.NewPersistentStore(500, repo, zerolog.Nop())
+		s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
 		require.NoError(t, err)
 		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
 		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
@@ -40,9 +38,7 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 	db, err := storage.Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
-	require.NoError(t, err)
-	s, err := telemetry.NewPersistentStore(500, repo, zerolog.Nop())
+	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 

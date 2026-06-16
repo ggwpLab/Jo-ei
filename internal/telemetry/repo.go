@@ -1,33 +1,27 @@
 package telemetry
 
-import "github.com/ggwpLab/Jo-ei/internal/proxy"
+import (
+	"time"
 
-// State is the persisted telemetry restored at startup.
-type State struct {
-	// Lifetime holds the cumulative counters. Its StartedAt is ignored on load
-	// (uptime tracks the current process, not stored time).
-	Lifetime Snapshot
-	// HasLifetime is false when no counters row existed yet (fresh DB).
-	HasLifetime bool
-	// Today is the current UTC day's row if one was already persisted, else nil.
-	Today *DailyMetric
-	// Events are the most recent events, oldest first, to reseed the ring buffer.
-	Events []proxy.Event
-}
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+)
 
-// Repo persists and restores telemetry. A nil Repo means in-memory only.
-// Implementations must be safe for use from the Store's single writer goroutine
-// and concurrent DailyMetrics reads from HTTP handlers.
+// Repo persists and retrieves telemetry. SQLite is the single source of truth;
+// there is no in-memory implementation. Implementations are safe for concurrent
+// use (calls serialize on a single SQLite connection).
 type Repo interface {
-	// LoadState restores counters, today's daily row, and up to eventLimit recent
-	// events (oldest first).
-	LoadState(eventLimit int) (State, error)
-	// AppendEvents persists a batch of events.
-	AppendEvents(evs []proxy.Event) error
-	// Flush upserts the cumulative counters row and the given daily rows.
-	Flush(lifetime Snapshot, daily []DailyMetric) error
+	// RecordEvent durably persists one event and applies its tallies to the
+	// cumulative counters and the event's UTC-day metrics row, atomically.
+	RecordEvent(ev proxy.Event) error
+	// Snapshot returns the cumulative counters, stamped with started as StartedAt.
+	Snapshot(started time.Time) (Snapshot, error)
+	// Recent returns up to limit events, newest first. limit <= 0 means all.
+	Recent(limit int) ([]proxy.Event, error)
+	// Quarantine returns active supply-chain holds (newest BLOCK@supply per
+	// eco/pkg@ver whose block_until is after now), newest first.
+	Quarantine(now time.Time) ([]proxy.Event, error)
+	// DailyMetrics returns per-UTC-day rows, newest first (days <= 0 → all).
+	DailyMetrics(days int) ([]DailyMetric, error)
 	// Prune deletes events and daily rows older than the configured retention.
 	Prune() error
-	// DailyMetrics returns per-UTC-day rows, newest first (days<=0 → all).
-	DailyMetrics(days int) ([]DailyMetric, error)
 }

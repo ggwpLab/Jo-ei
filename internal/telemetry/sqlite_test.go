@@ -23,7 +23,7 @@ func newRepo(t *testing.T) telemetry.Repo {
 	return repo
 }
 
-func TestSQLiteRepo_AppendAndLoadEvents(t *testing.T) {
+func TestSQLiteRepo_RecordEventRoundTrips(t *testing.T) {
 	repo := newRepo(t)
 	ev := proxy.Event{
 		RequestID: "r1", Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
@@ -33,77 +33,93 @@ func TestSQLiteRepo_AppendAndLoadEvents(t *testing.T) {
 		PublishedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		BlockUntil:  time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC),
 	}
-	require.NoError(t, repo.AppendEvents([]proxy.Event{ev}))
+	require.NoError(t, repo.RecordEvent(ev))
 
-	st, err := repo.LoadState(100)
+	got, err := repo.Recent(100)
 	require.NoError(t, err)
-	require.Len(t, st.Events, 1)
-	got := st.Events[0]
-	assert.Equal(t, "r1", got.RequestID)
-	assert.Equal(t, "left-pad", got.Package)
-	assert.Equal(t, proxy.VerdictBlock, got.Verdict)
-	assert.Equal(t, []string{"supply_chain"}, got.BlockedBy)
-	assert.True(t, got.Time.Equal(ev.Time))
-	assert.True(t, got.BlockUntil.Equal(ev.BlockUntil))
+	require.Len(t, got, 1)
+	assert.Equal(t, "r1", got[0].RequestID)
+	assert.Equal(t, "left-pad", got[0].Package)
+	assert.Equal(t, proxy.VerdictBlock, got[0].Verdict)
+	assert.Equal(t, []string{"supply_chain"}, got[0].BlockedBy)
+	assert.True(t, got[0].Time.Equal(ev.Time))
+	assert.True(t, got[0].BlockUntil.Equal(ev.BlockUntil))
 }
 
-func TestSQLiteRepo_FlushAndLoadCountersAndDaily(t *testing.T) {
+func TestSQLiteRepo_RecordEventAccumulatesCountersAndDaily(t *testing.T) {
 	repo := newRepo(t)
-	lifetime := telemetry.Snapshot{
-		Requests: 10, CacheHits: 4, Blocked: 3, Errors: 1,
-		SupplyBlocked: 2, CVEBlocked: 1,
-		Gates: map[string]telemetry.GateCounts{
-			proxy.GateSupply: {Pass: 7, Block: 2},
-			proxy.GateCVE:    {Pass: 5, Block: 1},
-		},
-	}
-	today := time.Now().UTC().Format("2006-01-02")
-	daily := []telemetry.DailyMetric{{
-		Day: today, Requests: 10, CacheHits: 4, Blocked: 3,
-		Gates: map[string]telemetry.GateCounts{proxy.GateSupply: {Pass: 7, Block: 2}},
-	}}
-	require.NoError(t, repo.Flush(lifetime, daily))
+	today := time.Now().UTC()
+	require.NoError(t, repo.RecordEvent(proxy.Event{Time: today, Verdict: proxy.VerdictCache, Gate: proxy.GateCache}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{Time: today, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
+		Reason: "package_younger_than_min_age", Ecosystem: "npm", Package: "p", Version: "1"}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{Time: today, Verdict: proxy.VerdictBlock, Gate: proxy.GateCVE, Reason: "cve_found"}))
 
-	st, err := repo.LoadState(100)
+	started := time.Now()
+	snap, err := repo.Snapshot(started)
 	require.NoError(t, err)
-	require.True(t, st.HasLifetime)
-	assert.Equal(t, uint64(10), st.Lifetime.Requests)
-	assert.Equal(t, uint64(2), st.Lifetime.SupplyBlocked)
-	assert.Equal(t, telemetry.GateCounts{Pass: 7, Block: 2}, st.Lifetime.Gates[proxy.GateSupply])
-	require.NotNil(t, st.Today)
-	assert.Equal(t, today, st.Today.Day)
-	assert.Equal(t, uint64(10), st.Today.Requests)
+	assert.True(t, snap.StartedAt.Equal(started))
+	assert.Equal(t, uint64(3), snap.Requests)
+	assert.Equal(t, uint64(1), snap.CacheHits)
+	assert.Equal(t, uint64(2), snap.Blocked)
+	assert.Equal(t, uint64(1), snap.SupplyBlocked)
+	assert.Equal(t, uint64(1), snap.CVEBlocked)
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, snap.Gates[proxy.GateCache])
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 1}, snap.Gates[proxy.GateSupply])
+	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[proxy.GateCVE])
 
-	lifetime.Requests = 20
-	daily[0].Requests = 20
-	require.NoError(t, repo.Flush(lifetime, daily))
 	rows, err := repo.DailyMetrics(0)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, uint64(20), rows[0].Requests)
-
-	st, err = repo.LoadState(100)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(20), st.Lifetime.Requests)
+	assert.Equal(t, today.Format("2006-01-02"), rows[0].Day)
+	assert.Equal(t, uint64(3), rows[0].Requests)
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 1}, rows[0].Gates[proxy.GateSupply])
 }
 
-func TestSQLiteRepo_LoadEmptyIsZeroValue(t *testing.T) {
+func TestSQLiteRepo_SnapshotEmptyIsZeroValue(t *testing.T) {
 	repo := newRepo(t)
-	st, err := repo.LoadState(100)
+	snap, err := repo.Snapshot(time.Now())
 	require.NoError(t, err)
-	assert.False(t, st.HasLifetime)
-	assert.Nil(t, st.Today)
-	assert.Empty(t, st.Events)
+	assert.Equal(t, uint64(0), snap.Requests)
+	assert.NotNil(t, snap.Gates)
+	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[proxy.GateSupply])
+
+	recent, err := repo.Recent(100)
+	require.NoError(t, err)
+	assert.Empty(t, recent)
+}
+
+func TestSQLiteRepo_QuarantineDedupesBeforeExpiry(t *testing.T) {
+	repo := newRepo(t)
+	now := time.Now()
+	mk := func(id, ver string, until time.Time) proxy.Event {
+		return proxy.Event{
+			RequestID: id, Time: time.Now(), Ecosystem: "npm", Package: "p", Version: ver,
+			Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, BlockUntil: until,
+		}
+	}
+	require.NoError(t, repo.RecordEvent(mk("r1", "1", now.Add(time.Hour))))
+	require.NoError(t, repo.RecordEvent(mk("r2", "1", now.Add(2*time.Hour)))) // newer, same key
+
+	q, err := repo.Quarantine(now)
+	require.NoError(t, err)
+	require.Len(t, q, 1)
+	assert.Equal(t, "r2", q[0].RequestID)
+
+	require.NoError(t, repo.RecordEvent(mk("r3", "1", now.Add(-time.Minute)))) // newest expired
+	q, err = repo.Quarantine(now)
+	require.NoError(t, err)
+	assert.Empty(t, q)
 }
 
 func TestSQLiteRepo_DailyMetricsLimit(t *testing.T) {
 	repo := newRepo(t)
-	d := []telemetry.DailyMetric{
-		{Day: "2026-01-01", Requests: 1},
-		{Day: "2026-01-02", Requests: 2},
-		{Day: "2026-01-03", Requests: 3},
+	for _, d := range []time.Time{
+		time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 3, 12, 0, 0, 0, time.UTC),
+	} {
+		require.NoError(t, repo.RecordEvent(proxy.Event{Time: d, Verdict: proxy.VerdictPass, Gate: proxy.GateMalware}))
 	}
-	require.NoError(t, repo.Flush(telemetry.Snapshot{}, d))
 	rows, err := repo.DailyMetrics(2)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
@@ -118,13 +134,12 @@ func TestSQLiteRepo_PruneRemovesOldEvents(t *testing.T) {
 	repo, err := telemetry.NewSQLiteRepo(db, 1, 1) // 1-day retention
 	require.NoError(t, err)
 
-	old := proxy.Event{RequestID: "old", Time: time.Now().Add(-72 * time.Hour), Verdict: proxy.VerdictPass, Gate: proxy.GateMalware}
-	fresh := proxy.Event{RequestID: "fresh", Time: time.Now(), Verdict: proxy.VerdictPass, Gate: proxy.GateMalware}
-	require.NoError(t, repo.AppendEvents([]proxy.Event{old, fresh}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "old", Time: time.Now().Add(-72 * time.Hour), Verdict: proxy.VerdictPass, Gate: proxy.GateMalware}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "fresh", Time: time.Now(), Verdict: proxy.VerdictPass, Gate: proxy.GateMalware}))
 	require.NoError(t, repo.Prune())
 
-	st, err := repo.LoadState(100)
+	got, err := repo.Recent(100)
 	require.NoError(t, err)
-	require.Len(t, st.Events, 1)
-	assert.Equal(t, "fresh", st.Events[0].RequestID)
+	require.Len(t, got, 1)
+	assert.Equal(t, "fresh", got[0].RequestID)
 }
