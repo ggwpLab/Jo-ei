@@ -299,13 +299,11 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
 	query += " ORDER BY ts DESC, id DESC"
-	// Fetch one extra row to detect whether a next page exists, without
-	// requiring a second COUNT query.
-	fetchLimit := limit
 	if limit > 0 {
-		fetchLimit = limit + 1
+		// Fetch one extra row (the sentinel) to detect whether a next page
+		// exists, without requiring a second COUNT query.
 		query += " LIMIT ?"
-		args = append(args, fetchLimit)
+		args = append(args, limit+1)
 	}
 
 	rows, err := r.db.Query(query, args...)
