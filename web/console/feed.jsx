@@ -50,6 +50,10 @@ function LiveFeed({ openThreat }) {
   const [cursor, setCursor] = useState("");
   const [loading, setLoading] = useState(false);
   const [histErr, setHistErr] = useState(false);
+  // Monotonic token: bumped whenever the filter changes, so an in-flight
+  // first-page or "Show more" fetch from a previous filter is ignored when it
+  // resolves (otherwise a late response could write into the new filter's rows).
+  const reqToken = useRef(0);
 
   const history = !!HISTORY_FILTERS[filter];
 
@@ -71,35 +75,40 @@ function LiveFeed({ openThreat }) {
   }, [paused]);
 
   // Entering a history filter loads its first page; leaving one clears the
-  // history state so a live filter shows the live window again.
+  // history state so a live filter shows the live window again. Keyed on
+  // `filter` only (history is derived from it).
   useEffect(() => {
+    const token = ++reqToken.current; // invalidate any prior in-flight fetch
     if (!history) {
       setHistRows([]); setCursor(""); setHistErr(false); setLoading(false);
       return;
     }
-    let cancelled = false;
     setLoading(true); setHistErr(false); setHistRows([]); setCursor("");
     JOEI.pageRequests({ verdict: filter, cursor: "", limit: PAGE_SIZE })
       .then(({ rows: got, nextCursor }) => {
-        if (cancelled) return;
+        if (token !== reqToken.current) return;
         setHistRows(got); setCursor(nextCursor);
       })
-      .catch(() => { if (!cancelled) setHistErr(true); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [history, filter]);
+      .catch(() => { if (token === reqToken.current) setHistErr(true); })
+      .finally(() => { if (token === reqToken.current) setLoading(false); });
+  }, [filter]);
 
   const loadMore = () => {
     if (loading || !cursor) return;
+    const token = reqToken.current; // tie this fetch to the current filter
+    setHistErr(false);
     setLoading(true);
     JOEI.pageRequests({ verdict: filter, cursor, limit: PAGE_SIZE })
       .then(({ rows: got, nextCursor }) => {
+        if (token !== reqToken.current) return; // filter changed mid-flight
         setHistRows((rs) => rs.concat(got));
         setCursor(nextCursor);
       })
-      .catch(() => setHistErr(true))
-      .finally(() => setLoading(false));
+      .catch(() => { if (token === reqToken.current) setHistErr(true); })
+      .finally(() => { if (token === reqToken.current) setLoading(false); });
   };
+
+  const hasMore = cursor !== "";
 
   const source = history ? histRows : rows;
   const shown = source.filter((r) => {
@@ -156,7 +165,7 @@ function LiveFeed({ openThreat }) {
           <span>GATE</span><span style={{ textAlign: "right" }}>LATENCY</span><span>REQUEST ID</span><span></span>
         </div>
 
-        {histErr ? (
+        {histErr && histRows.length === 0 ? (
           <div className="empty">
             <span className="e-kanji">録</span>
             <div className="e-title">Could not load history</div>
@@ -180,13 +189,20 @@ function LiveFeed({ openThreat }) {
           ))
         )}
 
-        {history && !histErr && (cursor || loading) && (
+        {history && histErr && histRows.length > 0 ? (
+          // A page already loaded but "Show more" failed: keep the rows visible
+          // and offer a retry instead of replacing the whole view with an error.
           <div style={{ padding: "12px", textAlign: "center", borderTop: "1px solid var(--washi-faint)" }}>
-            <button className="btn sm ghost" onClick={loadMore} disabled={loading || !cursor}>
+            <span className="muted mono" style={{ fontSize: 12, marginRight: 8 }}>Couldn't load more.</span>
+            <button className="btn sm ghost" onClick={loadMore} disabled={loading}>Retry</button>
+          </div>
+        ) : history && !histErr && (hasMore || loading) ? (
+          <div style={{ padding: "12px", textAlign: "center", borderTop: "1px solid var(--washi-faint)" }}>
+            <button className="btn sm ghost" onClick={loadMore} disabled={loading || !hasMore}>
               {loading ? "Loading…" : "Show more"}
             </button>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
