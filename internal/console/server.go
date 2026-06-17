@@ -188,12 +188,32 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	events := s.cfg.Store.Recent(limit)
+
+	verdict := r.URL.Query().Get("verdict")
+	if verdict != "" && !validVerdict(verdict) {
+		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_verdict"})
+		return
+	}
+
+	var cursor telemetry.Cursor
+	if q := r.URL.Query().Get("cursor"); q != "" {
+		c, ok := parseCursor(q)
+		if !ok {
+			s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_cursor"})
+			return
+		}
+		cursor = c
+	}
+
+	events, next := s.cfg.Store.Page(verdict, cursor, limit)
 	out := make([]eventJSON, 0, len(events))
 	for _, ev := range events {
 		out = append(out, toEventJSON(ev))
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"requests": out})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"requests":    out,
+		"next_cursor": encodeCursor(next),
+	})
 }
 
 func (s *server) quarantine(w http.ResponseWriter, _ *http.Request) {

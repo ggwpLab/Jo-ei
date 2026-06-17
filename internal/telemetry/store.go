@@ -118,6 +118,19 @@ func (s *Store) Recent(limit int) []proxy.Event {
 	return evs
 }
 
+// Page returns up to limit events matching verdict (empty = any), newest-first,
+// older than cursor (zero cursor = newest), plus the cursor for the next call
+// (zero when there are no more pages). A read error logs and yields nil with a
+// zero cursor, so the console degrades to an empty page rather than failing.
+func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor) {
+	evs, next, err := s.repo.Page(verdict, cursor, limit)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("telemetry: paging events")
+		return nil, Cursor{}
+	}
+	return evs, next
+}
+
 // Quarantine returns the active supply-chain holds. A read error logs and
 // yields nil.
 func (s *Store) Quarantine(now time.Time) []proxy.Event {

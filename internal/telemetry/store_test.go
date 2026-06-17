@@ -227,3 +227,20 @@ func TestStore_CloseIdempotent(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.NoError(t, s.Close()) // no-op (also called again by t.Cleanup)
 }
+
+func TestStorePageFiltersAndPages(t *testing.T) {
+	s := newStore(t)
+	s.Record(evt("pass1", proxy.VerdictPass, proxy.GateSupply, "ok"))
+	s.Record(evt("block1", proxy.VerdictBlock, proxy.GateCVE, "cve_found"))
+	s.Record(evt("block2", proxy.VerdictBlock, proxy.GateSupply, "young"))
+
+	evs, next := s.Page(proxy.VerdictBlock, telemetry.Cursor{}, 1)
+	require.Len(t, evs, 1)
+	assert.Equal(t, "block2", evs[0].RequestID, "newest first")
+	require.False(t, next.Zero(), "more pages remain")
+
+	evs2, next2 := s.Page(proxy.VerdictBlock, next, 1)
+	require.Len(t, evs2, 1)
+	assert.Equal(t, "block1", evs2[0].RequestID)
+	assert.True(t, next2.Zero(), "last page")
+}

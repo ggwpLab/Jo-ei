@@ -137,6 +137,21 @@
     fire("joei:data");
   }
 
+  // Fetch one page of history filtered by verdict (server-paged). cursor ""
+  // starts from the newest matching event. Returns revived rows (ts as Date,
+  // cves/supply expanded) plus nextCursor ("" when there are no more pages).
+  async function pageRequests({ verdict, cursor, limit }) {
+    const params = new URLSearchParams();
+    if (verdict) params.set("verdict", verdict);
+    if (cursor) params.set("cursor", cursor);
+    if (limit) params.set("limit", String(limit));
+    const data = await getJSON("/api/requests?" + params.toString());
+    return {
+      rows: (data.requests || []).map(reviveEvent),
+      nextCursor: data.next_cursor || "",
+    };
+  }
+
   async function savePolicy(p) {
     const body = {
       mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on,
@@ -183,6 +198,7 @@
 
   J.load = load;
   J.savePolicy = savePolicy;
+  J.pageRequests = pageRequests;
 
   // Initial load; fire joei:data even on failure so the app shell can leave
   // the loader and show the connection banner. J.ready marks the attempt as

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
@@ -56,6 +57,8 @@ CREATE TABLE IF NOT EXISTS counters (
 );
 `, `
 CREATE INDEX IF NOT EXISTS idx_events_verdict_gate ON events(verdict, gate);
+`, `
+CREATE INDEX IF NOT EXISTS idx_events_verdict_ts_id ON events(verdict, ts, id);
 `}
 
 const defaultEventRetentionDays = 30
@@ -275,6 +278,77 @@ func (r *sqliteRepo) Recent(limit int) ([]proxy.Event, error) {
 		out = append(out, ev)
 	}
 	return out, rows.Err()
+}
+
+func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor, error) {
+	var (
+		conds []string
+		args  []any
+	)
+	if verdict != "" {
+		conds = append(conds, "verdict = ?")
+		args = append(args, verdict)
+	}
+	if !cursor.Zero() {
+		// Keyset: rows strictly older than the cursor under (ts DESC, id DESC).
+		conds = append(conds, "(ts < ? OR (ts = ? AND id < ?))")
+		args = append(args, cursor.TS.UnixNano(), cursor.TS.UnixNano(), cursor.ID)
+	}
+	query := "SELECT id, ts, detail_json FROM events"
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY ts DESC, id DESC"
+	if limit > 0 {
+		// Fetch one extra row (the sentinel) to detect whether a next page
+		// exists, without requiring a second COUNT query.
+		query += " LIMIT ?"
+		args = append(args, limit+1)
+	}
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, Cursor{}, err
+	}
+	defer rows.Close()
+
+	var (
+		out     []proxy.Event
+		next    Cursor
+		scanned int
+	)
+	for rows.Next() {
+		var (
+			id     int64
+			tsNano int64
+			blob   string
+		)
+		if err := rows.Scan(&id, &tsNano, &blob); err != nil {
+			return nil, Cursor{}, err
+		}
+		scanned++
+		// The (limit+1)th row is the look-ahead sentinel: it confirms there is
+		// a next page but must not be included in the output.
+		if limit > 0 && scanned > limit {
+			break
+		}
+		// Advance the cursor for every scanned row (even one that fails to
+		// unmarshal) so paging never stalls on a single bad blob.
+		next = Cursor{TS: time.Unix(0, tsNano), ID: id}
+		var ev proxy.Event
+		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
+			continue
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, Cursor{}, err
+	}
+	// If we saw fewer rows than the look-ahead limit, we reached the end.
+	if limit > 0 && scanned <= limit {
+		next = Cursor{}
+	}
+	return out, next, nil
 }
 
 func (r *sqliteRepo) Quarantine(now time.Time) ([]proxy.Event, error) {
