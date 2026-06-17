@@ -11,11 +11,39 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
+// npmLicense decodes npm's polymorphic "license" field. Modern packages use a
+// string (an SPDX expression, e.g. "ISC"); legacy/historical versions use an
+// object {"type":"MIT","url":"..."} or other shapes. The value is purely
+// informational (no policy decision reads it), and FetchMetadata decodes every
+// version in the document, so decoding must never fail the whole response — an
+// unrecognized shape yields an empty license.
+type npmLicense string
+
+func (l *npmLicense) UnmarshalJSON(data []byte) error {
+	// Modern form: a plain string (also handles JSON null → "").
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		*l = npmLicense(s)
+		return nil
+	}
+	// Legacy object form: {"type":"MIT","url":"..."}.
+	var obj struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &obj) == nil {
+		*l = npmLicense(obj.Type)
+		return nil
+	}
+	// Anything else (e.g. an array of license objects): drop it, do not error.
+	*l = ""
+	return nil
+}
+
 // npmMetadata is the subset of the npm registry document we consume.
 type npmMetadata struct {
 	Time     map[string]string `json:"time"`
 	Versions map[string]struct {
-		License string `json:"license"`
+		License npmLicense `json:"license"`
 		Dist    struct {
 			Shasum string `json:"shasum"`
 		} `json:"dist"`
@@ -128,7 +156,7 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *pr
 	}
 	return &proxy.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
-		License:     versionInfo.License,
+		License:     string(versionInfo.License),
 		Checksum:    versionInfo.Dist.Shasum,
 	}, nil
 }
