@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS counters (
 );
 `, `
 CREATE INDEX IF NOT EXISTS idx_events_verdict_gate ON events(verdict, gate);
+`, `
+CREATE INDEX IF NOT EXISTS idx_events_verdict_ts_id ON events(verdict, ts, id);
 `}
 
 const defaultEventRetentionDays = 30
@@ -297,9 +299,13 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
 	query += " ORDER BY ts DESC, id DESC"
+	// Fetch one extra row to detect whether a next page exists, without
+	// requiring a second COUNT query.
+	fetchLimit := limit
 	if limit > 0 {
+		fetchLimit = limit + 1
 		query += " LIMIT ?"
-		args = append(args, limit)
+		args = append(args, fetchLimit)
 	}
 
 	rows, err := r.db.Query(query, args...)
@@ -323,6 +329,11 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 			return nil, Cursor{}, err
 		}
 		scanned++
+		// The (limit+1)th row is the look-ahead sentinel: it confirms there is
+		// a next page but must not be included in the output.
+		if limit > 0 && scanned > limit {
+			break
+		}
 		// Advance the cursor for every scanned row (even one that fails to
 		// unmarshal) so paging never stalls on a single bad blob.
 		next = Cursor{TS: time.Unix(0, tsNano), ID: id}
@@ -335,8 +346,8 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 	if err := rows.Err(); err != nil {
 		return nil, Cursor{}, err
 	}
-	// A short page (fewer rows than asked) means we reached the end: no cursor.
-	if limit > 0 && scanned < limit {
+	// If we saw fewer rows than the look-ahead limit, we reached the end.
+	if limit > 0 && scanned <= limit {
 		next = Cursor{}
 	}
 	return out, next, nil

@@ -32,6 +32,8 @@ type Repo interface {
 	// newest-first, strictly older than cursor. A zero cursor starts at the
 	// newest matching event. The second return is the cursor of the last row
 	// returned; it is the zero Cursor when there are no more pages.
+	// When limit <= 0 all matching rows are returned in one call and the
+	// returned cursor, though non-zero, points past no further pages.
 	Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor, error)
 	// Quarantine returns active supply-chain holds (newest BLOCK@supply per
 	// eco/pkg@ver whose block_until is after now), newest first.
