@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -142,4 +143,60 @@ func TestSQLiteRepo_PruneRemovesOldEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "fresh", got[0].RequestID)
+}
+
+func TestSQLiteRepo_PagePagesAllWithoutGapsOrDupes(t *testing.T) {
+	repo := newRepo(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// 5 events sharing the SAME ts to exercise the (ts, id) tiebreak.
+	for i := 1; i <= 5; i++ {
+		require.NoError(t, repo.RecordEvent(proxy.Event{
+			RequestID: fmt.Sprintf("r%d", i), Time: base,
+			Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
+			Ecosystem: "npm", Package: "p", Version: "1",
+		}))
+	}
+
+	var ids []string
+	cursor := telemetry.Cursor{}
+	for {
+		evs, next, err := repo.Page(proxy.VerdictBlock, cursor, 2)
+		require.NoError(t, err)
+		for _, ev := range evs {
+			ids = append(ids, ev.RequestID)
+		}
+		if next.Zero() {
+			break
+		}
+		cursor = next
+	}
+	// Newest-first, every row exactly once.
+	assert.Equal(t, []string{"r5", "r4", "r3", "r2", "r1"}, ids)
+}
+
+func TestSQLiteRepo_PageFiltersByVerdict(t *testing.T) {
+	repo := newRepo(t)
+	now := time.Now()
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "pass1", Time: now, Verdict: proxy.VerdictPass, Gate: proxy.GateSupply}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "err1", Time: now.Add(time.Second), Verdict: proxy.VerdictError, Gate: proxy.GateCache}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "block1", Time: now.Add(2 * time.Second), Verdict: proxy.VerdictBlock, Gate: proxy.GateCVE}))
+
+	evs, next, err := repo.Page(proxy.VerdictError, telemetry.Cursor{}, 10)
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	assert.Equal(t, "err1", evs[0].RequestID)
+	assert.True(t, next.Zero(), "single matching row is the last page")
+}
+
+func TestSQLiteRepo_PageEmptyVerdictReturnsAllNewestFirst(t *testing.T) {
+	repo := newRepo(t)
+	now := time.Now()
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "a", Time: now, Verdict: proxy.VerdictPass, Gate: proxy.GateSupply}))
+	require.NoError(t, repo.RecordEvent(proxy.Event{RequestID: "b", Time: now.Add(time.Second), Verdict: proxy.VerdictBlock, Gate: proxy.GateCVE}))
+
+	evs, next, err := repo.Page("", telemetry.Cursor{}, 10)
+	require.NoError(t, err)
+	require.Len(t, evs, 2)
+	assert.Equal(t, "b", evs[0].RequestID, "newest first")
+	assert.True(t, next.Zero())
 }
