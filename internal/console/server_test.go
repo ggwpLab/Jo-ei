@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -439,4 +440,49 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 	// No authenticating middleware in front, so the log line must not carry a
 	// "user" field (and must not panic building it).
 	assert.NotContains(t, logBuf.String(), `"user"`)
+}
+
+func TestRequestsFilterByVerdictAndPage(t *testing.T) {
+	f := newFixture(t)
+	f.store.Record(proxy.Event{RequestID: "pass1", Verdict: proxy.VerdictPass, Gate: proxy.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
+	f.store.Record(proxy.Event{RequestID: "block1", Verdict: proxy.VerdictBlock, Gate: proxy.GateCVE, Time: time.Now().Add(time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+	f.store.Record(proxy.Event{RequestID: "block2", Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, Time: time.Now().Add(2 * time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+
+	var page1 struct {
+		Requests []struct {
+			RequestID string `json:"request_id"`
+		} `json:"requests"`
+		NextCursor string `json:"next_cursor"`
+	}
+	code := getJSON(t, f.srv.URL+"/api/requests?verdict=BLOCK&limit=1", &page1)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, page1.Requests, 1)
+	assert.Equal(t, "block2", page1.Requests[0].RequestID, "newest blocked first")
+	require.NotEmpty(t, page1.NextCursor, "more blocked rows remain")
+
+	var page2 struct {
+		Requests []struct {
+			RequestID string `json:"request_id"`
+		} `json:"requests"`
+		NextCursor string `json:"next_cursor"`
+	}
+	code = getJSON(t, f.srv.URL+"/api/requests?verdict=BLOCK&limit=1&cursor="+url.QueryEscape(page1.NextCursor), &page2)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, page2.Requests, 1)
+	assert.Equal(t, "block1", page2.Requests[0].RequestID)
+	assert.Empty(t, page2.NextCursor, "no more pages")
+}
+
+func TestRequestsRejectsBadVerdictAndCursor(t *testing.T) {
+	f := newFixture(t)
+
+	resp, err := http.Get(f.srv.URL + "/api/requests?verdict=BOGUS")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp, err = http.Get(f.srv.URL + "/api/requests?cursor=not-a-cursor")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
