@@ -476,13 +476,21 @@ func TestRequestsFilterByVerdictAndPage(t *testing.T) {
 func TestRequestsRejectsBadVerdictAndCursor(t *testing.T) {
 	f := newFixture(t)
 
-	resp, err := http.Get(f.srv.URL + "/api/requests?verdict=BOGUS")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	// Assert the wire-contract error keys, not just the status code, so a future
+	// rename of "invalid_verdict"/"invalid_cursor" is caught.
+	badRequest := func(path, wantErr string) {
+		t.Helper()
+		var body struct {
+			Error string `json:"error"`
+		}
+		resp, err := http.Get(f.srv.URL + path)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, wantErr, body.Error)
+	}
 
-	resp, err = http.Get(f.srv.URL + "/api/requests?cursor=not-a-cursor")
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	badRequest("/api/requests?verdict=BOGUS", "invalid_verdict")
+	badRequest("/api/requests?cursor=not-a-cursor", "invalid_cursor")
 }
