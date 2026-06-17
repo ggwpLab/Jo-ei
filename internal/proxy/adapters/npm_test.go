@@ -132,6 +132,92 @@ func TestNPMAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	assert.WithinDuration(t, published, meta.PublishedAt, time.Second)
 }
 
+// Regression: npm's "license" field is polymorphic. Modern versions use a
+// string, but legacy/historical versions in the SAME document use an object
+// {"type","url"}. FetchMetadata decodes the whole versions map, so an older,
+// unrequested version carrying the legacy object form must not fail the fetch
+// (the trigger for "decoding npm response: json: cannot unmarshal object into
+// Go struct field .versions.license of type string").
+func TestNPMAdapter_FetchMetadata_LegacyObjectLicenseInOtherVersion(t *testing.T) {
+	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"time": map[string]any{
+				"5.1.9": publishedAt.Format(time.RFC3339),
+			},
+			"versions": map[string]any{
+				// Requested version: modern string license.
+				"5.1.9": map[string]any{
+					"license": "ISC",
+					"dist":    map[string]any{"shasum": "deadbeef"},
+				},
+				// Historical version: legacy object license — must not break decode.
+				"0.2.0": map[string]any{
+					"license": map[string]any{"type": "MIT", "url": "https://example.com/LICENSE"},
+					"dist":    map[string]any{"shasum": "0ldsha"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := adapters.NewNPMAdapter([]string{srv.URL})
+	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "minimatch", Version: "5.1.9"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, "ISC", meta.License)
+	assert.Equal(t, "deadbeef", meta.Checksum)
+}
+
+// The requested version itself may carry the legacy object license; extract the
+// "type" so the (informational) license is still populated.
+func TestNPMAdapter_FetchMetadata_ObjectLicenseOnRequestedVersion(t *testing.T) {
+	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"time": map[string]any{"1.0.0": publishedAt.Format(time.RFC3339)},
+			"versions": map[string]any{
+				"1.0.0": map[string]any{
+					"license": map[string]any{"type": "MIT", "url": "https://example.com"},
+					"dist":    map[string]any{"shasum": "abc"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := adapters.NewNPMAdapter([]string{srv.URL})
+	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, "MIT", meta.License)
+}
+
+// An unrecognized license shape (e.g. the legacy "licenses" array form embedded
+// under "license") must degrade to an empty license, never fail the decode.
+func TestNPMAdapter_FetchMetadata_UnknownLicenseShapeDegrades(t *testing.T) {
+	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"time": map[string]any{"1.0.0": publishedAt.Format(time.RFC3339)},
+			"versions": map[string]any{
+				"1.0.0": map[string]any{
+					"license": []any{map[string]any{"type": "MIT"}, map[string]any{"type": "Apache-2.0"}},
+					"dist":    map[string]any{"shasum": "abc"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := adapters.NewNPMAdapter([]string{srv.URL})
+	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, "", meta.License)
+	assert.Equal(t, "abc", meta.Checksum)
+}
+
 func TestNPMAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org/", "https://mirror.example.org"})
 	r := httptest.NewRequest(http.MethodGet, "/lodash/-/lodash-1.0.0.tgz", nil)
