@@ -25,7 +25,7 @@ func TestEncodeCursorZeroIsEmpty(t *testing.T) {
 }
 
 func TestParseCursorRejectsGarbage(t *testing.T) {
-	for _, bad := range []string{"", "abc", "123", "1:2:3", "x:2", "1:y", "1:0", "1:-3"} {
+	for _, bad := range []string{"", "abc", "123", "1:2:3", "x:2", "1:y", "1:0", "1:-3", "0:5", "-5:5"} {
 		_, ok := parseCursor(bad)
 		assert.False(t, ok, "cursor %q must be rejected", bad)
 	}
