@@ -14,11 +14,22 @@ type PackageRef struct {
 	Ecosystem string // "pypi", "npm", "maven", "go"
 	Name      string
 	Version   string
+	// Classifier distinguishes secondary artifacts that share the same
+	// coordinates (Maven "sources"/"javadoc" jars, etc.). Empty for the main
+	// artifact and for ecosystems without classifiers. It participates in the
+	// cache key but not in CVE/supply-chain lookups, which key on Name+Version.
+	Classifier string
 }
 
-// Key returns a stable cache/log key for this package reference.
+// Key returns a stable cache/log key for this package reference. The classifier
+// is appended only when non-empty, so main artifacts and non-maven ecosystems
+// keep their historical keys (and existing cache entries stay valid).
 func (r PackageRef) Key() string {
-	return fmt.Sprintf("%s/%s@%s", r.Ecosystem, r.Name, r.Version)
+	key := fmt.Sprintf("%s/%s@%s", r.Ecosystem, r.Name, r.Version)
+	if r.Classifier != "" {
+		key += "?classifier=" + r.Classifier
+	}
+	return key
 }
 
 // PackageMetadata contains resolved metadata from the upstream registry.
