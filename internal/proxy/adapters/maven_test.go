@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,56 @@ func TestMavenAdapter_NormalizeRequest_Jar(t *testing.T) {
 	assert.Equal(t, "maven", ref.Ecosystem)
 	assert.Equal(t, "com.google.guava:guava", ref.Name)
 	assert.Equal(t, "31.0.1-jre", ref.Version)
+}
+
+func TestMavenAdapter_NormalizeRequest_Classifier(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+
+	cases := []struct {
+		path           string
+		wantName       string
+		wantVersion    string
+		wantClassifier string
+	}{
+		{
+			"/com/fasterxml/jackson/core/jackson-annotations/2.18.5/jackson-annotations-2.18.5-sources.jar",
+			"com.fasterxml.jackson.core:jackson-annotations", "2.18.5", "sources",
+		},
+		{
+			"/com/fasterxml/jackson/core/jackson-annotations/2.18.5/jackson-annotations-2.18.5-javadoc.jar",
+			"com.fasterxml.jackson.core:jackson-annotations", "2.18.5", "javadoc",
+		},
+		{
+			// No classifier — the main artifact.
+			"/com/fasterxml/jackson/core/jackson-annotations/2.18.5/jackson-annotations-2.18.5.jar",
+			"com.fasterxml.jackson.core:jackson-annotations", "2.18.5", "",
+		},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, c.path, nil)
+		ref, ok := a.NormalizeRequest(r)
+		require.True(t, ok, "path %q", c.path)
+		assert.Equal(t, c.wantName, ref.Name, "path %q", c.path)
+		assert.Equal(t, c.wantVersion, ref.Version, "path %q", c.path)
+		assert.Equal(t, c.wantClassifier, ref.Classifier, "path %q", c.path)
+	}
+}
+
+func TestMavenAdapter_NormalizeRequest_ClassifierYieldsDistinctCacheKeys(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+	base := "/com/example/foo/1.0/foo-1.0"
+
+	mainReq := httptest.NewRequest(http.MethodGet, base+".jar", nil)
+	srcReq := httptest.NewRequest(http.MethodGet, base+"-sources.jar", nil)
+
+	mainRef, ok := a.NormalizeRequest(mainReq)
+	require.True(t, ok)
+	srcRef, ok := a.NormalizeRequest(srcReq)
+	require.True(t, ok)
+
+	// The whole point: the sources jar must not collide with the main jar in
+	// the artifact cache, which is keyed on PackageRef.Key().
+	assert.NotEqual(t, mainRef.Key(), srcRef.Key())
 }
 
 func TestMavenAdapter_NormalizeRequest_PomNotIntercepted(t *testing.T) {
@@ -101,6 +152,43 @@ func TestMavenAdapter_FetchMetadata_WarUsesPomHead(t *testing.T) {
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
+}
+
+func TestMavenAdapter_FetchMetadata_RetriesOn429ThenSucceeds(t *testing.T) {
+	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			// First attempt is rate-limited; Retry-After asks for a tiny delay.
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := adapters.NewMavenAdapter([]string{srv.URL})
+	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:foo", Version: "1.0"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
+	assert.GreaterOrEqual(t, calls.Load(), int32(2), "should have retried after 429")
+}
+
+func TestMavenAdapter_FetchMetadata_429ExhaustedReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	a := adapters.NewMavenAdapter([]string{srv.URL})
+	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:foo", Version: "1.0"}
+	_, err := a.FetchMetadata(context.Background(), ref)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "429")
 }
 
 func TestMavenAdapter_FetchMetadata_NonOKReturnsError(t *testing.T) {

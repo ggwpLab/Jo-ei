@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,11 +41,16 @@ func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, boo
 	if !hasMavenArtifactExt(r.URL.Path) {
 		return nil, false
 	}
-	name, version, ok := parseMavenPath(r.URL.Path)
+	name, version, classifier, ok := parseMavenPath(r.URL.Path)
 	if !ok {
 		return nil, false
 	}
-	return &proxy.PackageRef{Ecosystem: "maven", Name: name, Version: version}, true
+	return &proxy.PackageRef{
+		Ecosystem:  "maven",
+		Name:       name,
+		Version:    version,
+		Classifier: classifier,
+	}, true
 }
 
 func hasMavenArtifactExt(path string) bool {
@@ -57,19 +63,42 @@ func hasMavenArtifactExt(path string) bool {
 }
 
 // parseMavenPath parses "/<group/as/path>/<artifact>/<version>/<file>" into
-// name "group:artifact" and the version.
-func parseMavenPath(path string) (name, version string, ok bool) {
+// name "group:artifact", the version, and the optional classifier.
+//
+// The file name follows "<artifact>-<version>[-<classifier>].<ext>". The
+// classifier (e.g. "sources", "javadoc") is returned separately so it can
+// disambiguate the cache key: without it, "foo-1.0.jar" and
+// "foo-1.0-sources.jar" would share one cache slot and serve each other's bytes.
+func parseMavenPath(path string) (name, version, classifier string, ok bool) {
 	segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(segs) < 4 {
-		return "", "", false
+		return "", "", "", false
 	}
+	file := segs[len(segs)-1]
 	version = segs[len(segs)-2]
 	artifact := segs[len(segs)-3]
 	group := strings.Join(segs[:len(segs)-3], ".")
 	if group == "" || artifact == "" || version == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return group + ":" + artifact, version, true
+	classifier = mavenClassifier(file, artifact, version)
+	return group + ":" + artifact, version, classifier, true
+}
+
+// mavenClassifier extracts the classifier token from an artifact file name of
+// the form "<artifact>-<version>[-<classifier>].<ext>". It returns "" for the
+// main artifact or when the name does not match the expected prefix.
+func mavenClassifier(file, artifact, version string) string {
+	prefix := artifact + "-" + version
+	rest, ok := strings.CutPrefix(file, prefix)
+	if !ok {
+		return ""
+	}
+	// rest is ".<ext>" (main) or "-<classifier>.<ext>".
+	if dot := strings.LastIndex(rest, "."); dot >= 0 {
+		rest = rest[:dot]
+	}
+	return strings.TrimPrefix(rest, "-")
 }
 
 // FetchMetadata walks the configured upstreams in order, returning the first
@@ -96,11 +125,7 @@ func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *
 	pomURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
 		base, groupPath, artifact, ref.Version, artifact, ref.Version)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pomURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building maven HEAD request: %w", err)
-	}
-	resp, err := a.httpClient.Do(req)
+	resp, err := a.headWithRetry(ctx, pomURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetching maven artifact head: %w", err)
 	}
@@ -116,6 +141,76 @@ func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *
 		}
 	}
 	return meta, nil
+}
+
+// Maven Central rate-limits bursts with HTTP 429. We retry a bounded number of
+// times, honoring Retry-After when present, so transient throttling does not
+// fail an otherwise-valid download.
+const (
+	mavenMaxMetadataRetries = 3
+	mavenRetryBaseDelay     = 500 * time.Millisecond
+	mavenRetryMaxDelay      = 10 * time.Second
+)
+
+// headWithRetry performs a HEAD request, retrying on 429/503 with backoff that
+// honors the Retry-After header. It returns the last response (which the caller
+// inspects) or a transport/context error.
+func (a *MavenAdapter) headWithRetry(ctx context.Context, url string) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("building maven HEAD request: %w", err)
+		}
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusTooManyRequests &&
+			resp.StatusCode != http.StatusServiceUnavailable {
+			return resp, nil
+		}
+		if attempt >= mavenMaxMetadataRetries {
+			// Out of retries: hand the throttled response back to the caller,
+			// which turns it into a "maven returned HTTP 429" error.
+			return resp, nil
+		}
+		delay := retryAfterDelay(resp.Header.Get("Retry-After"), attempt)
+		resp.Body.Close()
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// retryAfterDelay computes how long to wait before the next attempt. It honors
+// a Retry-After header (delta-seconds or HTTP-date) when valid, otherwise falls
+// back to exponential backoff. The result is capped at mavenRetryMaxDelay.
+func retryAfterDelay(header string, attempt int) time.Duration {
+	if header != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
+			return capDelay(time.Duration(secs) * time.Second)
+		}
+		if t, err := http.ParseTime(header); err == nil {
+			if d := time.Until(t); d > 0 {
+				return capDelay(d)
+			}
+			return 0
+		}
+	}
+	// Exponential backoff: base * 2^attempt.
+	return capDelay(mavenRetryBaseDelay << attempt)
+}
+
+func capDelay(d time.Duration) time.Duration {
+	if d > mavenRetryMaxDelay {
+		return mavenRetryMaxDelay
+	}
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.

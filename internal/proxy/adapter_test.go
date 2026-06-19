@@ -19,6 +19,23 @@ func TestPackageRef_Key_NormalizesNothing(t *testing.T) {
 	assert.Equal(t, "pypi/my-package@1.0.0", ref.Key())
 }
 
+func TestPackageRef_Key_EmptyClassifierUnchanged(t *testing.T) {
+	// A blank classifier must not alter the key, so existing cache entries and
+	// non-maven ecosystems keep their historical keys.
+	ref := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	assert.Equal(t, "maven/g:a@1.0", ref.Key())
+}
+
+func TestPackageRef_Key_ClassifierDisambiguates(t *testing.T) {
+	main := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	sources := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
+	javadoc := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "javadoc"}
+
+	assert.Equal(t, "maven/g:a@1.0?classifier=sources", sources.Key())
+	assert.NotEqual(t, main.Key(), sources.Key())
+	assert.NotEqual(t, sources.Key(), javadoc.Key())
+}
+
 func TestParseSeverity(t *testing.T) {
 	cases := []struct {
 		in   string

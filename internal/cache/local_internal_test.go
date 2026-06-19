@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +9,76 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
+
+// legacySchema is the pre-classifier table definition shipped in production.
+const legacySchema = `
+CREATE TABLE artifacts (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	ecosystem    TEXT    NOT NULL,
+	name         TEXT    NOT NULL,
+	version      TEXT    NOT NULL,
+	file_path    TEXT    NOT NULL,
+	scan_clean   INTEGER NOT NULL DEFAULT 0,
+	scan_json    TEXT    NOT NULL DEFAULT '',
+	stored_at    INTEGER NOT NULL,
+	expires_at   INTEGER NOT NULL,
+	last_hit     INTEGER NOT NULL DEFAULT 0,
+	hit_count    INTEGER NOT NULL DEFAULT 0,
+	size_bytes   INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(ecosystem, name, version)
+);
+CREATE INDEX idx_last_hit ON artifacts(last_hit);
+`
+
+func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Seed a legacy DB with one row, as a pre-upgrade deployment would have.
+	seed, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = seed.Exec(legacySchema)
+	require.NoError(t, err)
+	now := time.Now().Unix()
+	_, err = seed.Exec(`INSERT INTO artifacts
+		(ecosystem, name, version, file_path, scan_clean, scan_json, stored_at, expires_at, last_hit, hit_count, size_bytes)
+		VALUES ('maven','g:a','1.0','/cache/a-1.0.jar',1,'',?,?,?,5,123)`,
+		now, now+86400, now)
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
+
+	// Opening through NewIndex must migrate in place without losing data.
+	idx, err := NewIndex(dbPath)
+	require.NoError(t, err)
+	defer idx.Close()
+
+	main := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	got, found := idx.Get(&main)
+	require.True(t, found, "legacy row must survive migration")
+	assert.Equal(t, "/cache/a-1.0.jar", got.ArtifactPath)
+	assert.Equal(t, int64(123), got.SizeBytes)
+
+	// And the classifier column now works: a sources jar is a distinct row.
+	sources := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
+	require.NoError(t, idx.Insert(&sources, &CacheEntry{
+		ArtifactPath: "/cache/a-1.0-sources.jar",
+		ScanClean:    true,
+		StoredAt:     time.Now().UTC(),
+		ExpiresAt:    time.Now().UTC().Add(time.Hour),
+		SizeBytes:    456,
+	}))
+	gotSrc, found := idx.Get(&sources)
+	require.True(t, found)
+	assert.Equal(t, "/cache/a-1.0-sources.jar", gotSrc.ArtifactPath)
+
+	// Main row stays intact alongside the new sources row.
+	_, found = idx.Get(&main)
+	assert.True(t, found)
+}
 
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()

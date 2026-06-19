@@ -10,12 +10,16 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
+// classifier distinguishes secondary artifacts (Maven sources/javadoc jars)
+// that share the same coordinates. It is part of the uniqueness key so the main
+// jar and its classifier siblings get separate cache rows instead of colliding.
 const schema = `
 CREATE TABLE IF NOT EXISTS artifacts (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	ecosystem    TEXT    NOT NULL,
 	name         TEXT    NOT NULL,
 	version      TEXT    NOT NULL,
+	classifier   TEXT    NOT NULL DEFAULT '',
 	file_path    TEXT    NOT NULL,
 	scan_clean   INTEGER NOT NULL DEFAULT 0,
 	scan_json    TEXT    NOT NULL DEFAULT '',
@@ -24,7 +28,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	last_hit     INTEGER NOT NULL DEFAULT 0,
 	hit_count    INTEGER NOT NULL DEFAULT 0,
 	size_bytes   INTEGER NOT NULL DEFAULT 0,
-	UNIQUE(ecosystem, name, version)
+	UNIQUE(ecosystem, name, version, classifier)
 );
 CREATE INDEX IF NOT EXISTS idx_last_hit ON artifacts(last_hit);
 `
@@ -44,7 +48,75 @@ func NewIndex(path string) (*Index, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("running schema: %w", err)
 	}
+	if err := migrateClassifier(db); err != nil {
+		return nil, fmt.Errorf("migrating schema: %w", err)
+	}
 	return &Index{db: db}, nil
+}
+
+// migrateClassifier upgrades a pre-classifier database in place. Older tables
+// were UNIQUE(ecosystem, name, version), which made Maven classifier jars
+// collide with the main artifact. SQLite cannot widen a UNIQUE constraint via
+// ALTER, so the table is rebuilt. No-op once the classifier column exists.
+func migrateClassifier(db *sql.DB) error {
+	has, err := hasColumn(db, "artifacts", "classifier")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rolled back unless Commit succeeds
+
+	steps := []string{
+		`ALTER TABLE artifacts RENAME TO artifacts_legacy`,
+		`DROP INDEX IF EXISTS idx_last_hit`,
+		// Re-create the current table + index from the canonical schema.
+		schema,
+		`INSERT INTO artifacts
+			(ecosystem, name, version, classifier, file_path, scan_clean,
+			 scan_json, stored_at, expires_at, last_hit, hit_count, size_bytes)
+		 SELECT ecosystem, name, version, '', file_path, scan_clean,
+			 scan_json, stored_at, expires_at, last_hit, hit_count, size_bytes
+		 FROM artifacts_legacy`,
+		`DROP TABLE artifacts_legacy`,
+	}
+	for _, stmt := range steps {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migration step failed: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// hasColumn reports whether table has a column with the given name.
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name, ctyp string
+			notnull    int
+			dfltValue  sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &ctyp, &notnull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close releases the database connection.
@@ -56,10 +128,10 @@ func (idx *Index) Close() error {
 func (idx *Index) Insert(ref *proxy.PackageRef, entry *CacheEntry) error {
 	_, err := idx.db.Exec(`
 		INSERT INTO artifacts
-			(ecosystem, name, version, file_path, scan_clean, scan_json,
+			(ecosystem, name, version, classifier, file_path, scan_clean, scan_json,
 			 stored_at, expires_at, last_hit, hit_count, size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(ecosystem, name, version) DO UPDATE SET
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(ecosystem, name, version, classifier) DO UPDATE SET
 			file_path  = excluded.file_path,
 			scan_clean = excluded.scan_clean,
 			scan_json  = excluded.scan_json,
@@ -67,7 +139,7 @@ func (idx *Index) Insert(ref *proxy.PackageRef, entry *CacheEntry) error {
 			expires_at = excluded.expires_at,
 			last_hit   = excluded.last_hit,
 			size_bytes = excluded.size_bytes`,
-		ref.Ecosystem, ref.Name, ref.Version,
+		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 		entry.ArtifactPath, boolToInt(entry.ScanClean), entry.ScanJSON,
 		entry.StoredAt.Unix(), entry.ExpiresAt.Unix(),
 		entry.StoredAt.Unix(), 0, entry.SizeBytes,
@@ -80,8 +152,8 @@ func (idx *Index) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
 	row := idx.db.QueryRow(`
 		SELECT file_path, scan_clean, scan_json, stored_at, expires_at, hit_count, size_bytes
 		FROM artifacts
-		WHERE ecosystem=? AND name=? AND version=?`,
-		ref.Ecosystem, ref.Name, ref.Version,
+		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 
 	var (
@@ -116,8 +188,8 @@ func (idx *Index) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
 func (idx *Index) IncrementHit(ref *proxy.PackageRef) error {
 	_, err := idx.db.Exec(`
 		UPDATE artifacts SET hit_count=hit_count+1, last_hit=?
-		WHERE ecosystem=? AND name=? AND version=?`,
-		time.Now().Unix(), ref.Ecosystem, ref.Name, ref.Version,
+		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		time.Now().Unix(), ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 	return err
 }
@@ -125,8 +197,8 @@ func (idx *Index) IncrementHit(ref *proxy.PackageRef) error {
 // Delete removes an entry from the index.
 func (idx *Index) Delete(ref *proxy.PackageRef) error {
 	_, err := idx.db.Exec(
-		`DELETE FROM artifacts WHERE ecosystem=? AND name=? AND version=?`,
-		ref.Ecosystem, ref.Name, ref.Version,
+		`DELETE FROM artifacts WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 	return err
 }
@@ -134,7 +206,7 @@ func (idx *Index) Delete(ref *proxy.PackageRef) error {
 // LRUCandidates returns up to n entries sorted by last_hit ascending (LRU first).
 func (idx *Index) LRUCandidates(n int) ([]proxy.PackageRef, error) {
 	rows, err := idx.db.Query(
-		`SELECT ecosystem, name, version FROM artifacts ORDER BY last_hit ASC LIMIT ?`, n,
+		`SELECT ecosystem, name, version, classifier FROM artifacts ORDER BY last_hit ASC LIMIT ?`, n,
 	)
 	if err != nil {
 		return nil, err
@@ -144,7 +216,7 @@ func (idx *Index) LRUCandidates(n int) ([]proxy.PackageRef, error) {
 	var refs []proxy.PackageRef
 	for rows.Next() {
 		var ref proxy.PackageRef
-		if err := rows.Scan(&ref.Ecosystem, &ref.Name, &ref.Version); err != nil {
+		if err := rows.Scan(&ref.Ecosystem, &ref.Name, &ref.Version, &ref.Classifier); err != nil {
 			return nil, err
 		}
 		refs = append(refs, ref)

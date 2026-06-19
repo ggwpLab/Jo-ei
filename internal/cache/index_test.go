@@ -44,6 +44,49 @@ func TestIndex_InsertAndGet(t *testing.T) {
 	assert.Equal(t, int64(4096), got.SizeBytes)
 }
 
+func TestIndex_ClassifierIsDistinctEntry(t *testing.T) {
+	idx, cleanup := newTestIndex(t)
+	defer cleanup()
+
+	main := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	sources := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
+
+	mainEntry := cache.CacheEntry{
+		ArtifactPath: "/cache/a-1.0.jar",
+		ScanClean:    true,
+		StoredAt:     time.Now().UTC(),
+		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
+		SizeBytes:    100,
+	}
+	srcEntry := cache.CacheEntry{
+		ArtifactPath: "/cache/a-1.0-sources.jar",
+		ScanClean:    true,
+		StoredAt:     time.Now().UTC(),
+		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
+		SizeBytes:    200,
+	}
+
+	require.NoError(t, idx.Insert(&main, &mainEntry))
+	require.NoError(t, idx.Insert(&sources, &srcEntry))
+
+	// The classifier must not collide with the main artifact: each ref keeps
+	// its own row and file path.
+	gotMain, found := idx.Get(&main)
+	require.True(t, found)
+	assert.Equal(t, "/cache/a-1.0.jar", gotMain.ArtifactPath)
+
+	gotSrc, found := idx.Get(&sources)
+	require.True(t, found)
+	assert.Equal(t, "/cache/a-1.0-sources.jar", gotSrc.ArtifactPath)
+
+	// Deleting the sources entry must leave the main entry intact.
+	require.NoError(t, idx.Delete(&sources))
+	_, found = idx.Get(&sources)
+	assert.False(t, found)
+	_, found = idx.Get(&main)
+	assert.True(t, found)
+}
+
 func TestIndex_GetMissing(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
