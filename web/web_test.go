@@ -31,7 +31,7 @@ func TestConsoleHandlerServesAssets(t *testing.T) {
 	srv := http.NewServeMux()
 	srv.Handle("/console/", ConsoleHandler())
 
-	for _, asset := range []string{"styles.css", "screens.css", "api.js", "app.jsx", "favicon-32.png", "favicon-180.png"} {
+	for _, asset := range []string{"styles.css", "screens.css", "app.bundle.js", "favicon-32.png", "favicon-180.png"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/console/"+asset, nil)
 		srv.ServeHTTP(rec, req)
@@ -40,6 +40,29 @@ func TestConsoleHandlerServesAssets(t *testing.T) {
 		}
 		if rec.Body.Len() == 0 {
 			t.Errorf("GET /console/%s returned empty body", asset)
+		}
+	}
+}
+
+func TestConsoleIndexIsPrebuilt(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.Handle("/console/", ConsoleHandler())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	srv.ServeHTTP(rec, req)
+	body := rec.Body.String()
+
+	// No CDN, no in-browser compilation.
+	for _, banned := range []string{"unpkg.com", "text/babel", "babel"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("index.html still references %q; console must be prebuilt and self-hosted", banned)
+		}
+	}
+	// Loads the prebuilt bundle and the vendored React.
+	for _, want := range []string{"app.bundle.js", "vendor/react.production.min.js", "vendor/react-dom.production.min.js"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index.html does not reference %q", want)
 		}
 	}
 }

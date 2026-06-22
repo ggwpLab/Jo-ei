@@ -11,6 +11,7 @@ import (
 	"net/http"
 )
 
+//go:generate go run github.com/ggwpLab/Jo-ei/internal/uibuild
 //go:embed all:console
 var consoleFiles embed.FS
 
