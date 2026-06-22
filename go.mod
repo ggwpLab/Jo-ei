@@ -3,6 +3,7 @@ module github.com/ggwpLab/Jo-ei
 go 1.25.0
 
 require (
+	github.com/evanw/esbuild v0.28.1
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
