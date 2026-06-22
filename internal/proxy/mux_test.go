@@ -57,6 +57,19 @@ func TestMux_UnknownPrefixReturns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// /favicon.ico is served at the site root by the parent mux (see web
+	// package) and never reaches here; /.well-known/ probes are answered quietly.
+	resp, err := http.Get(srv.URL + "/.well-known/appspecific/com.chrome.devtools.json")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 func TestMux_HealthEndpoint(t *testing.T) {
 	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
 	srv := httptest.NewServer(mux)

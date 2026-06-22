@@ -226,6 +226,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		logger.Warn().Msg("console auth not configured — /console/ and /api/ are disabled (HTTP 503) until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
 	}
 	root := http.NewServeMux()
+	// Public site icon: browsers auto-probe /favicon.ico on every page load, so
+	// serve it before the auth-gated routes and outside the proxy mux.
+	root.Handle("/favicon.ico", web.FaviconHandler())
 	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
 	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
 		Store:         store,
