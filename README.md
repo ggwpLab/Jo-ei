@@ -126,8 +126,9 @@ pipeline (Cache → 衛 Supply Chain → 浄 CVE → 浄 Malware) along with an 
 a live request feed, the min-age quarantine queue, a threat-detail drawer, a policy editor,
 and a registries & cache view.
 
-The console reads live proxy state via the JSON API described below. It loads React + Babel
-from a CDN, so the browser needs outbound internet access the first time it is opened.
+The console reads live proxy state via the JSON API described below. React and the
+console UI are compiled to a single bundle baked into the binary — it needs no CDN
+and works fully offline.
 
 ### Admin console & API
 

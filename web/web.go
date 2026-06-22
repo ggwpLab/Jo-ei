@@ -1,8 +1,10 @@
 // Package web embeds the Jōei admin console (浄衛 — The Purification Gate) and
 // serves it as static assets. The console is a self-contained React single-page
-// app (React + Babel loaded in the browser) driven by client-side mock data; it
-// is baked into the binary via go:embed so it ships inside the distroless image
-// with no extra files at runtime.
+// app: its JSX sources are compiled to a single minified app.bundle.js at build
+// time (see internal/uibuild, run via `go generate`), and React/ReactDOM are
+// vendored locally. No CDN and no in-browser compilation, so the console works
+// offline. The built assets are baked into the binary via go:embed so it ships
+// inside the distroless image with no extra files at runtime.
 package web
 
 import (
