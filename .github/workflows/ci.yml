@@ -20,6 +20,12 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-ed:"; echo "$unformatted"; exit 1
           fi
+      - name: Verify console bundle is up to date
+        run: |
+          go generate ./...
+          if ! git diff --exit-code -- web/console/app.bundle.js; then
+            echo "app.bundle.js is stale: run 'go generate ./...' and commit the result"; exit 1
+          fi
       - name: Build
         run: go build ./...
       - name: Unit tests (race)
