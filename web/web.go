@@ -12,7 +12,9 @@ import (
 )
 
 //go:generate go run github.com/ggwpLab/Jo-ei/internal/uibuild
-//go:embed all:console
+//go:embed console/index.html console/app.bundle.js console/styles.css console/screens.css
+//go:embed console/favicon-16.png console/favicon-32.png console/favicon-48.png console/favicon-180.png console/favicon-512.png
+//go:embed console/vendor
 var consoleFiles embed.FS
 
 // ConsoleHandler returns an http.Handler that serves the embedded console.

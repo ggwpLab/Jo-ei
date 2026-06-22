@@ -34,7 +34,7 @@ var sources = []string{
 }
 
 const (
-	srcDir  = "console" // Task 3 moves sources to "console/src".
+	srcDir  = "console/src"
 	outFile = "console/app.bundle.js"
 )
 

@@ -103,6 +103,20 @@ func TestConsoleHandlerRedirectsBareConsole(t *testing.T) {
 	}
 }
 
+func TestConsoleSourcesNotEmbedded(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.Handle("/console/", ConsoleHandler())
+
+	for _, src := range []string{"src/app.jsx", "src/api.js", "app.jsx"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/console/"+src, nil)
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET /console/%s status = %d, want 404 (sources must not ship in the binary)", src, rec.Code)
+		}
+	}
+}
+
 func TestConsoleServesVendoredReact(t *testing.T) {
 	srv := http.NewServeMux()
 	srv.Handle("/console/", ConsoleHandler())
