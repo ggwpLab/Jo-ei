@@ -57,6 +57,22 @@ func TestMux_UnknownPrefixReturns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/favicon.ico",
+		"/.well-known/appspecific/com.chrome.devtools.json",
+	} {
+		resp, err := http.Get(srv.URL + path)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
+		resp.Body.Close()
+	}
+}
+
 func TestMux_HealthEndpoint(t *testing.T) {
 	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
 	srv := httptest.NewServer(mux)

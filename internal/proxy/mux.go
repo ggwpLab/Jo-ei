@@ -31,6 +31,14 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Browsers auto-probe these paths (favicon, Chrome DevTools well-known,
+	// etc.). They are not registry requests, so answer them quietly instead
+	// of logging a "unknown registry prefix" warning for every page load.
+	if isBrowserNoise(r.URL.Path) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
 	prefix, rest := splitPrefix(r.URL.Path)
 	h, ok := m.handlers[prefix]
 	if !ok {
@@ -49,6 +57,13 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.URL.Path = rest
 	r.URL.RawPath = ""
 	h.ServeHTTP(w, r)
+}
+
+// isBrowserNoise reports whether path is an automatic browser request
+// (favicon, /.well-known/ probes) rather than a registry request, so the
+// mux can answer it without logging an unknown-registry warning.
+func isBrowserNoise(path string) bool {
+	return path == "/favicon.ico" || strings.HasPrefix(path, "/.well-known/")
 }
 
 // splitPrefix splits "/npm/foo/bar" into ("npm", "/foo/bar").
