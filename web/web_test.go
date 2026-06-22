@@ -79,3 +79,23 @@ func TestConsoleHandlerRedirectsBareConsole(t *testing.T) {
 		t.Errorf("redirect Location = %q, want /console/", loc)
 	}
 }
+
+func TestConsoleServesVendoredReact(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.Handle("/console/", ConsoleHandler())
+
+	for _, asset := range []string{
+		"vendor/react.production.min.js",
+		"vendor/react-dom.production.min.js",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/console/"+asset, nil)
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET /console/%s status = %d, want 200", asset, rec.Code)
+		}
+		if rec.Body.Len() == 0 {
+			t.Errorf("GET /console/%s returned empty body", asset)
+		}
+	}
+}
