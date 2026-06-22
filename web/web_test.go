@@ -31,7 +31,7 @@ func TestConsoleHandlerServesAssets(t *testing.T) {
 	srv := http.NewServeMux()
 	srv.Handle("/console/", ConsoleHandler())
 
-	for _, asset := range []string{"styles.css", "screens.css", "api.js", "app.jsx"} {
+	for _, asset := range []string{"styles.css", "screens.css", "api.js", "app.jsx", "favicon-32.png", "favicon-180.png"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/console/"+asset, nil)
 		srv.ServeHTTP(rec, req)
@@ -41,6 +41,26 @@ func TestConsoleHandlerServesAssets(t *testing.T) {
 		if rec.Body.Len() == 0 {
 			t.Errorf("GET /console/%s returned empty body", asset)
 		}
+	}
+}
+
+func TestFaviconHandlerServesPNG(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.Handle("/favicon.ico", FaviconHandler())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /favicon.ico status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", ct)
+	}
+	// PNG magic number: \x89PNG.
+	if body := rec.Body.Bytes(); len(body) < 4 || string(body[1:4]) != "PNG" {
+		t.Errorf("body is not a PNG; got %d bytes", len(body))
 	}
 }
 

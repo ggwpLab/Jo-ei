@@ -62,15 +62,12 @@ func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	for _, path := range []string{
-		"/favicon.ico",
-		"/.well-known/appspecific/com.chrome.devtools.json",
-	} {
-		resp, err := http.Get(srv.URL + path)
-		require.NoError(t, err)
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
-		resp.Body.Close()
-	}
+	// /favicon.ico is served at the site root by the parent mux (see web
+	// package) and never reaches here; /.well-known/ probes are answered quietly.
+	resp, err := http.Get(srv.URL + "/.well-known/appspecific/com.chrome.devtools.json")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestMux_HealthEndpoint(t *testing.T) {
