@@ -332,3 +332,44 @@ database:
 	assert.Equal(t, []string{"pypi/requests"}, prod.Allowlist)
 	assert.Equal(t, []string{"npm/evil-pkg"}, prod.Denylist)
 }
+
+func TestLoadDockerAndImageScan(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	const body = `
+server: { listen: ":8080" }
+registries:
+  docker:
+    upstreams: ["https://registry-1.docker.io"]
+    enabled: true
+image_scan:
+  enabled: true
+  trivy_server: "http://trivy:4954"
+  timeout_seconds: 90
+  scanners: "vuln,secret"
+  max_layer_bytes: 1048576
+database: { path: "/tmp/x.db" }
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Registries.Docker.Enabled {
+		t.Error("docker registry should be enabled")
+	}
+	if cfg.Registries.Docker.Upstreams[0] != "https://registry-1.docker.io" {
+		t.Errorf("docker upstream = %q", cfg.Registries.Docker.Upstreams[0])
+	}
+	if !cfg.ImageScan.Enabled || cfg.ImageScan.TrivyServer != "http://trivy:4954" {
+		t.Errorf("image_scan not parsed: %+v", cfg.ImageScan)
+	}
+	if cfg.ImageScan.TimeoutSeconds != 90 || cfg.ImageScan.Scanners != "vuln,secret" {
+		t.Errorf("image_scan fields: %+v", cfg.ImageScan)
+	}
+	if cfg.ImageScan.MaxLayerBytes != 1048576 {
+		t.Errorf("max_layer_bytes = %d", cfg.ImageScan.MaxLayerBytes)
+	}
+}
