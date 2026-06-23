@@ -159,11 +159,11 @@ type CVEConfig struct {
 // ImageScanConfig configures container-image vulnerability scanning (Trivy).
 // It is separate from CVEConfig (osv.dev): a different engine and model.
 type ImageScanConfig struct {
-	Enabled       bool   `mapstructure:"enabled"`
-	TrivyServer   string `mapstructure:"trivy_server"`   // e.g. "http://trivy:4954"
-	TimeoutSeconds int   `mapstructure:"timeout_seconds"` // default 120
-	Scanners      string `mapstructure:"scanners"`        // trivy --scanners value, default "vuln,secret"
-	MaxLayerBytes int64  `mapstructure:"max_layer_bytes"` // layer larger than this → fail-closed
+	Enabled        bool   `mapstructure:"enabled"`
+	TrivyServer    string `mapstructure:"trivy_server"`    // e.g. "http://trivy:4954"
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 120
+	Scanners       string `mapstructure:"scanners"`        // trivy --scanners value, default "vuln,secret"
+	MaxLayerBytes  int64  `mapstructure:"max_layer_bytes"` // layer larger than this → fail-closed
 }
 
 // MalwareConfig configures the malware-scanning engines run after download.
