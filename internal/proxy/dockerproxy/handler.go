@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
@@ -143,4 +144,29 @@ func gateForBlockedBy(by string) string {
 	default:
 		return proxy.GateImageScan
 	}
+}
+
+// HandlerDeps is the public assembly input for the Docker proxy handler.
+type HandlerDeps struct {
+	Upstreams     []string
+	Scanner       ImageScanner
+	AV            proxy.AVScanner
+	Filter        proxy.SCFilter
+	Policy        proxy.PolicyDecider
+	Cache         cache.Cache
+	MaxLayerBytes int64
+	Recorder      proxy.Recorder
+	Logger        zerolog.Logger
+}
+
+// New assembles a ready-to-serve Docker Registry V2 proxy handler.
+func New(d HandlerDeps) http.Handler {
+	adapter := NewAdapter(d.Upstreams)
+	store := newVerdictStore(d.Cache)
+	gate := newManifestGate(gateDeps{
+		adapter: adapter, scanner: d.Scanner, av: d.AV,
+		filter: d.Filter, policy: d.Policy, store: store,
+		maxLayerBytes: d.MaxLayerBytes, logger: d.Logger,
+	})
+	return NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Recorder: d.Recorder, Logger: d.Logger})
 }

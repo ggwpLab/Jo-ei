@@ -110,3 +110,9 @@ func (s *TrivyScanner) Health() health.Sample {
 	defer s.healthMu.Unlock()
 	return health.Sample{OK: s.healthOK, Latency: s.healthLatency, HasData: s.healthHasData}
 }
+
+// Probe checks Trivy server reachability (trivy version --server <url>).
+func (s *TrivyScanner) Probe(ctx context.Context) error {
+	_, err := s.run(ctx, "trivy", "version", "--server", s.serverURL, "--format", "json")
+	return err
+}

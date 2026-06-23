@@ -36,7 +36,7 @@ func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 
 	mux := proxy.NewMux(map[string]*proxy.Handler{
 		"pypi": buildHandlerFor(adapters.NewPyPIAdapter([]string{upstream.URL})),
-	}, zerolog.Nop())
+	}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -47,7 +47,7 @@ func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 }
 
 func TestMux_UnknownPrefixReturns404(t *testing.T) {
-	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -58,7 +58,7 @@ func TestMux_UnknownPrefixReturns404(t *testing.T) {
 }
 
 func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
-	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -71,7 +71,7 @@ func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
 }
 
 func TestMux_HealthEndpoint(t *testing.T) {
-	mux := proxy.NewMux(map[string]*proxy.Handler{}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

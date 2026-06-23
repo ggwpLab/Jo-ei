@@ -11,6 +11,27 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
+func TestNewAssemblesHandler(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	h := New(HandlerDeps{
+		Upstreams:     []string{srvURL},
+		Scanner:       stubScanner{},
+		AV:            stubAV{},
+		Filter:        allowFilter{},
+		Policy:        findingPolicy{},
+		Cache:         newFakeCache(),
+		MaxLayerBytes: 0,
+		Recorder:      &recspy{},
+		Logger:        zerolog.Nop(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("assembled handler status = %d", w.Code)
+	}
+}
+
 type recspy struct{ events []proxy.Event }
 
 func (r *recspy) Record(e proxy.Event) { r.events = append(r.events, e) }
