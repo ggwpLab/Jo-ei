@@ -1,0 +1,63 @@
+package dockerproxy
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
+)
+
+// fakeCache is a minimal in-memory cache.Cache for tests.
+type fakeCache struct {
+	entries map[string]*cache.CacheEntry
+}
+
+func newFakeCache() *fakeCache { return &fakeCache{entries: map[string]*cache.CacheEntry{}} }
+
+func (f *fakeCache) Get(ref *proxy.PackageRef) (*cache.CacheEntry, bool) {
+	e, ok := f.entries[ref.Key()]
+	return e, ok
+}
+func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
+	f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: tmpPath, ScanClean: clean, ScanJSON: scanJSON}
+	return nil
+}
+func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error { delete(f.entries, ref.Key()); return nil }
+func (f *fakeCache) Stats() (cache.CacheStats, error)       { return cache.CacheStats{}, nil }
+func (f *fakeCache) Close() error                           { return nil }
+
+func TestVerdictStoreBlobRoundTrip(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "layer")
+	if err := os.WriteFile(tmp, []byte("layerdata"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vs := newVerdictStore(newFakeCache())
+
+	if _, _, found := vs.GetBlob("sha256:l1"); found {
+		t.Fatal("blob should be absent initially")
+	}
+	if err := vs.PutBlob("sha256:l1", tmp, true); err != nil {
+		t.Fatalf("PutBlob: %v", err)
+	}
+	_, clean, found := vs.GetBlob("sha256:l1")
+	if !found || !clean {
+		t.Errorf("GetBlob = found:%v clean:%v", found, clean)
+	}
+}
+
+func TestVerdictStoreImageVerdict(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "manifest")
+	if err := os.WriteFile(tmp, []byte(`{"x":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vs := newVerdictStore(newFakeCache())
+	if err := vs.PutImageVerdict("library/nginx", "sha256:img", tmp, false, "cve_found"); err != nil {
+		t.Fatalf("PutImageVerdict: %v", err)
+	}
+	clean, reason, found := vs.GetImageVerdict("library/nginx", "sha256:img")
+	if !found || clean || reason != "cve_found" {
+		t.Errorf("verdict = clean:%v reason:%q found:%v", clean, reason, found)
+	}
+}
