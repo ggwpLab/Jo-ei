@@ -1,3 +1,6 @@
+# Trivy CLI for the Docker registry image scanner (client/server mode).
+FROM aquasec/trivy:0.58.0 AS trivy
+
 # Build stage
 FROM golang:1.25-alpine AS builder
 WORKDIR /build
@@ -12,6 +15,7 @@ RUN mkdir -p /cache /db
 # Runtime stage
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /jo-ei /jo-ei
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY config.yaml /etc/jo-ei/config.yaml
 # Pre-create the cache and database dirs owned by nonroot (UID 65532) so fresh
 # named volumes mounted here inherit writable ownership. Without this the
