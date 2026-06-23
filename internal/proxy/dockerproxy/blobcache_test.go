@@ -21,7 +21,23 @@ func (f *fakeCache) Get(ref *proxy.PackageRef) (*cache.CacheEntry, bool) {
 	return e, ok
 }
 func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
-	f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: tmpPath, ScanClean: clean, ScanJSON: scanJSON}
+	// Copy the file so the entry survives the caller's defer os.Remove.
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		// Allow os.DevNull or missing files (e.g. oversized-layer sentinel).
+		f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: tmpPath, ScanClean: clean, ScanJSON: scanJSON}
+		return nil
+	}
+	dst, err := os.CreateTemp("", "fakecache-*")
+	if err != nil {
+		return err
+	}
+	if _, err := dst.Write(data); err != nil {
+		dst.Close()
+		return err
+	}
+	dst.Close()
+	f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: dst.Name(), ScanClean: clean, ScanJSON: scanJSON}
 	return nil
 }
 func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error { delete(f.entries, ref.Key()); return nil }
