@@ -237,6 +237,18 @@ func (a *Adapter) FetchBlob(ctx context.Context, repo, digest string) (io.ReadCl
 	return nil, 0, lastErr
 }
 
+// hostFromUpstream returns the host[:port] of the first upstream, scheme
+// stripped, for building the image reference Trivy scans. Empty list → "".
+func hostFromUpstream(upstreams []string) string {
+	if len(upstreams) == 0 {
+		return ""
+	}
+	h := upstreams[0]
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	return strings.TrimRight(h, "/")
+}
+
 // ImageConfig parses a schema2/OCI manifest, fetches its config blob, and
 // returns the image's created time and the ordered layer digests.
 func (a *Adapter) ImageConfig(ctx context.Context, repo string, manifestBody []byte) (time.Time, []string, error) {
