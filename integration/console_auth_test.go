@@ -51,7 +51,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 		Logger:   zerolog.Nop(),
 		Recorder: hub,
 	})
-	mux := proxy.NewMux(map[string]*proxy.Handler{"pypi": handler}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{"pypi": handler}, nil, zerolog.Nop())
 
 	consoleLogger := zerolog.New(logBuf)
 	root := http.NewServeMux()

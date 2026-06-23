@@ -55,7 +55,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 		Cache:   &localCacheAdapter{lc: lc},
 		Logger:  zerolog.Nop(),
 	})
-	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
