@@ -237,6 +237,12 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if _, ok := handlers["yarn"]; ok {
 		registryCount--
 	}
+	// Docker is served via the raw-handler map (not *proxy.Handler), so count it
+	// separately for the startup log; without this a docker-only deployment
+	// would report "registries: 0".
+	if _, ok := rawHandlers["v2"]; ok {
+		registryCount++
+	}
 
 	mux := proxy.NewMux(handlers, rawHandlers, logger)
 

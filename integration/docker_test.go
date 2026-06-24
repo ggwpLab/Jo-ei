@@ -143,4 +143,15 @@ func TestDockerPullFlow(t *testing.T) {
 	body2, err := io.ReadAll(resp3.Body)
 	require.NoError(t, err)
 	assert.Equal(t, "layer-two", string(body2))
+
+	// 4. Config blob is cached during the gate and served from cache too — a
+	// real docker pull fetches it, so a 404 here would break the pull.
+	resp4, err := http.Get(ts.URL + "/v2/library/nginx/blobs/sha256:cfg")
+	require.NoError(t, err)
+	defer resp4.Body.Close()
+	assert.Equal(t, http.StatusOK, resp4.StatusCode)
+
+	body3, err := io.ReadAll(resp4.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"created":"2020-01-01T00:00:00Z"}`, string(body3))
 }

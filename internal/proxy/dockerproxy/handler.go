@@ -79,7 +79,19 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, "ok", http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
 		return
 	}
-	if err := streamFile(w, v.ManifestPath); err != nil {
+	// Open the cached manifest before writing any header so a cache-read
+	// failure can still emit the Docker error envelope (and a telemetry event).
+	f, err := os.Open(v.ManifestPath)
+	if err != nil {
+		log.Error().Err(err).Msg("opening cached manifest")
+		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *proxy.Event) { ev.Version = digest })
+		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
+		return
+	}
+	defer f.Close()
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, f); err != nil {
+		// Headers are already sent; can only log.
 		log.Error().Err(err).Msg("serving cached manifest")
 		return
 	}
@@ -92,23 +104,24 @@ func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPat
 		h.writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not available")
 		return
 	}
-	w.Header().Set("Docker-Content-Digest", pp.Reference)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	if err := streamFile(w, path); err != nil {
-		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("serving cached blob")
-	}
-}
-
-func streamFile(w http.ResponseWriter, path string) error {
+	// Open before writing any header so a cache-read failure yields the Docker
+	// error envelope rather than a half-written 200.
 	f, err := os.Open(path)
 	if err != nil {
-		http.Error(w, "cache read error", http.StatusInternalServerError)
-		return err
+		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("opening cached blob")
+		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
+		return
 	}
 	defer f.Close()
+	w.Header().Set("Docker-Content-Digest", pp.Reference)
+	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	_, err = io.Copy(w, f)
-	return err
+	// Blob serves are deliberately not recorded as telemetry events: a single
+	// pull fetches many blobs, and one event per blob would inflate the console
+	// request metrics. The manifest gate already records the per-image outcome.
+	if _, err := io.Copy(w, f); err != nil {
+		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("serving cached blob")
+	}
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, status int, code, msg string) {

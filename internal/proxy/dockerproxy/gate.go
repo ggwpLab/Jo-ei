@@ -62,8 +62,8 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref, platform string)
 
 	pkgRef := &proxy.PackageRef{Ecosystem: "docker", Name: repo, Version: ref}
 
-	// Parse manifest → config.created + layer digests.
-	created, layers, err := g.adapter.ImageConfig(ctx, repo, manifestBody)
+	// Parse manifest → config.created + config digest + layer digests.
+	created, configDigest, layers, err := g.adapter.ImageConfig(ctx, repo, manifestBody)
 	if err != nil {
 		return "", GateVerdict{}, err
 	}
@@ -97,10 +97,18 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref, platform string)
 		}
 	}
 
-	// 3. ClamAV over each layer (fail-closed on oversize / infection / error).
+	// 3. ClamAV over the config blob and each layer (fail-closed on oversize /
+	// infection / error). The config blob is included so that subsequent
+	// GET /v2/<repo>/blobs/<configDigest> requests are served from cache;
+	// scanLayer is cache-aware, so the small double-fetch of the config is
+	// acceptable.
 	if g.av != nil {
-		for _, layer := range layers {
-			infected, scanErr := g.scanLayer(ctx, repo, layer)
+		blobs := layers
+		if configDigest != "" {
+			blobs = append([]string{configDigest}, layers...)
+		}
+		for _, b := range blobs {
+			infected, scanErr := g.scanLayer(ctx, repo, b)
 			if scanErr != nil {
 				return "", GateVerdict{}, scanErr
 			}

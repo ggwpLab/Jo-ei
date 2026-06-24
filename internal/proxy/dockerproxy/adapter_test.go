@@ -99,12 +99,15 @@ func TestImageConfigCreatedAndLayers(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAdapter([]string{srv.URL})
-	gotCreated, layers, err := a.ImageConfig(context.Background(), "library/nginx", manifestBody)
+	gotCreated, configDigest, layers, err := a.ImageConfig(context.Background(), "library/nginx", manifestBody)
 	if err != nil {
 		t.Fatalf("ImageConfig: %v", err)
 	}
 	if !gotCreated.Equal(created) {
 		t.Errorf("created = %v, want %v", gotCreated, created)
+	}
+	if configDigest != "sha256:cfg" {
+		t.Errorf("configDigest = %q, want sha256:cfg", configDigest)
 	}
 	if len(layers) != 2 || layers[0] != "sha256:l1" || layers[1] != "sha256:l2" {
 		t.Errorf("layers = %v", layers)

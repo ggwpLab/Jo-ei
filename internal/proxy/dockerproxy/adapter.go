@@ -250,8 +250,10 @@ func hostFromUpstream(upstreams []string) string {
 }
 
 // ImageConfig parses a schema2/OCI manifest, fetches its config blob, and
-// returns the image's created time and the ordered layer digests.
-func (a *Adapter) ImageConfig(ctx context.Context, repo string, manifestBody []byte) (time.Time, []string, error) {
+// returns the image's created time, the config blob digest, and the ordered
+// layer digests. The config digest is returned so the caller can cache the
+// config blob alongside the layers (required for docker pull to succeed).
+func (a *Adapter) ImageConfig(ctx context.Context, repo string, manifestBody []byte) (created time.Time, configDigest string, layers []string, err error) {
 	var m struct {
 		Config struct {
 			Digest string `json:"digest"`
@@ -261,33 +263,33 @@ func (a *Adapter) ImageConfig(ctx context.Context, repo string, manifestBody []b
 		} `json:"layers"`
 	}
 	if err := json.Unmarshal(manifestBody, &m); err != nil {
-		return time.Time{}, nil, fmt.Errorf("decoding manifest: %w", err)
+		return time.Time{}, "", nil, fmt.Errorf("decoding manifest: %w", err)
 	}
-	layers := make([]string, len(m.Layers))
+	layers = make([]string, len(m.Layers))
 	for i, l := range m.Layers {
 		layers[i] = l.Digest
 	}
+	configDigest = m.Config.Digest
 
-	var created time.Time
-	if m.Config.Digest != "" {
-		rc, _, err := a.FetchBlob(ctx, repo, m.Config.Digest)
-		if err != nil {
-			return time.Time{}, nil, fmt.Errorf("fetching config blob: %w", err)
+	if configDigest != "" {
+		rc, _, ferr := a.FetchBlob(ctx, repo, configDigest)
+		if ferr != nil {
+			return time.Time{}, "", nil, fmt.Errorf("fetching config blob: %w", ferr)
 		}
 		defer rc.Close()
 		var cfg struct {
 			Created string `json:"created"`
 		}
 		if err := json.NewDecoder(rc).Decode(&cfg); err != nil {
-			return time.Time{}, nil, fmt.Errorf("decoding config blob: %w", err)
+			return time.Time{}, "", nil, fmt.Errorf("decoding config blob: %w", err)
 		}
 		if cfg.Created != "" {
 			t, perr := time.Parse(time.RFC3339, cfg.Created)
 			if perr != nil {
-				return time.Time{}, nil, fmt.Errorf("parsing config.created %q: %w", cfg.Created, perr)
+				return time.Time{}, "", nil, fmt.Errorf("parsing config.created %q: %w", cfg.Created, perr)
 			}
 			created = t.UTC()
 		}
 	}
-	return created, layers, nil
+	return created, configDigest, layers, nil
 }

@@ -137,6 +137,53 @@ registries:
 	assert.Contains(t, err.Error(), "npm")
 }
 
+func TestLoad_EnabledDockerWithoutUpstreamsFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  docker:
+    enabled: true
+    upstreams: []
+database:
+  path: "/tmp/x.db"
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "docker")
+}
+
+func TestLoad_ImageScanEnabledWithoutTrivyServerFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+image_scan:
+  enabled: true
+  trivy_server: ""
+database:
+  path: "/tmp/x.db"
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trivy_server")
+}
+
+func TestLoad_ImageScanNegativeMaxLayerBytesFails(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+image_scan:
+  enabled: true
+  trivy_server: "http://trivy:4954"
+  max_layer_bytes: -1
+database:
+  path: "/tmp/x.db"
+`)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_layer_bytes")
+}
+
 func TestLoad_DisabledRegistryWithoutUpstreamsOK(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
