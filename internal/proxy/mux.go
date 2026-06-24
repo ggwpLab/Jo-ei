@@ -13,12 +13,14 @@ import (
 // paths it would without the proxy wrapper.
 type Mux struct {
 	handlers map[string]*Handler
+	raw      map[string]http.Handler // prefix → handler for non-package registries (docker)
 	logger   zerolog.Logger
 }
 
-// NewMux creates a Mux from a prefix→handler map, e.g. {"pypi": h1, "npm": h2}.
-func NewMux(handlers map[string]*Handler, logger zerolog.Logger) *Mux {
-	return &Mux{handlers: handlers, logger: logger}
+// NewMux creates a Mux. raw may be nil; it holds prefixes served by a plain
+// http.Handler (e.g. the Docker V2 proxy).
+func NewMux(handlers map[string]*Handler, raw map[string]http.Handler, logger zerolog.Logger) *Mux {
+	return &Mux{handlers: handlers, raw: raw, logger: logger}
 }
 
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,14 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefix, rest := splitPrefix(r.URL.Path)
+
+	if rh, ok := m.raw[prefix]; ok {
+		r.URL.Path = rest
+		r.URL.RawPath = ""
+		rh.ServeHTTP(w, r)
+		return
+	}
+
 	h, ok := m.handlers[prefix]
 	if !ok {
 		m.logger.Warn().Str("prefix", prefix).Str("path", r.URL.Path).Msg("request to unknown registry prefix")

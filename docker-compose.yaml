@@ -13,12 +13,21 @@ services:
     depends_on:
       clamav:
         condition: service_healthy
+      trivy:
+        condition: service_started
     restart: unless-stopped
 
   clamav:
     image: clamav/clamav:stable
     volumes:
       - clamav-db:/var/lib/clamav
+    restart: unless-stopped
+
+  trivy:
+    image: aquasec/trivy:0.71.2
+    command: ["server", "--listen", "0.0.0.0:4954"]
+    volumes:
+      - trivy-cache:/root/.cache/trivy
     restart: unless-stopped
 
   # Example ICAP engine (Kaspersky / Dr.Web). Point a malware.scanners[] entry
@@ -31,3 +40,4 @@ volumes:
   cache-data:
   clamav-db:
   jo-ei-db:
+  trivy-cache:

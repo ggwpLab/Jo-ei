@@ -21,6 +21,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
@@ -172,6 +173,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
 	}
 
+	// Image scanner (Trivy) for the Docker registry (optional).
+	var trivyScanner *dockerproxy.TrivyScanner
+	if cfg.ImageScan.Enabled {
+		timeout := time.Duration(cfg.ImageScan.TimeoutSeconds) * time.Second
+		trivyScanner = dockerproxy.NewTrivyScanner(cfg.ImageScan.TrivyServer, cfg.ImageScan.Scanners, timeout)
+	}
+
 	// Scanner health monitor: active probes for socket engines, passive
 	// tracking for the remote osv.dev API.
 	interval := time.Duration(cfg.Health.ProbeIntervalSeconds) * time.Second
@@ -196,14 +204,32 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		}
 		healthMon.AddDisabled(sc.Type, sc.Address)
 	}
+	if cfg.ImageScan.Enabled && trivyScanner != nil {
+		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, true, trivyScanner.Probe)
+	}
 	healthMon.Start()
 	defer healthMon.Close() //nolint:errcheck
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
 
-	if len(handlers) == 0 {
-		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems}.enabled: true")
+	rawHandlers := map[string]http.Handler{}
+	if cfg.Registries.Docker.Enabled && trivyScanner != nil {
+		rawHandlers["v2"] = dockerproxy.New(dockerproxy.HandlerDeps{
+			Upstreams:     cfg.Registries.Docker.Upstreams,
+			Scanner:       trivyScanner,
+			AV:            shared.avScanner,
+			Filter:        policyRuntime,
+			Policy:        policyRuntime,
+			Cache:         artifactCache,
+			MaxLayerBytes: cfg.ImageScan.MaxLayerBytes,
+			Recorder:      shared.recorder,
+			Logger:        logger,
+		})
+	}
+
+	if len(handlers) == 0 && len(rawHandlers) == 0 {
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems,docker}.enabled: true")
 	}
 
 	// The yarn prefix is an alias of the npm handler, not a separate registry.
@@ -211,8 +237,14 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if _, ok := handlers["yarn"]; ok {
 		registryCount--
 	}
+	// Docker is served via the raw-handler map (not *proxy.Handler), so count it
+	// separately for the startup log; without this a docker-only deployment
+	// would report "registries: 0".
+	if _, ok := rawHandlers["v2"]; ok {
+		registryCount++
+	}
 
-	mux := proxy.NewMux(handlers, logger)
+	mux := proxy.NewMux(handlers, rawHandlers, logger)
 
 	// Wrap the proxy mux so the admin console is served at /console/ while every
 	// other path (registry prefixes, /health) falls through to the proxy mux

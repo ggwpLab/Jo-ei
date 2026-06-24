@@ -12,6 +12,7 @@ type Config struct {
 	Registries  RegistriesConfig  `mapstructure:"registries"`
 	SupplyChain SupplyChainConfig `mapstructure:"supply_chain"`
 	CVE         CVEConfig         `mapstructure:"cve"`
+	ImageScan   ImageScanConfig   `mapstructure:"image_scan"`
 	Malware     MalwareConfig     `mapstructure:"malware"`
 	Cache       CacheConfig       `mapstructure:"cache"`
 	Policy      PolicyConfig      `mapstructure:"policy"`
@@ -28,6 +29,7 @@ func (c *Config) Validate() error {
 		"npm":      c.Registries.NPM,
 		"maven":    c.Registries.Maven,
 		"rubygems": c.Registries.RubyGems,
+		"docker":   c.Registries.Docker,
 	}
 	for name, rc := range regs {
 		if rc.Enabled && len(rc.Upstreams) == 0 {
@@ -65,6 +67,12 @@ func (c *Config) Validate() error {
 	if c.Database.Path == "" {
 		return fmt.Errorf("database.path is required (telemetry persists to SQLite)")
 	}
+	if c.ImageScan.Enabled && c.ImageScan.TrivyServer == "" {
+		return fmt.Errorf("image_scan.enabled is true but trivy_server is empty")
+	}
+	if c.ImageScan.MaxLayerBytes < 0 {
+		return fmt.Errorf("image_scan.max_layer_bytes must not be negative")
+	}
 	return nil
 }
 
@@ -95,6 +103,7 @@ type RegistriesConfig struct {
 	NPM      RegistryConfig `mapstructure:"npm"`
 	Maven    RegistryConfig `mapstructure:"maven"`
 	RubyGems RegistryConfig `mapstructure:"rubygems"`
+	Docker   RegistryConfig `mapstructure:"docker"`
 }
 
 type RegistryConfig struct {
@@ -145,6 +154,16 @@ type CVEConfig struct {
 	BaseURL         string `mapstructure:"base_url"`          // default "https://api.osv.dev"
 	BlockOn         string `mapstructure:"block_on"`          // "CRITICAL"|"HIGH"|"MEDIUM"|"LOW"
 	CacheTTLMinutes int    `mapstructure:"cache_ttl_minutes"` // default 1440
+}
+
+// ImageScanConfig configures container-image vulnerability scanning (Trivy).
+// It is separate from CVEConfig (osv.dev): a different engine and model.
+type ImageScanConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	TrivyServer    string `mapstructure:"trivy_server"`    // e.g. "http://trivy:4954"
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 120
+	Scanners       string `mapstructure:"scanners"`        // trivy --scanners value, default "vuln,secret"
+	MaxLayerBytes  int64  `mapstructure:"max_layer_bytes"` // layer larger than this → fail-closed
 }
 
 // MalwareConfig configures the malware-scanning engines run after download.

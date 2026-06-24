@@ -1,30 +1,33 @@
 # Jōei
 
-A transparent supply chain security proxy for package registries. Supports PyPI, npm, and
-Maven (Go support ships in a later phase).
+A transparent supply chain security proxy for package registries and Docker images.
+Supports PyPI, npm, Maven, and Docker Hub (Go support ships in a later phase).
 Point your package manager at Jōei instead of the upstream registry — it intercepts
 every download and enforces four layers of protection before serving the artifact.
+Docker images are additionally gated by Trivy vulnerability and secret scanning.
 
 ```
-Developer (pip/npm/mvn)
+Developer (pip/npm/mvn/docker pull)
         │
         ▼
-  ┌─────────────────────────────────────────────┐
-  │                 Jōei :8080                  │
-  │  1. Cache lookup (HIT served immediately)   │
-  │  2. Supply Chain Filter (24h rule)          │
-  │  3. CVE Scanner (osv.dev)                   │
-  │  4. Malware Scanner (ClamAV / ICAP)         │
-  └─────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────┐
+  │                   Jōei :8080                     │
+  │  1. Cache lookup (HIT served immediately)        │
+  │  2. Supply Chain Filter (24h rule)               │
+  │  3. CVE Scanner (osv.dev)                        │
+  │  4. Malware Scanner (ClamAV / ICAP)              │
+  │  5. Image Scanner (Trivy — Docker images only)   │
+  └──────────────────────────────────────────────────┘
         │
         ▼
-   Upstream registry (PyPI / npm / Maven)
+   Upstream registry (PyPI / npm / Maven / Docker Hub)
 ```
 
 **What gets blocked:**
 - Packages published less than 24 hours ago (supply chain poisoning protection)
 - Packages with CVE severity ≥ configured threshold (`HIGH` by default)
 - Packages whose artifact matches a malware signature detected by any configured scanner
+- Docker images with vulnerabilities or embedded secrets detected by Trivy
 - Packages on the explicit `denylist`
 
 **What gets cached:** Approved artifacts are stored locally; repeat requests are served
@@ -105,6 +108,33 @@ bundle config mirror.https://rubygems.org http://localhost:8080/rubygems
 # or set the source in a Gemfile:
 #   source "http://localhost:8080/rubygems"
 ```
+
+**Docker (registry mirror):**
+
+Jōei can act as a pull-through proxy for Docker Hub. Point the Docker daemon at
+Jōei by adding it as a registry mirror in `/etc/docker/daemon.json`:
+
+```json
+{
+  "registry-mirrors": ["http://localhost:8080"]
+}
+```
+
+Restart the Docker daemon, then `docker pull` fetches images through Jōei:
+
+```bash
+sudo systemctl restart docker
+docker pull library/alpine:3.21
+```
+
+**Caveats:**
+- Only Docker Hub (`registry-1.docker.io`) is supported as an upstream. Private
+  registries and other OCI registries are not proxied.
+- Images are gated by both Trivy (vulnerability + secret scanning) and ClamAV
+  (malware signatures). Blocking happens on the **manifest** before any layer
+  data is downloaded, so a rejected image never reaches the client.
+- Enable the Docker registry in `config.yaml` by setting
+  `registries.docker.enabled: true` and `image_scan.enabled: true`.
 
 **3. Smoke test**
 
@@ -299,6 +329,11 @@ and `_` as separator (e.g. `JOEI_SUPPLY_CHAIN_MODE=dry_run`).
 | `cve.enabled` | `true` | Enable CVE scanning via osv.dev |
 | `cve.block_on` | `HIGH` | Minimum severity to block: `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW` |
 | `cve.cache_ttl_minutes` | `1440` | How long CVE scan results are cached in memory (minutes) |
+| `image_scan.enabled` | `false` | Enable Trivy-based image scanning for Docker pulls |
+| `image_scan.trivy_server` | `http://trivy:4954` | Address of the Trivy server sidecar |
+| `image_scan.timeout_seconds` | `120` | Timeout for a single image scan |
+| `image_scan.scanners` | `vuln,secret` | Comma-separated Trivy scanner types |
+| `image_scan.max_layer_bytes` | `2147483648` | Maximum layer size (bytes); larger layers fail closed |
 | `policy.active_profile` | `production` | Name of the active policy profile |
 | `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks. Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
 | `policy.profiles.<name>.denylist` | `[]` | Packages always blocked regardless of scan results. Same format as `allowlist` |

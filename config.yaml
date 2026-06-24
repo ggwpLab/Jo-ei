@@ -18,6 +18,10 @@ registries:
     upstreams:
       - "https://rubygems.org"
     enabled: true
+  docker:
+    upstreams:
+      - "https://registry-1.docker.io"
+    enabled: true   # opt-in; flip to false to disable the Docker pull-through proxy
 
 supply_chain:
   min_age_hours: 24
@@ -28,6 +32,16 @@ cve:
   base_url: "https://api.osv.dev"
   block_on: "HIGH"
   cache_ttl_minutes: 1440
+
+# Container-image vulnerability scanning (Trivy). Separate from the osv.dev CVE
+# scanner above: a different engine and model. Severity threshold and denylist
+# come from the active policy profile (cve_min_severity / denylist).
+image_scan:
+  enabled: true
+  trivy_server: "http://trivy:4954"
+  timeout_seconds: 120
+  scanners: "vuln,secret"
+  max_layer_bytes: 2147483648   # 2 GB; a larger layer fails closed (blocks the image)
 
 malware:
   scanners:

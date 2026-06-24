@@ -14,10 +14,11 @@ const (
 // events: the stage that failed. For PASS events: the deepest gate the
 // artifact cleared.
 const (
-	GateCache   = "cache"
-	GateSupply  = "supply"
-	GateCVE     = "cve"
-	GateMalware = "malware"
+	GateCache     = "cache"
+	GateSupply    = "supply"
+	GateCVE       = "cve"
+	GateMalware   = "malware"
+	GateImageScan = "image_scan"
 )
 
 // Event is one telemetry record per intercepted request outcome. Field

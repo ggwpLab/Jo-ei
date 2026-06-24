@@ -99,7 +99,7 @@ func newPhase3NPMProxy(t *testing.T, upstream *httptest.Server, clamdAddr string
 		Logger:    zerolog.Nop(),
 		AVScanner: av,
 	})
-	mux := proxy.NewMux(map[string]*proxy.Handler{"npm": h}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{"npm": h}, nil, zerolog.Nop())
 	return httptest.NewServer(mux)
 }
 
@@ -164,7 +164,7 @@ func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
 		Logger:    zerolog.Nop(),
 		AVScanner: av,
 	})
-	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, zerolog.Nop())
+	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
