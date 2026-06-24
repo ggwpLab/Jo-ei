@@ -74,9 +74,19 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.ContentType != "" {
 		w.Header().Set("Content-Type", v.ContentType)
 	}
+	// A multi-arch index is a transit response, not a gate decision: the client
+	// then requests a concrete child manifest by digest, which produces the real
+	// PASS/BLOCK event. Serve it but keep it out of the request feed so a pull
+	// shows a single, meaningful entry instead of an index+child pair.
+	recordPass := !v.IsIndex
+	if v.IsIndex {
+		log.Debug().Str("digest", digest).Msg("serving multi-arch index (passthrough, not gated)")
+	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
-		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+		if recordPass {
+			h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+		}
 		return
 	}
 	// Open the cached manifest before writing any header so a cache-read
@@ -95,7 +105,9 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		log.Error().Err(err).Msg("serving cached manifest")
 		return
 	}
-	h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+	if recordPass {
+		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+	}
 }
 
 func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPath) {

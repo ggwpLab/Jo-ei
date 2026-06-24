@@ -94,3 +94,28 @@ func TestHandlerManifestCVEBlocked403(t *testing.T) {
 		t.Errorf("events = %+v", rec.events)
 	}
 }
+
+func TestHandlerIndexPassthroughNoTelemetry(t *testing.T) {
+	srvURL, repo, ref := newIndexGateServer(t)
+	rec := &recspy{}
+	h := New(HandlerDeps{
+		Upstreams: []string{srvURL},
+		// Both would block a concrete manifest; the index must not be gated.
+		Scanner:  stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		AV:       stubAV{infected: true},
+		Filter:   allowFilter{},
+		Policy:   findingPolicy{},
+		Cache:    newFakeCache(),
+		Recorder: rec,
+		Logger:   zerolog.Nop(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("index status = %d, want 200", w.Code)
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("index passthrough must not record a feed event, got %+v", rec.events)
+	}
+}

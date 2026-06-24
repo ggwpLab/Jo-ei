@@ -1,10 +1,12 @@
 package dockerproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +18,22 @@ import (
 // tests; the default wraps exec.CommandContext.
 type commandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+// execRunner runs name with args, capturing stdout and stderr separately. On a
+// non-zero exit it folds the captured stderr into the returned error so the
+// real tool message (e.g. why trivy failed) reaches the logs instead of an
+// opaque "exit status 1".
 func execRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("%w: %s", err, msg)
+		}
+		return nil, err
+	}
+	return stdout.Bytes(), nil
 }
 
 // TrivyScanner runs the `trivy` CLI in client/server mode against a sidecar
