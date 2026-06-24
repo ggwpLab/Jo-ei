@@ -51,7 +51,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	start := time.Now()
 	log := h.cfg.Logger.With().Str("request_id", requestID).Str("repo", pp.Repo).Str("ref", pp.Reference).Logger()
 
-	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference, defaultPlatform)
+	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
 	if err != nil {
 		log.Error().Err(err).Msg("docker gate error")
 		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
@@ -76,7 +76,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
-		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, "ok", http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
 		return
 	}
 	// Open the cached manifest before writing any header so a cache-read
@@ -95,7 +95,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		log.Error().Err(err).Msg("serving cached manifest")
 		return
 	}
-	h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, "ok", http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+	h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
 }
 
 func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPath) {

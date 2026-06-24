@@ -12,15 +12,23 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
+// reasonIndexPassthrough marks a verdict for a multi-arch index served without
+// gating (the concrete child manifests are gated on their own requests).
+const reasonIndexPassthrough = "index_passthrough"
+
 // GateVerdict is the per-image decision produced by the manifest gate.
 type GateVerdict struct {
 	Allowed      bool
-	Reason       string // "ok" | "cve_found" | "denylisted" | "malware_found" | supply-chain reason
+	Reason       string // "ok" | "index_passthrough" | "cve_found" | "denylisted" | "malware_found" | supply-chain reason
 	BlockedBy    string // "supply_chain" | "cve" | "denylist" | "malware" (empty when allowed)
 	Findings     []proxy.CVEFinding
 	ManifestPath string // cached manifest body (allowed only)
 	ContentType  string
 	PublishedAt  time.Time
+	// IsIndex is true when the served manifest is a multi-arch index passed
+	// through un-gated; the client then requests a concrete child manifest by
+	// digest, which is gated on its own request.
+	IsIndex bool
 }
 
 type gateDeps struct {
@@ -38,24 +46,40 @@ type manifestGate struct{ gateDeps }
 
 func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{d} }
 
-// Evaluate runs the full gate for repo:ref on the given platform. It returns the
-// resolved image digest and the verdict. Infrastructure failures (resolve,
-// fetch, scan errors) return a non-nil error so the handler fails closed.
-func (g *manifestGate) Evaluate(ctx context.Context, repo, ref, platform string) (string, GateVerdict, error) {
-	// Resolve the requested ref to a canonical digest for the selected platform
-	// by fetching the (possibly index) manifest.
-	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref, platform)
+// Evaluate runs the full gate for repo:ref. It returns the canonical manifest
+// digest and the verdict. A multi-arch index is passed through un-gated (it has
+// no image content; the client then requests a concrete child manifest by
+// digest, which is gated on its own request). Infrastructure failures (fetch,
+// scan errors) return a non-nil error so the handler fails closed.
+func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, GateVerdict, error) {
+	// Fetch the raw manifest for ref (tag or digest); indexes are not resolved
+	// server-side, so the client's own platform choice drives what gets gated.
+	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
 	if err != nil {
 		return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w", repo, ref, err)
 	}
 
 	// Cached verdict?
 	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found {
-		v := GateVerdict{Allowed: clean, Reason: reason}
+		v := GateVerdict{Allowed: clean, Reason: reason, IsIndex: reason == reasonIndexPassthrough}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
 		} else if path, ok := g.store.GetManifestBody(repo, digest); ok {
 			v.ManifestPath, v.ContentType = path, contentType
+		}
+		return digest, v, nil
+	}
+
+	// Multi-arch index: pass through un-gated. It lists per-platform child
+	// manifests only; the client selects a platform and requests that child by
+	// digest, which reaches Evaluate again as a concrete manifest and is gated.
+	if isIndexMediaType(contentType) {
+		v := GateVerdict{Allowed: true, Reason: reasonIndexPassthrough, ContentType: contentType, IsIndex: true}
+		if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
+			return "", GateVerdict{}, err
+		}
+		if path, ok := g.store.GetManifestBody(repo, digest); ok {
+			v.ManifestPath = path
 		}
 		return digest, v, nil
 	}

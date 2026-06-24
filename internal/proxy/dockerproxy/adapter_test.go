@@ -30,8 +30,10 @@ func TestResolveDigest(t *testing.T) {
 	}
 }
 
-func TestFetchManifestSelectsPlatformFromIndex(t *testing.T) {
-	amd64Manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+func TestFetchManifestReturnsIndexRaw(t *testing.T) {
+	// A multi-arch index must be returned as-is (NOT resolved to a platform):
+	// the Docker client selects a platform itself and requests the concrete
+	// child manifest by digest, which the gate then scans.
 	index := map[string]any{
 		"schemaVersion": 2,
 		"mediaType":     mediaTypeOCIIndex,
@@ -44,6 +46,7 @@ func TestFetchManifestSelectsPlatformFromIndex(t *testing.T) {
 	}
 	indexBody, _ := json.Marshal(index)
 
+	var childRequested bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v2/library/nginx/manifests/latest":
@@ -51,9 +54,8 @@ func TestFetchManifestSelectsPlatformFromIndex(t *testing.T) {
 			w.Header().Set("Docker-Content-Digest", "sha256:index")
 			_, _ = w.Write(indexBody)
 		case "/v2/library/nginx/manifests/sha256:amd":
-			w.Header().Set("Content-Type", mediaTypeOCIManifest)
-			w.Header().Set("Docker-Content-Digest", "sha256:amd")
-			_, _ = w.Write([]byte(amd64Manifest))
+			childRequested = true
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -61,18 +63,24 @@ func TestFetchManifestSelectsPlatformFromIndex(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAdapter([]string{srv.URL})
-	body, ct, dg, err := a.FetchManifest(context.Background(), "library/nginx", "latest", "linux/amd64")
+	body, ct, dg, err := a.FetchManifest(context.Background(), "library/nginx", "latest")
 	if err != nil {
 		t.Fatalf("FetchManifest: %v", err)
 	}
-	if dg != "sha256:amd" {
-		t.Errorf("selected digest = %q, want sha256:amd", dg)
+	if dg != "sha256:index" {
+		t.Errorf("digest = %q, want sha256:index (the index itself, not a child)", dg)
 	}
-	if ct != mediaTypeOCIManifest {
-		t.Errorf("content-type = %q", ct)
+	if ct != mediaTypeOCIIndex {
+		t.Errorf("content-type = %q, want the index media type", ct)
 	}
-	if string(body) != amd64Manifest {
-		t.Errorf("body = %q", body)
+	if string(body) != string(indexBody) {
+		t.Errorf("body = %q, want the raw index", body)
+	}
+	if childRequested {
+		t.Error("FetchManifest must not resolve/fetch a child manifest; the client does that")
+	}
+	if !isIndexMediaType(ct) {
+		t.Errorf("isIndexMediaType(%q) = false, want true", ct)
 	}
 }
 

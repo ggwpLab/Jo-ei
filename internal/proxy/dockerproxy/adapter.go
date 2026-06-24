@@ -23,10 +23,8 @@ var manifestAccept = strings.Join([]string{
 	mediaTypeOCIManifest, mediaTypeOCIIndex,
 }, ", ")
 
-const defaultPlatform = "linux/amd64"
-
-// Adapter talks to upstream Docker registries, handling bearer-token auth and
-// multi-arch index resolution. It is safe for concurrent use.
+// Adapter talks to upstream Docker registries, handling bearer-token auth. It
+// is safe for concurrent use.
 type Adapter struct {
 	upstreams []string
 	client    *http.Client
@@ -140,24 +138,20 @@ func (a *Adapter) ResolveDigest(ctx context.Context, repo, ref string) (string, 
 	return "", lastErr
 }
 
-// FetchManifest fetches the manifest for ref. If it is a multi-arch index, the
-// child manifest matching platform (default linux/amd64) is fetched and returned.
-func (a *Adapter) FetchManifest(ctx context.Context, repo, ref, platform string) ([]byte, string, string, error) {
-	if platform == "" {
-		platform = defaultPlatform
-	}
-	body, ct, dg, err := a.getManifest(ctx, repo, ref)
-	if err != nil {
-		return nil, "", "", err
-	}
-	if ct != mediaTypeOCIIndex && ct != mediaTypeSchema2List {
-		return body, ct, dg, nil
-	}
-	childDigest, err := selectPlatform(body, platform)
-	if err != nil {
-		return nil, "", "", err
-	}
-	return a.getManifest(ctx, repo, childDigest)
+// FetchManifest fetches the raw manifest for ref (a tag or digest) and returns
+// its body, content type, and canonical digest. A multi-arch index is returned
+// as-is, NOT resolved to a platform: the Docker client performs platform
+// selection itself by requesting the concrete child manifest by digest, which
+// the proxy then gates on its own. This guarantees the image the client
+// actually pulls is the one scanned, on any host architecture.
+func (a *Adapter) FetchManifest(ctx context.Context, repo, ref string) ([]byte, string, string, error) {
+	return a.getManifest(ctx, repo, ref)
+}
+
+// isIndexMediaType reports whether ct is a multi-arch image index / manifest
+// list, which lists per-platform child manifests rather than image content.
+func isIndexMediaType(ct string) bool {
+	return ct == mediaTypeOCIIndex || ct == mediaTypeSchema2List
 }
 
 // getManifest GETs a manifest by ref/digest from the first working upstream.
@@ -188,33 +182,6 @@ func (a *Adapter) getManifest(ctx context.Context, repo, ref string) ([]byte, st
 		return b, ct, dg, nil
 	}
 	return nil, "", "", lastErr
-}
-
-// selectPlatform returns the child manifest digest for "os/arch" from an index.
-func selectPlatform(indexBody []byte, platform string) (string, error) {
-	parts := strings.SplitN(platform, "/", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid platform %q", platform)
-	}
-	wantOS, wantArch := parts[0], parts[1]
-	var idx struct {
-		Manifests []struct {
-			Digest   string `json:"digest"`
-			Platform struct {
-				OS   string `json:"os"`
-				Arch string `json:"architecture"`
-			} `json:"platform"`
-		} `json:"manifests"`
-	}
-	if err := json.Unmarshal(indexBody, &idx); err != nil {
-		return "", fmt.Errorf("decoding manifest index: %w", err)
-	}
-	for _, m := range idx.Manifests {
-		if m.Platform.OS == wantOS && m.Platform.Arch == wantArch {
-			return m.Digest, nil
-		}
-	}
-	return "", fmt.Errorf("platform %q not present in manifest index", platform)
 }
 
 // FetchBlob opens a blob (config or layer) stream from the first working
