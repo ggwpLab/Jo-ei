@@ -206,6 +206,14 @@ func (a *Adapter) FetchBlob(ctx context.Context, repo, digest string) (io.ReadCl
 
 // hostFromUpstream returns the host[:port] of the first upstream, scheme
 // stripped, for building the image reference Trivy scans. Empty list → "".
+//
+// Docker Hub's registry endpoint host ("registry-1.docker.io", and the
+// "index.docker.io" alias) is normalized to the canonical "docker.io". Trivy /
+// go-containerregistry only apply Docker Hub's auth and pull semantics for the
+// canonical name; given the literal "registry-1.docker.io" they treat it as a
+// generic registry and layer pulls fail (manifests resolve, but layer blobs come
+// back unusable — "archive/tar: invalid tar header"). Other registry hosts
+// (GHCR, Quay, private) are returned unchanged.
 func hostFromUpstream(upstreams []string) string {
 	if len(upstreams) == 0 {
 		return ""
@@ -213,7 +221,12 @@ func hostFromUpstream(upstreams []string) string {
 	h := upstreams[0]
 	h = strings.TrimPrefix(h, "https://")
 	h = strings.TrimPrefix(h, "http://")
-	return strings.TrimRight(h, "/")
+	h = strings.TrimRight(h, "/")
+	switch h {
+	case "registry-1.docker.io", "index.docker.io":
+		return "docker.io"
+	}
+	return h
 }
 
 // ImageConfig parses a schema2/OCI manifest, fetches its config blob, and

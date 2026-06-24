@@ -121,3 +121,23 @@ func TestImageConfigCreatedAndLayers(t *testing.T) {
 		t.Errorf("layers = %v", layers)
 	}
 }
+
+func TestHostFromUpstreamNormalizesDockerHub(t *testing.T) {
+	tests := []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"https://registry-1.docker.io"}, "docker.io"},
+		{[]string{"https://index.docker.io/"}, "docker.io"},
+		{[]string{"https://docker.io"}, "docker.io"},
+		{[]string{"https://ghcr.io"}, "ghcr.io"},
+		{[]string{"https://quay.io/"}, "quay.io"},
+		{[]string{"http://localhost:5000"}, "localhost:5000"},
+		{nil, ""},
+	}
+	for _, tt := range tests {
+		if got := hostFromUpstream(tt.in); got != tt.want {
+			t.Errorf("hostFromUpstream(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
