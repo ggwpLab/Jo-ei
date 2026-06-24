@@ -238,7 +238,7 @@ func TestGatePassesThroughIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	if !v.Allowed || !v.IsIndex || v.Reason != reasonIndexPassthrough {
+	if !v.Allowed || !v.Passthrough || v.Reason != reasonIndexPassthrough {
 		t.Errorf("index should pass through allowed, got %+v", v)
 	}
 	if digest != "sha256:index" {
@@ -246,5 +246,69 @@ func TestGatePassesThroughIndex(t *testing.T) {
 	}
 	if clean, reason, found := store.GetImageVerdict(repo, digest); !found || !clean || reason != reasonIndexPassthrough {
 		t.Errorf("index verdict should be cached clean: found=%v clean=%v reason=%q", found, clean, reason)
+	}
+}
+
+// newAttestationGateServer serves a buildx attestation manifest (layers are
+// in-toto JSON, not a filesystem) at "library/test:att".
+func newAttestationGateServer(t *testing.T) (string, string, string) {
+	t.Helper()
+	const (
+		repo      = "library/test"
+		ref       = "att"
+		attDigest = "sha256:att"
+	)
+	manifest := map[string]interface{}{
+		"schemaVersion": 2,
+		"mediaType":     mediaTypeOCIManifest,
+		"config": map[string]string{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    "sha256:attcfg",
+		},
+		"layers": []map[string]interface{}{
+			{"mediaType": "application/vnd.in-toto+json", "digest": "sha256:sbom"},
+			{"mediaType": "application/vnd.in-toto+json", "digest": "sha256:provenance"},
+		},
+	}
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal attestation manifest: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, ref), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", mediaTypeOCIManifest)
+		w.Header().Set("Docker-Content-Digest", attDigest)
+		_, _ = w.Write(body)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL, repo, ref
+}
+
+// TestGatePassesThroughAttestation verifies an attestation manifest (in-toto
+// layers) is served un-gated: Trivy/ClamAV (both set to block) must NOT be
+// consulted, since it carries no scannable filesystem content. Without this the
+// gate would hand it to Trivy and fail every pull with "invalid tar header".
+func TestGatePassesThroughAttestation(t *testing.T) {
+	srvURL, repo, ref := newAttestationGateServer(t)
+	store := newVerdictStore(newFakeCache())
+	d := gateDeps{
+		adapter: NewAdapter([]string{srvURL}),
+		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		av:      stubAV{infected: true},
+		filter:  allowFilter{},
+		policy:  findingPolicy{},
+		store:   store,
+		logger:  zerolog.Nop(),
+	}
+	digest, v, err := newManifestGate(d).Evaluate(context.Background(), repo, ref)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if !v.Allowed || !v.Passthrough || v.Reason != reasonAttestationPassthrough {
+		t.Errorf("attestation should pass through allowed, got %+v", v)
+	}
+	if digest != "sha256:att" {
+		t.Errorf("digest = %q, want sha256:att", digest)
 	}
 }

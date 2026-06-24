@@ -12,23 +12,35 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
-// reasonIndexPassthrough marks a verdict for a multi-arch index served without
-// gating (the concrete child manifests are gated on their own requests).
-const reasonIndexPassthrough = "index_passthrough"
+// Passthrough reasons: manifests served without gating because they carry no
+// scannable image content. A multi-arch index lists per-platform child
+// manifests (each gated on its own request); an attestation manifest's "layers"
+// are in-toto JSON (SBOM/provenance), not a filesystem.
+const (
+	reasonIndexPassthrough       = "index_passthrough"
+	reasonAttestationPassthrough = "attestation_passthrough"
+)
+
+// isPassthroughReason reports whether a cached verdict reason denotes an
+// un-gated passthrough (index or attestation) rather than a real gate decision.
+func isPassthroughReason(reason string) bool {
+	return reason == reasonIndexPassthrough || reason == reasonAttestationPassthrough
+}
 
 // GateVerdict is the per-image decision produced by the manifest gate.
 type GateVerdict struct {
 	Allowed      bool
-	Reason       string // "ok" | "index_passthrough" | "cve_found" | "denylisted" | "malware_found" | supply-chain reason
+	Reason       string // "ok" | "index_passthrough" | "attestation_passthrough" | "cve_found" | "denylisted" | "malware_found" | supply-chain reason
 	BlockedBy    string // "supply_chain" | "cve" | "denylist" | "malware" (empty when allowed)
 	Findings     []proxy.CVEFinding
 	ManifestPath string // cached manifest body (allowed only)
 	ContentType  string
 	PublishedAt  time.Time
-	// IsIndex is true when the served manifest is a multi-arch index passed
-	// through un-gated; the client then requests a concrete child manifest by
-	// digest, which is gated on its own request.
-	IsIndex bool
+	// Passthrough is true when the served manifest was not gated because it has
+	// no scannable image content (a multi-arch index, or an attestation
+	// manifest). The real image content is gated when the client requests the
+	// concrete platform image manifest by digest.
+	Passthrough bool
 }
 
 type gateDeps struct {
@@ -61,7 +73,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 
 	// Cached verdict?
 	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found {
-		v := GateVerdict{Allowed: clean, Reason: reason, IsIndex: reason == reasonIndexPassthrough}
+		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason)}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
 		} else if path, ok := g.store.GetManifestBody(repo, digest); ok {
@@ -74,14 +86,15 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// manifests only; the client selects a platform and requests that child by
 	// digest, which reaches Evaluate again as a concrete manifest and is gated.
 	if isIndexMediaType(contentType) {
-		v := GateVerdict{Allowed: true, Reason: reasonIndexPassthrough, ContentType: contentType, IsIndex: true}
-		if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
-			return "", GateVerdict{}, err
-		}
-		if path, ok := g.store.GetManifestBody(repo, digest); ok {
-			v.ManifestPath = path
-		}
-		return digest, v, nil
+		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonIndexPassthrough)
+	}
+
+	// Non-image manifest (e.g. a buildx attestation manifest whose layers are
+	// in-toto JSON, not a filesystem): pass through un-gated. Trivy/ClamAV cannot
+	// and must not scan it, and it carries no executable image content. The real
+	// platform image manifests in the same index are gated on their own requests.
+	if !isImageManifest(manifestBody) {
+		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonAttestationPassthrough)
 	}
 
 	pkgRef := &proxy.PackageRef{Ecosystem: "docker", Name: repo, Version: ref}
@@ -146,6 +159,20 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 
 	// Clean.
 	v := GateVerdict{Allowed: true, Reason: "ok", PublishedAt: created, ContentType: contentType}
+	if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
+		return "", GateVerdict{}, err
+	}
+	if path, ok := g.store.GetManifestBody(repo, digest); ok {
+		v.ManifestPath = path
+	}
+	return digest, v, nil
+}
+
+// passthrough caches and returns an allowed, un-gated verdict for a manifest
+// with no scannable image content (a multi-arch index or an attestation
+// manifest). The body is cached so the subsequent serve is from cache.
+func (g *manifestGate) passthrough(ctx context.Context, repo, digest string, manifestBody []byte, contentType, reason string) (string, GateVerdict, error) {
+	v := GateVerdict{Allowed: true, Reason: reason, ContentType: contentType, Passthrough: true}
 	if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
 		return "", GateVerdict{}, err
 	}

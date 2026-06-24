@@ -31,7 +31,8 @@ func dockerFakeUpstream(t *testing.T) *httptest.Server {
 		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
 		"config":        map[string]any{"digest": "sha256:cfg"},
 		"layers": []map[string]any{
-			{"digest": "sha256:layer1"}, {"digest": "sha256:layer2"},
+			{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:layer1"},
+			{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:layer2"},
 		},
 	})
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

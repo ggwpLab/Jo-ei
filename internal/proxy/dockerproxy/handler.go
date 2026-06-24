@@ -74,13 +74,13 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.ContentType != "" {
 		w.Header().Set("Content-Type", v.ContentType)
 	}
-	// A multi-arch index is a transit response, not a gate decision: the client
-	// then requests a concrete child manifest by digest, which produces the real
-	// PASS/BLOCK event. Serve it but keep it out of the request feed so a pull
-	// shows a single, meaningful entry instead of an index+child pair.
-	recordPass := !v.IsIndex
-	if v.IsIndex {
-		log.Debug().Str("digest", digest).Msg("serving multi-arch index (passthrough, not gated)")
+	// An index or attestation manifest is a transit response, not a gate
+	// decision: the real PASS/BLOCK event comes from the concrete platform image
+	// manifest the client requests by digest. Serve it but keep it out of the
+	// request feed so a pull shows a single, meaningful entry.
+	recordPass := !v.Passthrough
+	if v.Passthrough {
+		log.Debug().Str("digest", digest).Str("reason", v.Reason).Msg("serving manifest passthrough (not gated)")
 	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
