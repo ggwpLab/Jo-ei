@@ -36,11 +36,10 @@ var cfgFile string
 // scanner listing when cve.base_url is unset.
 const defaultOSVBaseURL = "https://api.osv.dev"
 
-// Upstream 429/503 backoff bounds (see httpx.AdaptiveBackoff). The cooldown
-// honors Retry-After when sent; these bound the fallback exponential backoff and
-// the retry budget per request.
+// Upstream 429/503 circuit-breaker cooldown bounds (see httpx.CircuitBreaker).
+// The cooldown honors Retry-After when sent; these bound the fallback
+// exponential cooldown when it is absent.
 const (
-	upstreamMaxRetries     = 4
 	upstreamRetryBaseDelay = 1 * time.Second
 	upstreamRetryMaxDelay  = 20 * time.Second
 )
@@ -155,16 +154,16 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if rate <= 0 {
 		rate = config.DefaultUpstreamRatePerSecond
 	}
-	// Outermost: react to upstream 429/503 with a per-host cooldown + retry, so a
-	// throttle pauses (not fails) all requests to that host until it recovers —
-	// self-tuning to the registry's real limit. Inner: a coarse rate cap, then a
-	// concurrency cap, over the default transport.
-	upstreamLimiter := httpx.NewAdaptiveBackoff(
+	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
+	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
+	// skipped immediately in favor of a mirror instead of being retried/hammered.
+	// Inner: a coarse rate cap, then a concurrency cap, over the default transport.
+	upstreamLimiter := httpx.NewCircuitBreaker(
 		httpx.NewRateLimiter(
 			httpx.NewConcurrencyLimiter(http.DefaultTransport, maxConc),
 			float64(rate), 2*rate,
 		),
-		upstreamMaxRetries, upstreamRetryBaseDelay, upstreamRetryMaxDelay,
+		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
 	)
 	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
 	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}

@@ -20,6 +20,7 @@ registries:
   maven:
     upstreams:
       - "https://repo1.maven.org/maven2"
+      - "https://maven-central.storage-download.googleapis.com/maven2"
     enabled: true
   rubygems:
     upstreams:
