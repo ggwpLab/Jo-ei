@@ -82,8 +82,14 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		g.tags.rememberChildren(repo, ref, manifestBody)
 	}
 
-	// Cached verdict?
-	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found {
+	// Cached verdict? Supply-chain blocks are intentionally never cached (step 1
+	// below): they are time-based and must be re-evaluated each pull. Ignore a
+	// stale supply-chain block left in the on-disk store by an older build —
+	// the store persists only clean+reason, not block_until, so restoring it
+	// would block the image with a zero block_until (never shown in the
+	// quarantine view) and would keep blocking it even after it matured. Fall
+	// through to a fresh evaluation instead.
+	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
 		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason)}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
@@ -276,6 +282,15 @@ func (g *manifestGate) cacheVerdict(_ context.Context, repo, digest string, mani
 func (g *manifestGate) imageRef(repo, digest string) string {
 	host := hostFromUpstream(g.adapter.upstreams)
 	return host + "/" + repo + "@" + digest
+}
+
+// isStaleSupplyBlock reports whether a cached verdict is a supply-chain block.
+// The current gate never caches these (a supply-chain hold is time-based; see
+// Evaluate step 1), so such an entry can only have been written by an older
+// build. The verdict store does not persist the block_until timestamp, so the
+// entry must be re-evaluated rather than trusted.
+func isStaleSupplyBlock(clean bool, reason string) bool {
+	return !clean && blockedByForReason(reason) == "supply_chain"
 }
 
 func blockedByForReason(reason string) string {
