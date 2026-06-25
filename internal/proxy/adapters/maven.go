@@ -2,12 +2,8 @@ package adapters
 
 import (
 	"context"
-	"fmt"
-	"math/rand/v2"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
@@ -102,153 +98,29 @@ func mavenClassifier(file, artifact, version string) string {
 	return strings.TrimPrefix(rest, "-")
 }
 
-// FetchMetadata walks the configured upstreams in order, returning the first
-// success. If all upstreams fail, the last error is returned.
-func (a *MavenAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
-	lastErr := fmt.Errorf("no upstreams configured for maven")
-	for _, base := range a.upstreams {
-		meta, err := a.fetchMetadataFrom(ctx, base, ref)
-		if err == nil {
-			return meta, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+// FetchMetadata is a no-op for Maven: there is no separate metadata API to call.
+// The publish-date proxy (the artifact's Last-Modified) is read from the
+// download response instead — see MetadataFromHeader — so a pull costs one GET
+// rather than an extra HEAD on the .pom. MavenAdapter implements
+// proxy.DownloadMetadataExtractor, so the handler never calls this; it exists to
+// satisfy the RegistryAdapter contract.
+func (a *MavenAdapter) FetchMetadata(_ context.Context, _ *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+	return &proxy.PackageMetadata{}, nil
 }
 
-func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
-	parts := strings.SplitN(ref.Name, ":", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid maven name %q (want group:artifact)", ref.Name)
-	}
-	group, artifact := parts[0], parts[1]
-	groupPath := strings.ReplaceAll(group, ".", "/")
-	pomURL := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
-		base, groupPath, artifact, ref.Version, artifact, ref.Version)
-
-	resp, err := a.headWithRetry(ctx, pomURL)
-	if err != nil {
-		return nil, fmt.Errorf("fetching maven artifact head: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("maven returned HTTP %d for %s", resp.StatusCode, ref.Key())
-	}
-
+// MetadataFromHeader derives package metadata from an artifact download
+// response. Maven Central serves artifacts as static files, so the .jar's
+// Last-Modified is a sound proxy for the publish date used by the supply-chain
+// age check. A missing/unparseable header yields a zero PublishedAt (treated as
+// old), matching the previous behavior when the .pom carried no Last-Modified.
+func (a *MavenAdapter) MetadataFromHeader(h http.Header) *proxy.PackageMetadata {
 	meta := &proxy.PackageMetadata{}
-	if lm := resp.Header.Get("Last-Modified"); lm != "" {
+	if lm := h.Get("Last-Modified"); lm != "" {
 		if t, err := http.ParseTime(lm); err == nil {
 			meta.PublishedAt = t.UTC()
 		}
 	}
-	return meta, nil
-}
-
-// Maven Central rate-limits bursts with HTTP 429. We retry a bounded number of
-// times, honoring Retry-After when present, so transient throttling does not
-// fail an otherwise-valid download.
-// The per-host concurrency limiter (internal/httpx) is what keeps us under the
-// rate limit; these retries are a fallback for the occasional 429/503. The
-// budget and cap are deliberately small so a genuinely throttled pull fails in
-// ~10-15s rather than blocking the client for the full Retry-After.
-const (
-	mavenMaxMetadataRetries = 3
-	mavenRetryBaseDelay     = 500 * time.Millisecond
-	mavenRetryMaxDelay      = 4 * time.Second
-)
-
-// headWithRetry performs a HEAD request, retrying on 429/503 with backoff that
-// honors the Retry-After header. It returns the last response (which the caller
-// inspects) or a transport/context error.
-func (a *MavenAdapter) headWithRetry(ctx context.Context, url string) (*http.Response, error) {
-	for attempt := 0; ; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
-		if err != nil {
-			return nil, fmt.Errorf("building maven HEAD request: %w", err)
-		}
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusTooManyRequests &&
-			resp.StatusCode != http.StatusServiceUnavailable {
-			return resp, nil
-		}
-		if attempt >= mavenMaxMetadataRetries {
-			// Out of retries: hand the throttled response back to the caller,
-			// which turns it into a "maven returned HTTP 429" error.
-			return resp, nil
-		}
-		delay := retryAfterDelay(resp.Header.Get("Retry-After"), attempt)
-		resp.Body.Close()
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-// retryAfterDelay computes how long to wait before the next attempt. When the
-// server sent a valid Retry-After it is honored (capped) plus a little jitter so
-// that many simultaneously throttled requests do not all wake at the same instant
-// and re-create the burst; otherwise it falls back to jittered exponential
-// backoff. The result is always capped at mavenRetryMaxDelay.
-func retryAfterDelay(header string, attempt int) time.Duration {
-	if d, ok := parseRetryAfter(header); ok {
-		return capDelay(d + jitterUpTo(mavenRetryBaseDelay))
-	}
-	return jitteredBackoff(attempt)
-}
-
-// parseRetryAfter parses a Retry-After value, either delta-seconds or an
-// HTTP-date. ok is false when the header is absent or unparseable.
-func parseRetryAfter(header string) (time.Duration, bool) {
-	if header == "" {
-		return 0, false
-	}
-	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
-		return time.Duration(secs) * time.Second, true
-	}
-	if t, err := http.ParseTime(header); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d, true
-		}
-		return 0, true
-	}
-	return 0, false
-}
-
-// jitteredBackoff returns an exponential backoff delay with "equal jitter": the
-// result is uniformly distributed in [d/2, d] where d = capDelay(base<<attempt).
-// The lower bound guarantees a minimum wait so retries never fire instantly,
-// while the random component de-synchronizes many simultaneously throttled
-// requests so their retries do not re-create the burst that triggered the 429.
-func jitteredBackoff(attempt int) time.Duration {
-	d := capDelay(mavenRetryBaseDelay << attempt)
-	half := d / 2
-	if half <= 0 {
-		return d
-	}
-	return half + jitterUpTo(half)
-}
-
-// jitterUpTo returns a random duration uniformly in [0, max] (0 when max <= 0).
-func jitterUpTo(max time.Duration) time.Duration {
-	if max <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Int64N(int64(max) + 1))
-}
-
-func capDelay(d time.Duration) time.Duration {
-	if d > mavenRetryMaxDelay {
-		return mavenRetryMaxDelay
-	}
-	if d < 0 {
-		return 0
-	}
-	return d
+	return meta
 }
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.

@@ -5,7 +5,6 @@ package integration_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,14 +31,10 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	}))
 	defer down.Close()
 
-	// Second upstream: serves .pom HEAD (with a Last-Modified that satisfies the
-	// 24h age check) and the .jar body.
+	// Second upstream: serves the .jar body with a Last-Modified that satisfies
+	// the 24h age check (the supply-chain date comes from the download response).
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ".pom") && r.Method == http.MethodHead {
-			w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("jar-bytes"))
 	}))

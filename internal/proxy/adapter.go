@@ -58,6 +58,19 @@ type RegistryAdapter interface {
 	UpstreamURLs(r *http.Request) []string
 }
 
+// DownloadMetadataExtractor is an optional RegistryAdapter capability: deriving
+// PackageMetadata (notably the publish date) from the artifact download
+// response headers. When an adapter implements it, the handler obtains the
+// supply-chain date from the download itself and runs the supply-chain check
+// after fetching the artifact — avoiding a separate metadata request. Maven
+// implements this (the artifact's Last-Modified is the publish-date proxy), so a
+// pull is one GET instead of a HEAD + GET. Adapters whose publish date comes
+// from a distinct metadata API (PyPI, npm) do not implement it and are checked
+// before download via FetchMetadata as before.
+type DownloadMetadataExtractor interface {
+	MetadataFromHeader(h http.Header) *PackageMetadata
+}
+
 // ── CVE / scan types ────────────────────────────────────────────────────────
 
 // Severity represents a CVE severity level.

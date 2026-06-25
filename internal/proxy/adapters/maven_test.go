@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,31 +85,26 @@ func TestMavenAdapter_NormalizeRequest_PomNotIntercepted(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestMavenAdapter_FetchMetadata_UsesLastModified(t *testing.T) {
+func TestMavenAdapter_MetadataFromHeader_UsesLastModified(t *testing.T) {
 	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodHead, r.Method)
-		assert.Equal(t, "/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.pom", r.URL.Path)
-		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
+	h := http.Header{}
+	h.Set("Last-Modified", lastModified.Format(http.TimeFormat))
+	meta := a.MetadataFromHeader(h)
 	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
 }
 
-func TestMavenAdapter_FetchMetadata_NoLastModifiedYieldsZeroTime(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK) // no Last-Modified header
-	}))
-	defer srv.Close()
+func TestMavenAdapter_MetadataFromHeader_NoLastModifiedYieldsZeroTime(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+	meta := a.MetadataFromHeader(http.Header{})
+	assert.True(t, meta.PublishedAt.IsZero())
+}
 
-	a := adapters.NewMavenAdapter([]string{srv.URL})
+// FetchMetadata is a no-op for Maven (the date comes from the download); it must
+// never make a network call.
+func TestMavenAdapter_FetchMetadata_IsNoOp(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"http://127.0.0.1:0"}) // unreachable: proves no call
 	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
@@ -134,113 +128,6 @@ func TestMavenAdapter_NormalizeRequest_WarAndAar(t *testing.T) {
 		assert.Equal(t, c.wantName, ref.Name, "path %q", c.path)
 		assert.Equal(t, c.wantVersion, ref.Version, "path %q", c.path)
 	}
-}
-
-func TestMavenAdapter_FetchMetadata_WarUsesPomHead(t *testing.T) {
-	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodHead, r.Method)
-		// Even though the intercepted artifact was a .war, metadata HEADs the .pom.
-		assert.Equal(t, "/com/example/myapp/1.0/myapp-1.0.pom", r.URL.Path)
-		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:myapp", Version: "1.0"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
-}
-
-func TestMavenAdapter_FetchMetadata_RetriesOn429ThenSucceeds(t *testing.T) {
-	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 1 {
-			// First attempt is rate-limited; Retry-After asks for a tiny delay.
-			w.Header().Set("Retry-After", "0")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:foo", Version: "1.0"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
-	assert.GreaterOrEqual(t, calls.Load(), int32(2), "should have retried after 429")
-}
-
-func TestMavenAdapter_FetchMetadata_429ExhaustedReturnsError(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		w.Header().Set("Retry-After", "0")
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:foo", Version: "1.0"}
-	_, err := a.FetchMetadata(context.Background(), ref)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "429")
-	// The retry budget is bounded: one initial attempt + mavenMaxMetadataRetries.
-	assert.Equal(t, int32(4), calls.Load(), "should stop after the bounded retry budget")
-}
-
-func TestMavenAdapter_FetchMetadata_NonOKReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:gone", Version: "9.9.9"}
-	_, err := a.FetchMetadata(context.Background(), ref)
-	assert.Error(t, err)
-}
-
-func TestMavenAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
-	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
-
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer down.Close()
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer up.Close()
-
-	a := adapters.NewMavenAdapter([]string{down.URL, up.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
-}
-
-func TestMavenAdapter_FetchMetadata_AllUpstreamsFail(t *testing.T) {
-	down1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer down1.Close()
-	down2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer down2.Close()
-
-	a := adapters.NewMavenAdapter([]string{down1.URL, down2.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
-	_, err := a.FetchMetadata(context.Background(), ref)
-	require.Error(t, err)
 }
 
 func TestMavenAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {

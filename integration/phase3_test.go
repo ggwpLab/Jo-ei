@@ -138,15 +138,15 @@ func TestPhase3_MalwareBlocked(t *testing.T) {
 }
 
 func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
-	// Maven repo serving a HEAD with an old Last-Modified, plus the jar bytes.
+	// Maven repo serving the jar bytes with an old Last-Modified; the supply-chain
+	// date is taken from this download response, not a separate HEAD.
 	lastModified := time.Now().UTC().Add(-72 * time.Hour)
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-			w.WriteHeader(http.StatusOK)
-			return
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			w.Write([]byte("jar-bytes"))
 		}
-		w.Write([]byte("jar-bytes"))
 	}))
 	defer registry.Close()
 	clamd := mockClamd(t, "stream: OK\x00")

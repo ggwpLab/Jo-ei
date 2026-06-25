@@ -126,37 +126,54 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch upstream metadata for supply chain check
 	ctx := r.Context()
-	meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch upstream metadata")
-		record(VerdictError, GateSupply, "upstream_metadata_unavailable", http.StatusBadGateway, nil)
-		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_metadata_unavailable")
-		return
+
+	// Supply-chain check. Adapters that carry the publish date on the artifact
+	// download itself (Maven, via Last-Modified) defer the check until after the
+	// download, which avoids a separate metadata request; other adapters fetch
+	// metadata up front and check now.
+	extractor, deferSC := h.cfg.Adapter.(DownloadMetadataExtractor)
+
+	var scResult FilterResult
+	// checkSupplyChain runs the filter and, on a block, writes the response and
+	// records telemetry; it also emits the dry_run warning. It returns false when
+	// the request is finished (blocked) and the caller must return.
+	checkSupplyChain := func(meta *PackageMetadata) bool {
+		scResult = h.cfg.Filter.Check(ctx, ref, meta)
+		if !scResult.Allowed {
+			log.Warn().
+				Str("reason", scResult.Reason).
+				Time("published_at", scResult.PublishedAt).
+				Time("block_until", scResult.BlockUntil).
+				Msg("supply chain filter blocked package")
+			record(VerdictBlock, GateSupply, scResult.Reason, http.StatusLocked, func(ev *Event) {
+				ev.BlockedBy = []string{"supply_chain"}
+				ev.PublishedAt = scResult.PublishedAt
+				ev.BlockUntil = scResult.BlockUntil
+			})
+			h.writeBlockedResponse(w, requestID, ref, scResult)
+			return false
+		}
+		if scResult.Reason == "dry_run" {
+			log.Warn().
+				Time("published_at", scResult.PublishedAt).
+				Time("block_until", scResult.BlockUntil).
+				Msg("dry_run: package would be blocked by supply chain filter")
+		}
+		return true
 	}
 
-	// Supply chain filter
-	scResult := h.cfg.Filter.Check(ctx, ref, meta)
-	if !scResult.Allowed {
-		log.Warn().
-			Str("reason", scResult.Reason).
-			Time("published_at", scResult.PublishedAt).
-			Time("block_until", scResult.BlockUntil).
-			Msg("supply chain filter blocked package")
-		record(VerdictBlock, GateSupply, scResult.Reason, http.StatusLocked, func(ev *Event) {
-			ev.BlockedBy = []string{"supply_chain"}
-			ev.PublishedAt = scResult.PublishedAt
-			ev.BlockUntil = scResult.BlockUntil
-		})
-		h.writeBlockedResponse(w, requestID, ref, scResult)
-		return
-	}
-	if scResult.Reason == "dry_run" {
-		log.Warn().
-			Time("published_at", scResult.PublishedAt).
-			Time("block_until", scResult.BlockUntil).
-			Msg("dry_run: package would be blocked by supply chain filter")
+	if !deferSC {
+		meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to fetch upstream metadata")
+			record(VerdictError, GateSupply, "upstream_metadata_unavailable", http.StatusBadGateway, nil)
+			h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_metadata_unavailable")
+			return
+		}
+		if !checkSupplyChain(meta) {
+			return
+		}
 	}
 
 	// CVE scan — before downloading the artifact (fail-closed if scanner errors).
@@ -197,7 +214,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
 		return
 	}
-	tmpPath, allNotFound, err := h.downloadFromUpstreams(ctx, upstreamURLs)
+	tmpPath, header, allNotFound, err := h.downloadFromUpstreams(ctx, upstreamURLs)
 	if err != nil {
 		if allNotFound {
 			log.Warn().Strs("upstream_urls", upstreamURLs).Msg("artifact not found on any upstream")
@@ -211,6 +228,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.Remove(tmpPath)
+
+	// Deferred supply-chain: the artifact download carried the publish date
+	// (e.g. Maven's Last-Modified), so run the check now, before serving.
+	if deferSC {
+		if !checkSupplyChain(extractor.MetadataFromHeader(header)) {
+			return
+		}
+	}
 
 	// Antivirus scan — after download, before caching (fail-closed on error).
 	if h.cfg.AVScanner != nil {
@@ -340,54 +365,55 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "upstream unavailable", http.StatusBadGateway)
 }
 
-// tryDownload downloads url to a temp file. Returns the temp path on HTTP 200.
-// statusCode is the upstream HTTP status (0 on transport error). The caller
-// removes the file.
-func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, statusCode int, err error) {
+// tryDownload downloads url to a temp file. Returns the temp path and the
+// response header on HTTP 200. statusCode is the upstream HTTP status (0 on
+// transport error). The caller removes the file.
+func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, header http.Header, statusCode int, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", 0, err
+		return "", nil, 0, err
 	}
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("downloading %s: %w", url, err)
+		return "", nil, 0, fmt.Errorf("downloading %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
 	}
 
 	tmp, err := os.CreateTemp("", "jo-ei-artifact-*")
 	if err != nil {
-		return "", resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
 	defer tmp.Close()
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
 		os.Remove(tmp.Name())
-		return "", resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
 	}
-	return tmp.Name(), resp.StatusCode, nil
+	return tmp.Name(), resp.Header, resp.StatusCode, nil
 }
 
 // downloadFromUpstreams tries each candidate URL in order, returning the first
-// HTTP 200. allNotFound is true iff every attempt returned 404/410 (no other
-// failure occurred), which the caller maps to a 404 instead of 502.
-func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, allNotFound bool, err error) {
+// HTTP 200 with its response header. allNotFound is true iff every attempt
+// returned 404/410 (no other failure occurred), which the caller maps to a 404
+// instead of 502.
+func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, header http.Header, allNotFound bool, err error) {
 	if len(urls) == 0 {
-		return "", false, fmt.Errorf("downloadFromUpstreams: no upstream URLs provided")
+		return "", nil, false, fmt.Errorf("downloadFromUpstreams: no upstream URLs provided")
 	}
 	allNotFound = true
 	for _, u := range urls {
-		path, status, derr := h.tryDownload(ctx, u)
+		path, hdr, status, derr := h.tryDownload(ctx, u)
 		if derr == nil {
-			return path, false, nil
+			return path, hdr, false, nil
 		}
 		if status != http.StatusNotFound && status != http.StatusGone {
 			allNotFound = false
 		}
 		err = derr
 	}
-	return "", allNotFound, err
+	return "", nil, allNotFound, err
 }
 
 // serveFromCache streams the cached artifact to the response writer. It
