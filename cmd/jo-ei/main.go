@@ -133,14 +133,23 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	defer func() { _ = store.Close() }()
 	broadcaster := telemetry.NewBroadcaster()
 
-	// One per-host concurrency limiter shared by every upstream client (metadata,
-	// download, transparent proxy, Docker) so parallel dependency resolution stays
-	// under each registry's rate limit and does not draw HTTP 429s.
+	// One shared upstream transport for every client (metadata, download,
+	// transparent proxy, Docker): a per-host request-rate cap (the primary 429
+	// defense — registries throttle by rate) over a per-host concurrency cap
+	// (complementary, bounds parallelism). Shared so all traffic to a host counts
+	// against the same caps.
 	maxConc := cfg.Server.UpstreamMaxConcurrent
 	if maxConc <= 0 {
 		maxConc = config.DefaultUpstreamMaxConcurrent
 	}
-	upstreamLimiter := httpx.NewConcurrencyLimiter(http.DefaultTransport, maxConc)
+	rate := cfg.Server.UpstreamRatePerSecond
+	if rate <= 0 {
+		rate = config.DefaultUpstreamRatePerSecond
+	}
+	upstreamLimiter := httpx.NewRateLimiter(
+		httpx.NewConcurrencyLimiter(http.DefaultTransport, maxConc),
+		float64(rate), 2*rate,
+	)
 	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
 	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}
 	dockerClient := &http.Client{Timeout: 120 * time.Second, Transport: upstreamLimiter}

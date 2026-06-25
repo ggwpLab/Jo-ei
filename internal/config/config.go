@@ -84,11 +84,21 @@ type ServerConfig struct {
 	// Maven, npm) under the registry's rate limit so it does not return HTTP 429.
 	// Zero or negative selects the default (DefaultUpstreamMaxConcurrent).
 	UpstreamMaxConcurrent int `mapstructure:"upstream_max_concurrent"`
+	// UpstreamRatePerSecond caps the request *rate* to each upstream registry
+	// host (token bucket). Registries throttle by rate, not concurrency, so this
+	// is the primary 429 defense; the concurrency cap is complementary. The burst
+	// allowance is twice this value. Zero or negative selects the default
+	// (DefaultUpstreamRatePerSecond); set a large value to effectively disable.
+	UpstreamRatePerSecond int `mapstructure:"upstream_rate_per_second"`
 }
 
 // DefaultUpstreamMaxConcurrent is the per-host outbound concurrency cap applied
 // when server.upstream_max_concurrent is unset.
 const DefaultUpstreamMaxConcurrent = 6
+
+// DefaultUpstreamRatePerSecond is the per-host outbound request-rate cap applied
+// when server.upstream_rate_per_second is unset.
+const DefaultUpstreamRatePerSecond = 10
 
 // ConsoleConfig holds admin-console settings.
 type ConsoleConfig struct {
