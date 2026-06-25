@@ -418,6 +418,7 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 		{Ecosystem: "npm", Enabled: cfg.Registries.NPM.Enabled, Upstreams: cfg.Registries.NPM.Upstreams},
 		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
 		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
+		{Ecosystem: "docker", Enabled: cfg.Registries.Docker.Enabled, Upstreams: cfg.Registries.Docker.Upstreams},
 	}
 }
 
