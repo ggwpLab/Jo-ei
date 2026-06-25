@@ -70,6 +70,23 @@ recorded as `GateSupply`) but never listed on the Quarantine screen.
   modifier. For non-supply blocks (cve / malware / denylist) these stay zero, which is
   correct — only supply-chain holds are quarantined.
 
+### Decision: do not cache supply-chain blocks
+The quarantine query (`sqlite.go:354-387`) deduplicates by `eco/pkg@ver` and keeps the
+**newest** event **before** applying the `block_until > now` filter. The Docker verdict
+store persists only `clean` + a `reason` string (`blobcache.go:51`), not the timestamps.
+If a supply-chain block were cached, the next pull would hit the cache and record a
+newer event with `block_until = 0`, which would shadow the original and drop the image
+from quarantine.
+
+Therefore the supply-chain branch must **stop caching its verdict** (remove the
+`g.cacheVerdict(...)` call there). Supply-chain blocks are time-based and must be
+re-evaluated on every pull: the gate re-fetches the manifest + config blob (cheap — no
+layers are fetched, since the block happens before layer scanning) and re-runs the
+filter, producing a fresh block event with a current `block_until` each time. This also
+fixes a latent bug where a cached "younger than min-age" block was never re-checked
+after the image matured. CVE / malware / denylist blocks remain cached — they are
+deterministic and do not expire.
+
 ### Decision: keep HTTP 403
 The Docker block path returns HTTP **403** for every block reason. The package proxy
 returns **423 Locked** for supply holds. We keep **403** for Docker: registry V2
@@ -99,8 +116,10 @@ ICAP)**, consistent with the package path. No code change.
 - **(1)** Unit-test `TrivyScanner.Probe` against an `httptest.Server`: 200 → ok;
   503 / closed server → error.
 - **(2)** Gate test: a supply-chain Docker block yields a `GateVerdict` with non-zero
-  `BlockUntil`. Handler/telemetry test: such a block produces an event that the
-  quarantine query returns.
+  `BlockUntil`/`PublishedAt` and is **not** written to the verdict store (re-evaluated
+  each pull). Handler test: such a block records an event carrying `BlockUntil` so the
+  quarantine query returns it, and two consecutive pulls both produce block events with
+  a non-zero `BlockUntil` (no cache shadowing).
 - **(3)** None (documentation).
 
 ## Out of scope
