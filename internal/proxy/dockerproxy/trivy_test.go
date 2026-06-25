@@ -3,6 +3,8 @@ package dockerproxy
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -52,5 +54,35 @@ func TestTrivyScannerFailClosedOnError(t *testing.T) {
 	}
 	if s.Health().OK {
 		t.Error("health should be not-OK after failure")
+	}
+}
+
+func TestTrivyProbeHitsHealthz(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	s := NewTrivyScanner(srv.URL, "vuln", time.Second)
+	if err := s.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe against healthy server: %v", err)
+	}
+	if gotPath != "/healthz" {
+		t.Errorf("probed path = %q, want /healthz", gotPath)
+	}
+}
+
+func TestTrivyProbeFailsOnNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	s := NewTrivyScanner(srv.URL, "vuln", time.Second)
+	if err := s.Probe(context.Background()); err == nil {
+		t.Fatal("Probe should fail when the server returns 503")
 	}
 }
