@@ -31,13 +31,19 @@ type Adapter struct {
 }
 
 // NewAdapter creates an Adapter over the given ordered upstream base URLs
-// (e.g. "https://registry-1.docker.io"). Trailing slashes are trimmed.
-func NewAdapter(upstreams []string) *Adapter {
+// (e.g. "https://registry-1.docker.io"). Trailing slashes are trimmed. A nil
+// client uses a private one with a 120s timeout; pass a shared client whose
+// transport caps per-host concurrency to keep registry requests under the rate
+// limit.
+func NewAdapter(upstreams []string, client *http.Client) *Adapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
-	return &Adapter{upstreams: trimmed, client: &http.Client{Timeout: 120 * time.Second}}
+	if client == nil {
+		client = &http.Client{Timeout: 120 * time.Second}
+	}
+	return &Adapter{upstreams: trimmed, client: client}
 }
 
 // do issues a request to base+path with bearer-token auth retry. accept sets the

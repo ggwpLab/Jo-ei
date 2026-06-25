@@ -112,7 +112,7 @@ func newGateTestServer(t *testing.T) (string, string, string) {
 func TestGateBlocksOnCVE(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t) // serves index-free manifest + config + 1 layer
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
 		av:      stubAV{},
 		filter:  allowFilter{},
@@ -133,7 +133,7 @@ func TestGateBlocksOnCVE(t *testing.T) {
 func TestGateBlocksOnMalware(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t)
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		scanner: stubScanner{}, av: stubAV{infected: true},
 		filter: allowFilter{}, policy: findingPolicy{},
 		store: newVerdictStore(newFakeCache()), logger: zerolog.Nop(),
@@ -151,7 +151,7 @@ func TestGateAllowsCleanImageAndCachesVerdict(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t)
 	store := newVerdictStore(newFakeCache())
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		scanner: stubScanner{}, av: stubAV{},
 		filter: allowFilter{}, policy: findingPolicy{},
 		store: store, logger: zerolog.Nop(),
@@ -169,11 +169,11 @@ func TestGateAllowsCleanImageAndCachesVerdict(t *testing.T) {
 func TestGateFailClosedOnOversizedLayer(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t) // layer body is 9 bytes
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		scanner: stubScanner{}, av: stubAV{},
 		filter: allowFilter{}, policy: findingPolicy{},
 		store: newVerdictStore(newFakeCache()), logger: zerolog.Nop(),
-		maxLayerBytes: 1, // smaller than the layer → block
+		maxLayerBytes: 1, // smaller than the layer в†’ block
 	}
 	_, v, err := newManifestGate(d).Evaluate(context.Background(), repo, ref)
 	if err != nil {
@@ -219,13 +219,13 @@ func newIndexGateServer(t *testing.T) (string, string, string) {
 
 // TestGatePassesThroughIndex verifies a multi-arch index is served un-gated:
 // the scanner and AV (here both set to block) must NOT be consulted, since the
-// index has no image content — the concrete child manifest is gated later when
+// index has no image content вЂ” the concrete child manifest is gated later when
 // the client requests it by digest.
 func TestGatePassesThroughIndex(t *testing.T) {
 	srvURL, repo, ref := newIndexGateServer(t)
 	store := newVerdictStore(newFakeCache())
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		// Both would block if consulted; passthrough must skip them.
 		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
 		av:      stubAV{infected: true},
@@ -293,7 +293,7 @@ func TestGatePassesThroughAttestation(t *testing.T) {
 	srvURL, repo, ref := newAttestationGateServer(t)
 	store := newVerdictStore(newFakeCache())
 	d := gateDeps{
-		adapter: NewAdapter([]string{srvURL}),
+		adapter: NewAdapter([]string{srvURL}, nil),
 		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
 		av:      stubAV{infected: true},
 		filter:  allowFilter{},

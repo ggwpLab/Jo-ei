@@ -19,6 +19,7 @@ type Config struct {
 	Adapter  *Adapter
 	Gate     *manifestGate
 	Store    *verdictStore
+	Tags     *tagIndex
 	Recorder proxy.Recorder
 	Logger   zerolog.Logger
 }
@@ -58,13 +59,17 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream or scan failure")
 		return
 	}
+	// Feed label: prefer the human tag over the resolved digest. A by-tag pull
+	// already carries the tag in pp.Reference; a multi-arch platform child is
+	// requested by digest, so recover its tag from the index seen earlier.
+	displayVer := h.displayVersion(pp, digest)
 
 	if !v.Allowed {
 		log.Warn().Str("reason", v.Reason).Str("blocked_by", v.BlockedBy).Msg("docker image blocked")
 		h.record(requestID, pp, proxy.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *proxy.Event) {
 			ev.BlockedBy = []string{v.BlockedBy}
 			ev.CVEs = v.Findings
-			ev.Version = digest
+			ev.Version = displayVer
 		})
 		h.writeError(w, http.StatusForbidden, "DENIED", "image blocked by policy: "+v.Reason)
 		return
@@ -85,7 +90,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		if recordPass {
-			h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+			h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
 		}
 		return
 	}
@@ -94,7 +99,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	f, err := os.Open(v.ManifestPath)
 	if err != nil {
 		log.Error().Err(err).Msg("opening cached manifest")
-		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *proxy.Event) { ev.Version = digest })
+		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *proxy.Event) { ev.Version = displayVer })
 		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
 		return
 	}
@@ -106,8 +111,23 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		return
 	}
 	if recordPass {
-		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = digest })
+		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
 	}
+}
+
+// displayVersion picks the feed label for a gated manifest: the human tag when
+// known (a by-tag pull, or a multi-arch platform child whose tag was recorded
+// from the index), otherwise the resolved digest.
+func (h *Handler) displayVersion(pp ParsedPath, digest string) string {
+	if !isDigestRef(pp.Reference) {
+		return pp.Reference
+	}
+	if h.cfg.Tags != nil {
+		if tag, ok := h.cfg.Tags.tag(pp.Repo, digest); ok {
+			return tag
+		}
+	}
+	return digest
 }
 
 func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPath) {
@@ -182,16 +202,21 @@ type HandlerDeps struct {
 	MaxLayerBytes int64
 	Recorder      proxy.Recorder
 	Logger        zerolog.Logger
+	// HTTPClient talks to the upstream registry. Optional; nil uses a private
+	// client with a 120s timeout. Pass a client whose transport caps per-host
+	// concurrency (shared with the other registries) to avoid 429 throttling.
+	HTTPClient *http.Client
 }
 
 // New assembles a ready-to-serve Docker Registry V2 proxy handler.
 func New(d HandlerDeps) http.Handler {
-	adapter := NewAdapter(d.Upstreams)
+	adapter := NewAdapter(d.Upstreams, d.HTTPClient)
 	store := newVerdictStore(d.Cache)
+	tags := newTagIndex(0)
 	gate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
-		filter: d.Filter, policy: d.Policy, store: store,
+		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Recorder: d.Recorder, Logger: d.Logger})
+	return NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger})
 }

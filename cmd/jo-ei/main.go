@@ -18,6 +18,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/health"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
@@ -34,6 +35,14 @@ var cfgFile string
 // defaultOSVBaseURL is used for both the live scanner and the console's
 // scanner listing when cve.base_url is unset.
 const defaultOSVBaseURL = "https://api.osv.dev"
+
+// Upstream 429/503 circuit-breaker cooldown bounds (see httpx.CircuitBreaker).
+// The cooldown honors Retry-After when sent; these bound the fallback
+// exponential cooldown when it is absent.
+const (
+	upstreamRetryBaseDelay = 1 * time.Second
+	upstreamRetryMaxDelay  = 20 * time.Second
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "jo-ei",
@@ -60,6 +69,12 @@ type sharedDeps struct {
 	policy     proxy.PolicyDecider
 	avScanner  proxy.AVScanner
 	recorder   proxy.Recorder
+	// adapterClient fetches upstream metadata; downloadClient downloads artifacts
+	// and serves transparent proxy requests. Both share one per-host
+	// concurrency-limiting transport so all traffic to a registry counts against
+	// the same cap.
+	adapterClient  *http.Client
+	downloadClient *http.Client
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
@@ -126,11 +141,41 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	defer func() { _ = store.Close() }()
 	broadcaster := telemetry.NewBroadcaster()
 
+	// One shared upstream transport for every client (metadata, download,
+	// transparent proxy, Docker): a per-host request-rate cap (the primary 429
+	// defense — registries throttle by rate) over a per-host concurrency cap
+	// (complementary, bounds parallelism). Shared so all traffic to a host counts
+	// against the same caps.
+	maxConc := cfg.Server.UpstreamMaxConcurrent
+	if maxConc <= 0 {
+		maxConc = config.DefaultUpstreamMaxConcurrent
+	}
+	rate := cfg.Server.UpstreamRatePerSecond
+	if rate <= 0 {
+		rate = config.DefaultUpstreamRatePerSecond
+	}
+	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
+	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
+	// skipped immediately in favor of a mirror instead of being retried/hammered.
+	// Inner: a coarse rate cap, then a concurrency cap, over the default transport.
+	upstreamLimiter := httpx.NewCircuitBreaker(
+		httpx.NewRateLimiter(
+			httpx.NewConcurrencyLimiter(http.DefaultTransport, maxConc),
+			float64(rate), 2*rate,
+		),
+		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
+	)
+	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
+	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}
+	dockerClient := &http.Client{Timeout: 120 * time.Second, Transport: upstreamLimiter}
+
 	shared := sharedDeps{
-		filter:   policyRuntime,
-		cache:    &cacheAdapter{c: artifactCache},
-		logger:   logger,
-		recorder: &telemetry.Hub{Store: store, Broadcaster: broadcaster},
+		filter:         policyRuntime,
+		cache:          &cacheAdapter{c: artifactCache},
+		logger:         logger,
+		recorder:       &telemetry.Hub{Store: store, Broadcaster: broadcaster},
+		adapterClient:  adapterClient,
+		downloadClient: downloadClient,
 	}
 
 	// CVE scanner + policy (optional).
@@ -225,6 +270,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			MaxLayerBytes: cfg.ImageScan.MaxLayerBytes,
 			Recorder:      shared.recorder,
 			Logger:        logger,
+			HTTPClient:    dockerClient,
 		})
 	}
 
@@ -298,19 +344,20 @@ func runProxy(_ *cobra.Command, _ []string) error {
 // registry protocol.
 func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Handler {
 	handlers := map[string]*proxy.Handler{}
+	client := adapters.WithHTTPClient(shared.adapterClient)
 	if cfg.Registries.PyPI.Enabled {
-		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams), shared)
+		handlers["pypi"] = buildHandler(adapters.NewPyPIAdapter(cfg.Registries.PyPI.Upstreams, client), shared)
 	}
 	if cfg.Registries.NPM.Enabled {
-		npmHandler := buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams), shared)
+		npmHandler := buildHandler(adapters.NewNPMAdapter(cfg.Registries.NPM.Upstreams, client), shared)
 		handlers["npm"] = npmHandler
 		handlers["yarn"] = npmHandler
 	}
 	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams, client), shared)
 	}
 	if cfg.Registries.RubyGems.Enabled {
-		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams), shared)
+		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams, client), shared)
 	}
 	return handlers
 }
@@ -327,6 +374,7 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 		Policy:     shared.policy,
 		AVScanner:  shared.avScanner,
 		Recorder:   shared.recorder,
+		HTTPClient: shared.downloadClient,
 	})
 }
 

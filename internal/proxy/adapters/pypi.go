@@ -37,14 +37,14 @@ type PyPIAdapter struct {
 }
 
 // NewPyPIAdapter creates a PyPI adapter over the given ordered upstream URLs.
-func NewPyPIAdapter(upstreams []string) *PyPIAdapter {
+func NewPyPIAdapter(upstreams []string, opts ...Option) *PyPIAdapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
 	return &PyPIAdapter{
 		upstreams:  trimmed,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: resolveClient(opts),
 	}
 }
 

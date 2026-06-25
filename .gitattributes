@@ -1,1 +1,14 @@
+# Normalize line endings. The repository stores text as LF and every platform
+# checks it out as LF, so gofmt/goimports and golangci-lint agree on Windows,
+# macOS, and the Linux CI runner regardless of core.autocrlf. Binary files are
+# auto-detected and left untouched.
+* text=auto eol=lf
+
+# Go sources are always LF (gofmt emits LF; CRLF working trees fail the lint).
+*.go text eol=lf
+
+# Binary assets: never normalize.
+*.png binary
+
+# The generated console bundle is LF and is checked by CI.
 web/console/app.bundle.js text eol=lf

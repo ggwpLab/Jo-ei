@@ -1,5 +1,12 @@
 server:
   listen: ":8080"
+  # Max concurrent in-flight requests to each upstream registry host (metadata,
+  # transparent proxy and artifact downloads combined). Default 6 when unset.
+  upstream_max_concurrent: 6
+  # Max request *rate* per upstream registry host (token bucket, burst = 2x).
+  # Registries throttle by rate, not concurrency, so this is the primary defense
+  # against HTTP 429. Default 10 when unset; raise for a large shared instance.
+  upstream_rate_per_second: 10
 
 registries:
   pypi:
@@ -13,6 +20,7 @@ registries:
   maven:
     upstreams:
       - "https://repo1.maven.org/maven2"
+      - "https://maven-central.storage-download.googleapis.com/maven2"
     enabled: true
   rubygems:
     upstreams:

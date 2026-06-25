@@ -50,6 +50,7 @@ type gateDeps struct {
 	filter        proxy.SCFilter
 	policy        proxy.PolicyDecider
 	store         *verdictStore
+	tags          *tagIndex
 	maxLayerBytes int64
 	logger        zerolog.Logger
 }
@@ -69,6 +70,15 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
 	if err != nil {
 		return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w", repo, ref, err)
+	}
+
+	// When a multi-arch index is requested by tag, remember each child platform
+	// digest → tag so the gated by-digest pull that follows can be recorded
+	// against the human tag rather than the opaque child digest. Done before the
+	// cache check so the (in-memory) map stays warm even when the index verdict
+	// is served from the (on-disk) cache or after a restart.
+	if g.tags != nil && isIndexMediaType(contentType) && !isDigestRef(ref) {
+		g.tags.rememberChildren(repo, ref, manifestBody)
 	}
 
 	// Cached verdict?

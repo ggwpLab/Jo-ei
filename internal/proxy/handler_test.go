@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,11 +18,141 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
+
+// When the primary upstream throttles (429), the circuit breaker fast-fails it
+// and the handler's multi-upstream fallback serves the artifact from the mirror.
+func TestHandler_MavenFallsBackToMirrorOnThrottle(t *testing.T) {
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	var primaryHits, mirrorHits atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer primary.Close()
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mirrorHits.Add(1)
+		w.Header().Set("Last-Modified", old.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("jar-bytes"))
+		}
+	}))
+	defer mirror.Close()
+
+	transport := httpx.NewCircuitBreaker(
+		httpx.NewRateLimiter(httpx.NewConcurrencyLimiter(http.DefaultTransport, 6), 10, 20),
+		time.Second, 20*time.Second,
+	)
+	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
+
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:    adapters.NewMavenAdapter([]string{primary.URL, mirror.URL}, adapters.WithHTTPClient(client)),
+		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:      newFakeCache(),
+		Logger:     zerolog.Nop(),
+		HTTPClient: client,
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/com/fasterxml/classmate/1.7.3/classmate-1.7.3.jar", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("throttled-primary download failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if mirrorHits.Load() == 0 {
+		t.Fatalf("mirror was not used as fallback")
+	}
+}
+
+// A single cold Maven dependency must download through the exact production
+// transport chain (circuit breaker over rate + concurrency limiters). This pins
+// down whether the Last-Modified/limiter work broke the happy path.
+func TestHandler_MavenSingleDownloadThroughProductionTransport(t *testing.T) {
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	var gets atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets.Add(1)
+		}
+		w.Header().Set("Last-Modified", old.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("jar-bytes"))
+		}
+	}))
+	defer srv.Close()
+
+	// Identical to cmd/jo-ei wiring.
+	transport := httpx.NewCircuitBreaker(
+		httpx.NewRateLimiter(httpx.NewConcurrencyLimiter(http.DefaultTransport, 6), 10, 20),
+		time.Second, 20*time.Second,
+	)
+	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
+
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:    adapters.NewMavenAdapter([]string{srv.URL}, adapters.WithHTTPClient(client)),
+		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:      newFakeCache(),
+		Logger:     zerolog.Nop(),
+		HTTPClient: client,
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/com/fasterxml/classmate/1.7.3/classmate-1.7.3.jar", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("single Maven download failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if gets.Load() != 1 {
+		t.Fatalf("expected exactly one upstream GET, got %d", gets.Load())
+	}
+}
+
+// Maven derives the supply-chain publish date from the artifact download
+// response's Last-Modified, so no separate metadata HEAD is issued. A too-new
+// artifact is blocked using that date.
+func TestHandler_MavenSupplyChainFromDownloadNoHead(t *testing.T) {
+	var headCount, getCount atomic.Int32
+	recent := time.Now().UTC().Add(-1 * time.Hour) // younger than the 24h min-age
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			headCount.Add(1)
+		case http.MethodGet:
+			getCount.Add(1)
+		}
+		w.Header().Set("Last-Modified", recent.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("jar-bytes"))
+		}
+	}))
+	defer srv.Close()
+
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewMavenAdapter([]string{srv.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.Nop(),
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusLocked, w.Code, "a recent artifact must be blocked by min-age")
+	assert.Equal(t, int32(0), headCount.Load(), "no separate metadata HEAD should be issued")
+	assert.GreaterOrEqual(t, getCount.Load(), int32(1), "the artifact GET supplies the date")
+}
 
 // fakeCache is an in-memory ArtifactCache for handler tests.
 // Put copies the artifact to its own temp file so the entry survives

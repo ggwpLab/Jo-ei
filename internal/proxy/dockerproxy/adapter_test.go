@@ -20,7 +20,7 @@ func TestResolveDigest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := NewAdapter([]string{srv.URL})
+	a := NewAdapter([]string{srv.URL}, nil)
 	dg, err := a.ResolveDigest(context.Background(), "library/nginx", "latest")
 	if err != nil {
 		t.Fatalf("ResolveDigest: %v", err)
@@ -62,7 +62,7 @@ func TestFetchManifestReturnsIndexRaw(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := NewAdapter([]string{srv.URL})
+	a := NewAdapter([]string{srv.URL}, nil)
 	body, ct, dg, err := a.FetchManifest(context.Background(), "library/nginx", "latest")
 	if err != nil {
 		t.Fatalf("FetchManifest: %v", err)
@@ -106,7 +106,7 @@ func TestImageConfigCreatedAndLayers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := NewAdapter([]string{srv.URL})
+	a := NewAdapter([]string{srv.URL}, nil)
 	gotCreated, configDigest, layers, err := a.ImageConfig(context.Background(), "library/nginx", manifestBody)
 	if err != nil {
 		t.Fatalf("ImageConfig: %v", err)
