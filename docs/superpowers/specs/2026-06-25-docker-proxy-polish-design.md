@@ -87,6 +87,16 @@ fixes a latent bug where a cached "younger than min-age" block was never re-chec
 after the image matured. CVE / malware / denylist blocks remain cached — they are
 deterministic and do not expire.
 
+**Stale cache from older builds.** The verdict store is on-disk and survives a binary
+upgrade, so a supply-chain block cached by a pre-fix build would still be *read* by the
+cache-restore branch in `Evaluate` and returned with `block_until = 0` (the store never
+persisted the timestamp) — blocked but never quarantined, and never released after
+maturity. Because the current gate never *writes* a supply-chain block, any such cached
+entry is necessarily stale. The cache-restore branch therefore skips it
+(`isStaleSupplyBlock`) and falls through to a fresh evaluation. End-to-end tests cover
+the single-arch, multi-arch, and stale-cache paths through the real supply-chain filter
+and the real SQLite telemetry store.
+
 ### Decision: keep HTTP 403
 The Docker block path returns HTTP **403** for every block reason. The package proxy
 returns **423 Locked** for supply holds. We keep **403** for Docker: registry V2
