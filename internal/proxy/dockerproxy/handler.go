@@ -202,11 +202,15 @@ type HandlerDeps struct {
 	MaxLayerBytes int64
 	Recorder      proxy.Recorder
 	Logger        zerolog.Logger
+	// HTTPClient talks to the upstream registry. Optional; nil uses a private
+	// client with a 120s timeout. Pass a client whose transport caps per-host
+	// concurrency (shared with the other registries) to avoid 429 throttling.
+	HTTPClient *http.Client
 }
 
 // New assembles a ready-to-serve Docker Registry V2 proxy handler.
 func New(d HandlerDeps) http.Handler {
-	adapter := NewAdapter(d.Upstreams)
+	adapter := NewAdapter(d.Upstreams, d.HTTPClient)
 	store := newVerdictStore(d.Cache)
 	tags := newTagIndex(0)
 	gate := newManifestGate(gateDeps{

@@ -23,14 +23,14 @@ type MavenAdapter struct {
 
 // NewMavenAdapter creates a Maven adapter over the given ordered upstream URLs
 // (e.g. "https://repo1.maven.org/maven2"). Upstreams are tried in order.
-func NewMavenAdapter(upstreams []string) *MavenAdapter {
+func NewMavenAdapter(upstreams []string, opts ...Option) *MavenAdapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
 	return &MavenAdapter{
 		upstreams:  trimmed,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: resolveClient(opts),
 	}
 }
 
@@ -147,10 +147,14 @@ func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *
 // Maven Central rate-limits bursts with HTTP 429. We retry a bounded number of
 // times, honoring Retry-After when present, so transient throttling does not
 // fail an otherwise-valid download.
+// The per-host concurrency limiter (internal/httpx) is what keeps us under the
+// rate limit; these retries are a fallback for the occasional 429/503. The
+// budget and cap are deliberately small so a genuinely throttled pull fails in
+// ~10-15s rather than blocking the client for the full Retry-After.
 const (
-	mavenMaxMetadataRetries = 5
+	mavenMaxMetadataRetries = 3
 	mavenRetryBaseDelay     = 500 * time.Millisecond
-	mavenRetryMaxDelay      = 10 * time.Second
+	mavenRetryMaxDelay      = 4 * time.Second
 )
 
 // headWithRetry performs a HEAD request, retrying on 429/503 with backoff that
@@ -185,22 +189,34 @@ func (a *MavenAdapter) headWithRetry(ctx context.Context, url string) (*http.Res
 	}
 }
 
-// retryAfterDelay computes how long to wait before the next attempt. It honors
-// a Retry-After header (delta-seconds or HTTP-date) when valid, otherwise falls
-// back to exponential backoff. The result is capped at mavenRetryMaxDelay.
+// retryAfterDelay computes how long to wait before the next attempt. When the
+// server sent a valid Retry-After it is honored (capped) plus a little jitter so
+// that many simultaneously throttled requests do not all wake at the same instant
+// and re-create the burst; otherwise it falls back to jittered exponential
+// backoff. The result is always capped at mavenRetryMaxDelay.
 func retryAfterDelay(header string, attempt int) time.Duration {
-	if header != "" {
-		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
-			return capDelay(time.Duration(secs) * time.Second)
-		}
-		if t, err := http.ParseTime(header); err == nil {
-			if d := time.Until(t); d > 0 {
-				return capDelay(d)
-			}
-			return 0
-		}
+	if d, ok := parseRetryAfter(header); ok {
+		return capDelay(d + jitterUpTo(mavenRetryBaseDelay))
 	}
 	return jitteredBackoff(attempt)
+}
+
+// parseRetryAfter parses a Retry-After value, either delta-seconds or an
+// HTTP-date. ok is false when the header is absent or unparseable.
+func parseRetryAfter(header string) (time.Duration, bool) {
+	if header == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d, true
+		}
+		return 0, true
+	}
+	return 0, false
 }
 
 // jitteredBackoff returns an exponential backoff delay with "equal jitter": the
@@ -214,7 +230,15 @@ func jitteredBackoff(attempt int) time.Duration {
 	if half <= 0 {
 		return d
 	}
-	return half + time.Duration(rand.Int64N(int64(half)+1))
+	return half + jitterUpTo(half)
+}
+
+// jitterUpTo returns a random duration uniformly in [0, max] (0 when max <= 0).
+func jitterUpTo(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(max) + 1))
 }
 
 func capDelay(d time.Duration) time.Duration {

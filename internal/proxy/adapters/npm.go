@@ -57,14 +57,14 @@ type NPMAdapter struct {
 }
 
 // NewNPMAdapter creates an npm adapter over the given ordered upstream URLs.
-func NewNPMAdapter(upstreams []string) *NPMAdapter {
+func NewNPMAdapter(upstreams []string, opts ...Option) *NPMAdapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
 	return &NPMAdapter{
 		upstreams:  trimmed,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: resolveClient(opts),
 	}
 }
 

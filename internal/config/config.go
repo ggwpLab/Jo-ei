@@ -78,7 +78,17 @@ func (c *Config) Validate() error {
 
 type ServerConfig struct {
 	Listen string `mapstructure:"listen"`
+	// UpstreamMaxConcurrent caps the number of concurrent in-flight requests to
+	// each upstream registry host, across metadata fetches, transparent proxying
+	// and artifact downloads. It keeps parallel dependency resolution (Gradle,
+	// Maven, npm) under the registry's rate limit so it does not return HTTP 429.
+	// Zero or negative selects the default (DefaultUpstreamMaxConcurrent).
+	UpstreamMaxConcurrent int `mapstructure:"upstream_max_concurrent"`
 }
+
+// DefaultUpstreamMaxConcurrent is the per-host outbound concurrency cap applied
+// when server.upstream_max_concurrent is unset.
+const DefaultUpstreamMaxConcurrent = 6
 
 // ConsoleConfig holds admin-console settings.
 type ConsoleConfig struct {

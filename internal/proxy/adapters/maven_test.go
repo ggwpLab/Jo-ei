@@ -177,32 +177,10 @@ func TestMavenAdapter_FetchMetadata_RetriesOn429ThenSucceeds(t *testing.T) {
 	assert.GreaterOrEqual(t, calls.Load(), int32(2), "should have retried after 429")
 }
 
-func TestMavenAdapter_FetchMetadata_RetriesBeyondLegacyBudget(t *testing.T) {
-	lastModified := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+func TestMavenAdapter_FetchMetadata_429ExhaustedReturnsError(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Throttle the first four attempts (more than the legacy budget of 3
-		// retries), then succeed. Retry-After:0 keeps the test fast.
-		if calls.Add(1) <= 4 {
-			w.Header().Set("Retry-After", "0")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	a := adapters.NewMavenAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.example:foo", Version: "1.0"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.WithinDuration(t, lastModified, meta.PublishedAt, time.Second)
-	assert.Equal(t, int32(5), calls.Load(), "should retry past the legacy 3-retry budget")
-}
-
-func TestMavenAdapter_FetchMetadata_429ExhaustedReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
@@ -213,6 +191,8 @@ func TestMavenAdapter_FetchMetadata_429ExhaustedReturnsError(t *testing.T) {
 	_, err := a.FetchMetadata(context.Background(), ref)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "429")
+	// The retry budget is bounded: one initial attempt + mavenMaxMetadataRetries.
+	assert.Equal(t, int32(4), calls.Load(), "should stop after the bounded retry budget")
 }
 
 func TestMavenAdapter_FetchMetadata_NonOKReturnsError(t *testing.T) {

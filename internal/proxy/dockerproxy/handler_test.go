@@ -40,7 +40,7 @@ func (r *recspy) Record(e proxy.Event) { r.events = append(r.events, e) }
 
 func newTestHandler(t *testing.T, sc ImageScanner, av proxy.AVScanner, rec proxy.Recorder) (*Handler, string, string) {
 	srvURL, repo, ref := newGateTestServer(t)
-	adapter := NewAdapter([]string{srvURL})
+	adapter := NewAdapter([]string{srvURL}, nil)
 	store := newVerdictStore(newFakeCache())
 	gate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: sc, av: av,
@@ -169,7 +169,7 @@ func TestHandlerMultiArchRecordsTagNotDigest(t *testing.T) {
 		Logger:    zerolog.Nop(),
 	})
 
-	// 1. Pull the index by tag: passthrough, not recorded, learns digest→tag.
+	// 1. Pull the index by tag: passthrough, not recorded, learns digestв†’tag.
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+tag, nil))
 	// 2. Pull the platform child by digest: gated and recorded.
 	w := httptest.NewRecorder()

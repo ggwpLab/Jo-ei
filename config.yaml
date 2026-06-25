@@ -1,5 +1,10 @@
 server:
   listen: ":8080"
+  # Max concurrent in-flight requests to each upstream registry host (metadata,
+  # transparent proxy and artifact downloads combined). Keeps parallel
+  # dependency resolution under the registry's rate limit so it does not return
+  # HTTP 429. Default 6 when unset.
+  upstream_max_concurrent: 6
 
 registries:
   pypi:

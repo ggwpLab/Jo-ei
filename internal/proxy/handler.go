@@ -43,6 +43,11 @@ type HandlerConfig struct {
 	Policy     PolicyDecider // optional; nil allows all when CVEScanner is set
 	AVScanner  AVScanner     // optional; nil disables malware scanning
 	Recorder   Recorder      // optional; nil disables telemetry
+	// HTTPClient downloads artifacts and serves transparent proxy requests.
+	// Optional; nil uses a private client with a 60s timeout. Pass a client whose
+	// transport caps per-host concurrency (shared with the adapters) so artifact
+	// downloads count against the same upstream rate limit as metadata fetches.
+	HTTPClient *http.Client
 }
 
 // hopByHopHeaders are connection-specific headers that must not be forwarded
@@ -60,9 +65,13 @@ type Handler struct {
 
 // NewHandler creates a new ProxyHandler.
 func NewHandler(cfg HandlerConfig) *Handler {
+	client := cfg.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
 	return &Handler{
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: client,
 	}
 }
 

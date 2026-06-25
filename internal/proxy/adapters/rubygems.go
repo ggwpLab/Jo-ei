@@ -28,14 +28,14 @@ type RubyGemsAdapter struct {
 
 // NewRubyGemsAdapter creates a RubyGems adapter over the given ordered upstream
 // URLs (e.g. "https://rubygems.org"). Upstreams are tried in order.
-func NewRubyGemsAdapter(upstreams []string) *RubyGemsAdapter {
+func NewRubyGemsAdapter(upstreams []string, opts ...Option) *RubyGemsAdapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
 	return &RubyGemsAdapter{
 		upstreams:  trimmed,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: resolveClient(opts),
 	}
 }
 
