@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
@@ -39,10 +41,11 @@ func execRunner(ctx context.Context, name string, args ...string) ([]byte, error
 // TrivyScanner runs the `trivy` CLI in client/server mode against a sidecar
 // `trivy server` that holds the vulnerability DB. It implements ImageScanner.
 type TrivyScanner struct {
-	serverURL string
-	scanners  string
-	timeout   time.Duration
-	run       commandRunner
+	serverURL  string
+	scanners   string
+	timeout    time.Duration
+	run        commandRunner
+	httpClient *http.Client
 
 	healthMu      sync.Mutex
 	healthOK      bool
@@ -63,7 +66,13 @@ func NewTrivyScannerWithRunner(serverURL, scanners string, timeout time.Duration
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
-	return &TrivyScanner{serverURL: serverURL, scanners: scanners, timeout: timeout, run: run}
+	return &TrivyScanner{
+		serverURL:  serverURL,
+		scanners:   scanners,
+		timeout:    timeout,
+		run:        run,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 // trivyReport is the subset of `trivy image --format json` output we consume.
@@ -127,8 +136,23 @@ func (s *TrivyScanner) Health() health.Sample {
 	return health.Sample{OK: s.healthOK, Latency: s.healthLatency, HasData: s.healthHasData}
 }
 
-// Probe checks Trivy server reachability (trivy version --server <url>).
+// Probe checks Trivy server liveness via its /healthz endpoint (returns "ok"
+// with HTTP 200). Unlike `trivy version`, this is a real round-trip to the
+// server, so the reported status and latency reflect actual reachability.
 func (s *TrivyScanner) Probe(ctx context.Context) error {
-	_, err := s.run(ctx, "trivy", "version", "--server", s.serverURL, "--format", "json")
-	return err
+	url := strings.TrimRight(s.serverURL, "/") + "/healthz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("building trivy health request: %w", err)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("probing trivy server: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("trivy health check returned status %d", resp.StatusCode)
+	}
+	return nil
 }

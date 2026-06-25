@@ -36,6 +36,7 @@ type GateVerdict struct {
 	ManifestPath string // cached manifest body (allowed only)
 	ContentType  string
 	PublishedAt  time.Time
+	BlockUntil   time.Time // non-zero only for supply-chain holds (drives the quarantine view)
 	// Passthrough is true when the served manifest was not gated because it has
 	// no scannable image content (a multi-arch index, or an attestation
 	// manifest). The real image content is gated when the client requests the
@@ -81,8 +82,14 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		g.tags.rememberChildren(repo, ref, manifestBody)
 	}
 
-	// Cached verdict?
-	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found {
+	// Cached verdict? Supply-chain blocks are intentionally never cached (step 1
+	// below): they are time-based and must be re-evaluated each pull. Ignore a
+	// stale supply-chain block left in the on-disk store by an older build —
+	// the store persists only clean+reason, not block_until, so restoring it
+	// would block the image with a zero block_until (never shown in the
+	// quarantine view) and would keep blocking it even after it matured. Fall
+	// through to a fresh evaluation instead.
+	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
 		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason)}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
@@ -118,9 +125,17 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// 1. Supply-chain (config.created as the publish proxy).
 	fr := g.filter.Check(ctx, pkgRef, &proxy.PackageMetadata{PublishedAt: created})
 	if !fr.Allowed {
-		v := GateVerdict{Allowed: false, Reason: fr.Reason, BlockedBy: "supply_chain", PublishedAt: created}
-		_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
-		return digest, v, nil
+		// A supply-chain hold is time-based: it expires when the image matures.
+		// Do NOT cache it — re-evaluate on every pull so the block lifts on its
+		// own, and so each pull records a fresh block event with a current
+		// block_until for the quarantine view.
+		return digest, GateVerdict{
+			Allowed:     false,
+			Reason:      fr.Reason,
+			BlockedBy:   "supply_chain",
+			PublishedAt: fr.PublishedAt,
+			BlockUntil:  fr.BlockUntil,
+		}, nil
 	}
 
 	// 2. Trivy → policy (severity threshold + denylist).
@@ -267,6 +282,15 @@ func (g *manifestGate) cacheVerdict(_ context.Context, repo, digest string, mani
 func (g *manifestGate) imageRef(repo, digest string) string {
 	host := hostFromUpstream(g.adapter.upstreams)
 	return host + "/" + repo + "@" + digest
+}
+
+// isStaleSupplyBlock reports whether a cached verdict is a supply-chain block.
+// The current gate never caches these (a supply-chain hold is time-based; see
+// Evaluate step 1), so such an entry can only have been written by an older
+// build. The verdict store does not persist the block_until timestamp, so the
+// entry must be re-evaluated rather than trusted.
+func isStaleSupplyBlock(clean bool, reason string) bool {
+	return !clean && blockedByForReason(reason) == "supply_chain"
 }
 
 func blockedByForReason(reason string) string {

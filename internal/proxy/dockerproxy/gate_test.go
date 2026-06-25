@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -310,5 +311,48 @@ func TestGatePassesThroughAttestation(t *testing.T) {
 	}
 	if digest != "sha256:att" {
 		t.Errorf("digest = %q, want sha256:att", digest)
+	}
+}
+
+// blockFilter denies every package as "younger than min age", echoing the
+// published/block-until timestamps the real supply-chain filter would return.
+type blockFilter struct {
+	published  time.Time
+	blockUntil time.Time
+}
+
+func (f blockFilter) Check(_ context.Context, _ *proxy.PackageRef, _ *proxy.PackageMetadata) proxy.FilterResult {
+	return proxy.FilterResult{
+		Allowed:     false,
+		Reason:      "package_younger_than_min_age",
+		PublishedAt: f.published,
+		BlockUntil:  f.blockUntil,
+	}
+}
+
+func TestGateSupplyChainBlockCarriesTimesAndIsNotCached(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	published := time.Now().Add(-1 * time.Hour)
+	until := time.Now().Add(23 * time.Hour)
+	store := newVerdictStore(newFakeCache())
+	d := gateDeps{
+		adapter: NewAdapter([]string{srvURL}, nil),
+		scanner: stubScanner{}, av: stubAV{},
+		filter: blockFilter{published: published, blockUntil: until},
+		policy: findingPolicy{},
+		store:  store, logger: zerolog.Nop(),
+	}
+	digest, v, err := newManifestGate(d).Evaluate(context.Background(), repo, ref)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if v.Allowed || v.BlockedBy != "supply_chain" {
+		t.Fatalf("verdict = %+v, want supply_chain block", v)
+	}
+	if v.BlockUntil.IsZero() || v.PublishedAt.IsZero() {
+		t.Errorf("supply block must carry BlockUntil/PublishedAt, got %+v", v)
+	}
+	if _, _, found := store.GetImageVerdict(repo, digest); found {
+		t.Error("time-based supply-chain block must NOT be cached")
 	}
 }

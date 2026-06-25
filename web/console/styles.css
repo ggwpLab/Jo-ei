@@ -368,6 +368,7 @@ input, select, textarea { font-family: inherit; }
 .eco.maven    { background: #2a2230; color: #b98ad0; }
 .eco.yarn     { background: #1b2730; color: #5fb0c4; }
 .eco.rubygems { background: #2e1a1c; color: #e07a82; }
+.eco.docker   { background: #16263a; color: #4aa3ee; }
 
 /* ============== KPI ============== */
 .kpi-grid {

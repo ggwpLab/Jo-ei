@@ -70,6 +70,10 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 			ev.BlockedBy = []string{v.BlockedBy}
 			ev.CVEs = v.Findings
 			ev.Version = displayVer
+			// Supply-chain holds carry these; other block reasons leave them zero
+			// (correct — only supply-chain blocks are quarantined).
+			ev.PublishedAt = v.PublishedAt
+			ev.BlockUntil = v.BlockUntil
 		})
 		h.writeError(w, http.StatusForbidden, "DENIED", "image blocked by policy: "+v.Reason)
 		return
