@@ -1,6 +1,8 @@
 package dockerproxy
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,6 +94,96 @@ func TestHandlerManifestCVEBlocked403(t *testing.T) {
 	}
 	if len(rec.events) != 1 || rec.events[0].Verdict != proxy.VerdictBlock {
 		t.Errorf("events = %+v", rec.events)
+	}
+}
+
+// newMultiArchServer serves a multi-arch index at repo:tag whose amd64 child is
+// a concrete schema2 image (config + 1 layer). Returns url, repo, tag, and the
+// amd64 child digest the client fetches after platform selection.
+func newMultiArchServer(t *testing.T) (url, repo, tag, childDigest string) {
+	t.Helper()
+	repo, tag, childDigest = "library/test", "3.21", "sha256:amd"
+	const (
+		cfgDigest = "sha256:cfg"
+		layDigest = "sha256:layer1"
+	)
+	layBody := "layerdata"
+	index := map[string]interface{}{
+		"schemaVersion": 2,
+		"mediaType":     mediaTypeOCIIndex,
+		"manifests": []map[string]interface{}{
+			{"digest": "sha256:arm", "mediaType": mediaTypeOCIManifest,
+				"platform": map[string]string{"os": "linux", "architecture": "arm64"}},
+			{"digest": childDigest, "mediaType": mediaTypeOCIManifest,
+				"platform": map[string]string{"os": "linux", "architecture": "amd64"}},
+		},
+	}
+	child := map[string]interface{}{
+		"schemaVersion": 2,
+		"mediaType":     mediaTypeSchema2Manifest,
+		"config":        map[string]string{"digest": cfgDigest},
+		"layers": []map[string]interface{}{
+			{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip", "digest": layDigest, "size": len(layBody)},
+		},
+	}
+	indexBytes, _ := json.Marshal(index)
+	childBytes, _ := json.Marshal(child)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, tag), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", mediaTypeOCIIndex)
+		w.Header().Set("Docker-Content-Digest", "sha256:index")
+		_, _ = w.Write(indexBytes)
+	})
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, childDigest), func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", mediaTypeSchema2Manifest)
+		w.Header().Set("Docker-Content-Digest", childDigest)
+		_, _ = w.Write(childBytes)
+	})
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/blobs/%s", repo, cfgDigest), func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"created":"2020-01-01T00:00:00Z"}`))
+	})
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/blobs/%s", repo, layDigest), func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(layBody))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL, repo, tag, childDigest
+}
+
+// A multi-arch pull asks for repo:tag (an index, served un-gated and not
+// recorded) and then fetches the platform child manifest by digest (gated and
+// recorded). The recorded feed entry must show the human tag, not the opaque
+// child digest.
+func TestHandlerMultiArchRecordsTagNotDigest(t *testing.T) {
+	srvURL, repo, tag, childDigest := newMultiArchServer(t)
+	rec := &recspy{}
+	h := New(HandlerDeps{
+		Upstreams: []string{srvURL},
+		Scanner:   stubScanner{},
+		AV:        stubAV{},
+		Filter:    allowFilter{},
+		Policy:    findingPolicy{},
+		Cache:     newFakeCache(),
+		Recorder:  rec,
+		Logger:    zerolog.Nop(),
+	})
+
+	// 1. Pull the index by tag: passthrough, not recorded, learns digest→tag.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+tag, nil))
+	// 2. Pull the platform child by digest: gated and recorded.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+childDigest, nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("child manifest status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("want exactly 1 event (index passthrough not recorded), got %+v", rec.events)
+	}
+	if rec.events[0].Version != tag {
+		t.Errorf("feed Version = %q, want the tag %q (not the platform digest %q)",
+			rec.events[0].Version, tag, childDigest)
 	}
 }
 
