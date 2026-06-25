@@ -18,11 +18,57 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
+
+// A single cold Maven dependency must download through the exact production
+// transport chain (adaptive backoff over rate + concurrency limiters). This
+// pins down whether the Last-Modified/limiter work broke the happy path.
+func TestHandler_MavenSingleDownloadThroughProductionTransport(t *testing.T) {
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	var gets atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets.Add(1)
+		}
+		w.Header().Set("Last-Modified", old.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte("jar-bytes"))
+		}
+	}))
+	defer srv.Close()
+
+	// Identical to cmd/jo-ei wiring.
+	transport := httpx.NewAdaptiveBackoff(
+		httpx.NewRateLimiter(httpx.NewConcurrencyLimiter(http.DefaultTransport, 6), 10, 20),
+		4, time.Second, 20*time.Second,
+	)
+	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
+
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:    adapters.NewMavenAdapter([]string{srv.URL}, adapters.WithHTTPClient(client)),
+		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:      newFakeCache(),
+		Logger:     zerolog.Nop(),
+		HTTPClient: client,
+	})
+	req := httptest.NewRequest(http.MethodGet,
+		"/com/fasterxml/classmate/1.7.3/classmate-1.7.3.jar", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("single Maven download failed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if gets.Load() != 1 {
+		t.Fatalf("expected exactly one upstream GET, got %d", gets.Load())
+	}
+}
 
 // Maven derives the supply-chain publish date from the artifact download
 // response's Last-Modified, so no separate metadata HEAD is issued. A too-new
