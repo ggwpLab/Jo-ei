@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -209,5 +210,42 @@ func TestHandlerIndexPassthroughNoTelemetry(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("index passthrough must not record a feed event, got %+v", rec.events)
+	}
+}
+
+func TestHandlerSupplyChainBlockRecordsBlockUntil(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	adapter := NewAdapter([]string{srvURL}, nil)
+	store := newVerdictStore(newFakeCache())
+	gate := newManifestGate(gateDeps{
+		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
+		filter: blockFilter{published: time.Now().Add(-time.Hour), blockUntil: time.Now().Add(23 * time.Hour)},
+		policy: findingPolicy{},
+		store:  store, logger: zerolog.Nop(),
+	})
+	rec := &recspy{}
+	h := NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
+
+	pull := func() {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+	}
+	// Two pulls: the second must not be shadowed by a cached zero-block verdict.
+	pull()
+	pull()
+
+	if len(rec.events) != 2 {
+		t.Fatalf("want 2 block events, got %d: %+v", len(rec.events), rec.events)
+	}
+	for i, ev := range rec.events {
+		if ev.Verdict != proxy.VerdictBlock || ev.Gate != proxy.GateSupply {
+			t.Errorf("event %d: verdict=%q gate=%q, want block/supply", i, ev.Verdict, ev.Gate)
+		}
+		if ev.BlockUntil.IsZero() {
+			t.Errorf("event %d: BlockUntil is zero — image will not appear in quarantine", i)
+		}
 	}
 }
