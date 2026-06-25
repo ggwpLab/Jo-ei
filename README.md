@@ -130,9 +130,10 @@ docker pull library/alpine:3.21
 **Caveats:**
 - Only Docker Hub (`registry-1.docker.io`) is supported as an upstream. Private
   registries and other OCI registries are not proxied.
-- Images are gated by both Trivy (vulnerability + secret scanning) and ClamAV
-  (malware signatures). Blocking happens on the **manifest** before any layer
-  data is downloaded, so a rejected image never reaches the client.
+- Images are gated by Trivy (vulnerability + secret scanning) and by every
+  configured malware engine in `malware.scanners[]` (ClamAV and/or ICAP), which
+  scan the image config blob and each layer. The verdict is returned on the
+  **manifest** request, so a rejected image is never served to the client.
 - Enable the Docker registry in `config.yaml` by setting
   `registries.docker.enabled: true` and `image_scan.enabled: true`.
 
@@ -238,6 +239,8 @@ The console overview shows live health for each scan engine:
 
 - **ClamAV / ICAP** are actively probed (clamd `PING`, ICAP `OPTIONS`) every
   `health.probe_interval_seconds` (default 30s).
+- **Trivy** (Docker image scanner) is actively probed via its `/healthz`
+  endpoint on the same interval.
 - **osv.dev** health is derived passively from real scan traffic — no extra
   requests are sent to the public API.
 
