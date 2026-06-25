@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -147,7 +148,7 @@ func (a *MavenAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *
 // times, honoring Retry-After when present, so transient throttling does not
 // fail an otherwise-valid download.
 const (
-	mavenMaxMetadataRetries = 3
+	mavenMaxMetadataRetries = 5
 	mavenRetryBaseDelay     = 500 * time.Millisecond
 	mavenRetryMaxDelay      = 10 * time.Second
 )
@@ -199,8 +200,21 @@ func retryAfterDelay(header string, attempt int) time.Duration {
 			return 0
 		}
 	}
-	// Exponential backoff: base * 2^attempt.
-	return capDelay(mavenRetryBaseDelay << attempt)
+	return jitteredBackoff(attempt)
+}
+
+// jitteredBackoff returns an exponential backoff delay with "equal jitter": the
+// result is uniformly distributed in [d/2, d] where d = capDelay(base<<attempt).
+// The lower bound guarantees a minimum wait so retries never fire instantly,
+// while the random component de-synchronizes many simultaneously throttled
+// requests so their retries do not re-create the burst that triggered the 429.
+func jitteredBackoff(attempt int) time.Duration {
+	d := capDelay(mavenRetryBaseDelay << attempt)
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + time.Duration(rand.Int64N(int64(half)+1))
 }
 
 func capDelay(d time.Duration) time.Duration {
