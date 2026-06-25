@@ -36,6 +36,7 @@ type GateVerdict struct {
 	ManifestPath string // cached manifest body (allowed only)
 	ContentType  string
 	PublishedAt  time.Time
+	BlockUntil   time.Time // non-zero only for supply-chain holds (drives the quarantine view)
 	// Passthrough is true when the served manifest was not gated because it has
 	// no scannable image content (a multi-arch index, or an attestation
 	// manifest). The real image content is gated when the client requests the
@@ -118,9 +119,17 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// 1. Supply-chain (config.created as the publish proxy).
 	fr := g.filter.Check(ctx, pkgRef, &proxy.PackageMetadata{PublishedAt: created})
 	if !fr.Allowed {
-		v := GateVerdict{Allowed: false, Reason: fr.Reason, BlockedBy: "supply_chain", PublishedAt: created}
-		_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
-		return digest, v, nil
+		// A supply-chain hold is time-based: it expires when the image matures.
+		// Do NOT cache it — re-evaluate on every pull so the block lifts on its
+		// own, and so each pull records a fresh block event with a current
+		// block_until for the quarantine view.
+		return digest, GateVerdict{
+			Allowed:     false,
+			Reason:      fr.Reason,
+			BlockedBy:   "supply_chain",
+			PublishedAt: fr.PublishedAt,
+			BlockUntil:  fr.BlockUntil,
+		}, nil
 	}
 
 	// 2. Trivy → policy (severity threshold + denylist).
