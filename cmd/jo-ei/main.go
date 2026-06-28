@@ -128,6 +128,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	if err := applyStoredRegistries(cfg, settingsStore); err != nil {
+		return err
+	}
+
 	artifactCache, err := cache.New(cfg.Cache)
 	if err != nil {
 		return err
@@ -365,6 +369,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	mux := proxy.NewMux(handlers, rawHandlers, logger)
+	runningRegistries := registryInfo(cfg)
 
 	// Wrap the proxy mux so the admin console is served at /console/ while every
 	// other path (registry prefixes, /health) falls through to the proxy mux
@@ -383,14 +388,17 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	root.Handle("/favicon.ico", web.FaviconHandler())
 	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
 	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
-		Store:         store,
-		Broadcaster:   broadcaster,
-		Policy:        policyRuntime,
-		Cache:         artifactCache,
-		CacheMaxBytes: int64(cfg.Cache.Local.MaxSizeGB) << 30,
-		Registries:    registryInfo(cfg),
-		Health:        healthMon,
-		Logger:        logger,
+		Store:             store,
+		Broadcaster:       broadcaster,
+		Policy:            policyRuntime,
+		Cache:             artifactCache,
+		CacheMaxBytes:     int64(cfg.Cache.Local.MaxSizeGB) << 30,
+		Registries:        runningRegistries,
+		RegistryStore:     registrySettingsStore{s: settingsStore},
+		RunningRegistries: runningRegistries,
+		ImageScanEnabled:  cfg.ImageScan.Enabled,
+		Health:            healthMon,
+		Logger:            logger,
 	})))
 	root.Handle("/", mux)
 
@@ -498,6 +506,67 @@ func (p policySettingsStore) SavePolicy(rp policy.RuntimeParams) error {
 		return err
 	}
 	return p.s.Put("policy", b)
+}
+
+// registrySettingsStore adapts *settings.Store to console.RegistryStore, storing
+// the registry set as JSON under the "registries" key.
+type registrySettingsStore struct{ s *settings.Store }
+
+func (r registrySettingsStore) LoadRegistries() ([]console.RegistryInfo, bool, error) {
+	b, ok, err := r.s.Get("registries")
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	var regs []console.RegistryInfo
+	if err := json.Unmarshal(b, &regs); err != nil {
+		return nil, false, fmt.Errorf("decoding stored registries: %w", err)
+	}
+	return regs, true, nil
+}
+
+func (r registrySettingsStore) SaveRegistries(in []console.RegistryInfo) error {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return r.s.Put("registries", b)
+}
+
+// applyStoredRegistries overlays persisted registry settings onto cfg before the
+// proxy mux is built (DB wins), or seeds the store from the YAML config on first
+// boot. A corrupt stored value fails fast rather than silently using YAML.
+func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
+	b, ok, err := st.Get("registries")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		seed, err := json.Marshal(registryInfo(cfg))
+		if err != nil {
+			return err
+		}
+		return st.Put("registries", seed)
+	}
+	var stored []console.RegistryInfo
+	if err := json.Unmarshal(b, &stored); err != nil {
+		return fmt.Errorf("decoding stored registries: %w", err)
+	}
+	for _, ri := range stored {
+		rc := config.RegistryConfig{Enabled: ri.Enabled, Upstreams: ri.Upstreams}
+		switch ri.Ecosystem {
+		case "pypi":
+			cfg.Registries.PyPI = rc
+		case "npm":
+			cfg.Registries.NPM = rc
+		case "maven":
+			cfg.Registries.Maven = rc
+		case "rubygems":
+			cfg.Registries.RubyGems = rc
+		case "docker":
+			cfg.Registries.Docker = rc
+		}
+	}
+	return nil
 }
 
 // toAuthUsers converts the config credential list into auth.User values.
