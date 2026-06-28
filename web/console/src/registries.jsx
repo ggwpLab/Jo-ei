@@ -1,6 +1,45 @@
 /* 浄衛 Jōei :: REGISTRIES & CACHE */
 
-function RegistryCard({ reg }) {
+const REG_ECOS = ["pypi", "npm", "maven", "rubygems", "docker"];
+
+function UpstreamEditor({ upstreams, onChange }) {
+  const [val, setVal] = useState("");
+  const add = () => { const v = val.trim(); if (v) { onChange([...upstreams, v]); setVal(""); } };
+  const remove = (i) => onChange(upstreams.filter((_, j) => j !== i));
+  const move = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= upstreams.length) return;
+    const next = upstreams.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  return (
+    <div className="upstream">
+      {upstreams.map((u, i) => (
+        <div className="upstream-item" key={u + i}>
+          <span className="ord">{i + 1}</span>
+          <span style={{ flex: 1 }}>{u}</span>
+          <span className="pri">{i === 0 ? "primary" : "fallback"}</span>
+          <button className="btn sm ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label="up">↑</button>
+          <button className="btn sm ghost" disabled={i === upstreams.length - 1} onClick={() => move(i, 1)} aria-label="down">↓</button>
+          <button className="lc-del" onClick={() => remove(i)}><Icons.trash /></button>
+        </div>
+      ))}
+      <div className="upstream-item" style={{ borderStyle: "dashed" }}>
+        <Icons.plus />
+        <input
+          className="lc-val" style={{ background: "none", border: "none", outline: "none", color: "var(--washi)", flex: 1 }}
+          placeholder="https://registry.example.org"
+          value={val} onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+        />
+        <button className="btn sm ghost" onClick={add}>Add</button>
+      </div>
+    </div>
+  );
+}
+
+function RegistryCard({ reg, onToggle, onUpstreams }) {
   const e = JOEI.ECO[reg.eco] || { name: reg.eco };
   return (
     <div className="card reg-card">
@@ -12,38 +51,86 @@ function RegistryCard({ reg }) {
         </div>
         <div className="right row" style={{ gap: 10 }}>
           <span className="muted" style={{ fontSize: 12 }}>{reg.enabled ? "enabled" : "off"}</span>
-          <button className={`toggle ${reg.enabled ? "on" : ""}`} disabled
-            title="Configured in config.yaml — console management arrives in a later phase" aria-label="toggle"></button>
+          <button className={`toggle ${reg.enabled ? "on" : ""}`} onClick={() => onToggle(!reg.enabled)} aria-label="toggle"></button>
         </div>
       </div>
-      <div className="upstream">
-        {reg.upstreams.map((u, i) => (
-          <div className="upstream-item" key={u} style={{ opacity: reg.enabled ? 1 : 0.45 }}>
-            <span className="ord">{i + 1}</span>
-            <span>{u}</span>
-            <span className="pri">{i === 0 ? "primary" : "fallback"}</span>
-          </div>
-        ))}
-      </div>
+      <UpstreamEditor upstreams={reg.upstreams} onChange={onUpstreams} />
     </div>
   );
 }
 
-function Registries() {
+function Registries({ notify }) {
   useJoeiData();
-  const regs = JOEI.registries;
   const c = JOEI.cache;
   const usedPct = c.max_gb > 0 ? Math.min(100, (c.used_gb / c.max_gb) * 100) : 0;
+
+  // Normalize to all five ecosystems in canonical order for editing.
+  const initial = () => REG_ECOS.map((eco) => {
+    const found = JOEI.registries.find((r) => r.eco === eco);
+    return found ? { ...found, upstreams: [...found.upstreams] } : { eco, enabled: false, upstreams: [] };
+  });
+  const [draft, setDraft] = useState(initial);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pending, setPending] = useState(JOEI.registriesPending);
+  const [warnings, setWarnings] = useState(JOEI.registriesWarnings);
+
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  useEffect(() => {
+    const sync = () => { if (!dirtyRef.current) { setDraft(initial()); setPending(JOEI.registriesPending); setWarnings(JOEI.registriesWarnings); } };
+    window.addEventListener("joei:data", sync);
+    return () => window.removeEventListener("joei:data", sync);
+  }, []);
+
+  const patch = (eco, change) => {
+    setDraft(draft.map((r) => (r.eco === eco ? { ...r, ...change } : r)));
+    setDirty(true);
+  };
+
+  const save = () => {
+    setSaving(true);
+    JOEI.saveRegistries(draft)
+      .then(({ pending, warnings }) => {
+        setDirty(false);
+        setPending(pending);
+        setWarnings(warnings);
+        notify({ kind: "ok", code: "200 OK", title: "Registries saved",
+          msg: <>Saved to the database — changes apply on the next restart.{warnings.length ? " " + warnings[0] : ""}</> });
+      })
+      .catch((err) => notify({ kind: "block", code: "400 Bad Request", title: "Registries rejected",
+        msg: String(err.message || err) }))
+      .finally(() => setSaving(false));
+  };
 
   return (
     <div className="content-inner">
       <div className="section-head">
         <span className="head-kanji kanji">蔵</span>
         <div>
-          <div className="eyebrow">Upstreams &amp; storage</div>
+          <div className="eyebrow">Upstreams &amp; storage · persisted, applies on restart</div>
           <h2>Registries &amp; cache</h2>
         </div>
+        <div className="spacer"></div>
+        <button className={`btn ${dirty ? "primary" : ""}`} disabled={!dirty || saving}
+          style={!dirty ? { opacity: .5 } : undefined} onClick={save}>
+          {saving ? "Saving…" : dirty ? "Save" : "Saved"}
+        </button>
       </div>
+
+      {pending && (
+        <div className="card" role="status" style={{ padding: 14, marginBottom: 16, borderColor: "var(--gold)" }}>
+          <span className="muted">⟳ Registry changes are saved but <b style={{ color: "var(--gold-l)" }}>apply on the next restart</b>.</span>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="card" role="status" style={{ padding: 14, marginBottom: 16, borderColor: "var(--warn, #c8892a)" }}>
+          {warnings.map((w, i) => (
+            <span key={i} className="muted">⚠ {w}</span>
+          ))}
+        </div>
+      )}
 
       {/* cache panel */}
       <div className="card" style={{ padding: 22, marginBottom: 22 }}>
@@ -70,12 +157,14 @@ function Registries() {
         <h2 style={{ fontSize: 16 }}>Per-ecosystem upstreams</h2>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        {regs.length === 0
-          ? <div className="card"><div className="empty"><span className="e-kanji">無</span><div className="e-title">No registries</div></div></div>
-          : regs.map((r) => <RegistryCard key={r.eco} reg={r} />)}
+        {draft.map((r) => (
+          <RegistryCard key={r.eco} reg={r}
+            onToggle={(enabled) => patch(r.eco, { enabled })}
+            onUpstreams={(upstreams) => patch(r.eco, { upstreams })} />
+        ))}
       </div>
     </div>
   );
 }
 
-Object.assign(window, { Registries, RegistryCard });
+Object.assign(window, { Registries, RegistryCard, UpstreamEditor });

@@ -10,16 +10,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 func TestBuildTelemetryStore_FailsOnUnopenablePath(t *testing.T) {
 	// Parent of the db path is a regular file, so MkdirAll fails → fail fast.
+	// storage.Open is now the entry point that rejects the bad path.
 	f := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
-	cfg := &config.Config{}
-	cfg.Database.Path = filepath.Join(f, "sub", "jo-ei.db")
-	_, err := buildTelemetryStore(cfg, zerolog.Nop())
+	badPath := filepath.Join(f, "sub", "jo-ei.db")
+	_, err := storage.Open(badPath)
 	require.Error(t, err)
+}
+
+func TestBuildTelemetryStore_SucceedsOnValidPath(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{}
+	cfg.Database.Path = filepath.Join(dir, "jo-ei.db")
+	sdb, err := storage.Open(cfg.Database.Path)
+	require.NoError(t, err)
+	defer func() { _ = sdb.Close() }()
+	store, err := buildTelemetryStore(sdb, cfg, zerolog.Nop())
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
 }
 
 func TestBuildHandlers_YarnAliasesNPM(t *testing.T) {

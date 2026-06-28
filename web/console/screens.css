@@ -380,6 +380,8 @@ textarea.input { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; 
 }
 .upstream-item .ord { color: var(--washi-faint); font-weight: 700; }
 .upstream-item .pri { margin-left: auto; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--washi-faint); }
+.upstream-item .lc-del { color: var(--washi-faint); background: none; border: none; padding: 4px; border-radius: 5px; }
+.upstream-item .lc-del:hover { color: var(--vermilion-l); background: var(--vermilion-t); }
 
 /* toggle */
 .toggle { position: relative; width: 40px; height: 22px; border-radius: 999px; background: var(--ink-600); border: 1px solid var(--line-strong); transition: background .18s; flex: 0 0 auto; }

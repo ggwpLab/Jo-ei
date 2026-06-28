@@ -35,9 +35,10 @@
     daily: [], // per-UTC-day metric rows, oldest-first (for left→right sparklines)
     policy: {
       mode: "off", min_age_hours: 0, cve_block_on: "CRITICAL",
-      allowlist: [], denylist: [], persistence: "runtime",
+      allowlist: [], denylist: [], persistence: "database",
     },
     registries: [],
+    registriesPending: false, registriesWarnings: [],
     cache: { used_gb: 0, max_gb: 0, objects: "0", hit_rate: 0, evictions: 0 },
     kpis: {
       requests_total: 0, cache_hits: 0, hit_rate: 0, blocked_total: 0, errors: 0,
@@ -129,6 +130,8 @@
     applyOverview(overview);
     J.requests = (requests.requests || []).map(reviveEvent);
     J.registries = (registries.registries || []).map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams || [] }));
+    J.registriesPending = !!registries.pending_restart;
+    J.registriesWarnings = registries.warnings || [];
     // The endpoint returns newest-first; reverse to oldest-first so sparklines
     // read left→right in time order. "|| []" degrades only the sparklines (e.g.
     // when persistence is off and the array is empty), never the whole load().
@@ -175,6 +178,27 @@
     return J.policy;
   }
 
+  async function saveRegistries(list) {
+    const body = { registries: list.map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams })) };
+    const res = await fetch("/api/registries", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok) {
+      const err = new Error((data && data.message) || "registries update failed (HTTP " + res.status + ")");
+      err.field = data && data.field;
+      throw err;
+    }
+    J.registries = (data.registries || []).map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams || [] }));
+    J.registriesPending = !!data.pending_restart;
+    J.registriesWarnings = data.warnings || [];
+    fire("joei:data");
+    return { pending: J.registriesPending, warnings: J.registriesWarnings };
+  }
+
   // An SSE drop alone does not mean the API is down: EventSource reconnects
   // transparently and every panel is refreshed by the 15s polls regardless.
   // Probe the API once per error burst; only a failing probe shows the
@@ -200,6 +224,7 @@
   J.load = load;
   J.savePolicy = savePolicy;
   J.pageRequests = pageRequests;
+  J.saveRegistries = saveRegistries;
 
   // Initial load; fire joei:data even on failure so the app shell can leave
   // the loader and show the connection banner. J.ready marks the attempt as
