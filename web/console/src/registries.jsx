@@ -73,11 +73,12 @@ function Registries({ notify }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState(JOEI.registriesPending);
+  const [warnings, setWarnings] = useState(JOEI.registriesWarnings);
 
   const dirtyRef = useRef(dirty);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   useEffect(() => {
-    const sync = () => { if (!dirtyRef.current) { setDraft(initial()); setPending(JOEI.registriesPending); } };
+    const sync = () => { if (!dirtyRef.current) { setDraft(initial()); setPending(JOEI.registriesPending); setWarnings(JOEI.registriesWarnings); } };
     window.addEventListener("joei:data", sync);
     return () => window.removeEventListener("joei:data", sync);
   }, []);
@@ -93,6 +94,7 @@ function Registries({ notify }) {
       .then(({ pending, warnings }) => {
         setDirty(false);
         setPending(pending);
+        setWarnings(warnings);
         notify({ kind: "ok", code: "200 OK", title: "Registries saved",
           msg: <>Saved to the database — changes apply on the next restart.{warnings.length ? " " + warnings[0] : ""}</> });
       })
@@ -119,6 +121,14 @@ function Registries({ notify }) {
       {pending && (
         <div className="card" role="status" style={{ padding: 14, marginBottom: 16, borderColor: "var(--gold)" }}>
           <span className="muted">⟳ Registry changes are saved but <b style={{ color: "var(--gold-l)" }}>apply on the next restart</b>.</span>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="card" role="status" style={{ padding: 14, marginBottom: 16, borderColor: "var(--warn, #c8892a)" }}>
+          {warnings.map((w, i) => (
+            <span key={i} className="muted">⚠ {w}</span>
+          ))}
         </div>
       )}
 

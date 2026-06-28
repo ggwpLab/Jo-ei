@@ -169,8 +169,8 @@ function App() {
           <h1><span className="crumb-kanji kanji">{meta.kanji}</span> {meta.title}</h1>
           <div className="topbar-spacer"></div>
 
-          <span className="pill" title="Console edits apply immediately but reset to the YAML config on restart">
-            <span className="muted" style={{ fontWeight: 500 }}>policy</span>&nbsp;runtime override
+          <span className="pill" title="Console edits are persisted to the database and survive restart">
+            <span className="muted" style={{ fontWeight: 500 }}>settings</span>&nbsp;·&nbsp;persisted
           </span>
           <span className={`pill ${policy.mode === "enforce" ? "enforce" : policy.mode === "dry_run" ? "dry" : "off"}`}>
             <span className="dot"></span>

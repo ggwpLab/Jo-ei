@@ -536,7 +536,7 @@ func (r registrySettingsStore) SaveRegistries(in []console.RegistryInfo) error {
 // proxy mux is built (DB wins), or seeds the store from the YAML config on first
 // boot. A corrupt stored value fails fast rather than silently using YAML.
 func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
-	b, ok, err := st.Get("registries")
+	stored, ok, err := registrySettingsStore{s: st}.LoadRegistries()
 	if err != nil {
 		return err
 	}
@@ -546,10 +546,6 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 			return err
 		}
 		return st.Put("registries", seed)
-	}
-	var stored []console.RegistryInfo
-	if err := json.Unmarshal(b, &stored); err != nil {
-		return fmt.Errorf("decoding stored registries: %w", err)
 	}
 	for _, ri := range stored {
 		rc := config.RegistryConfig{Enabled: ri.Enabled, Upstreams: ri.Upstreams}
@@ -564,6 +560,8 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 			cfg.Registries.RubyGems = rc
 		case "docker":
 			cfg.Registries.Docker = rc
+		default:
+			return fmt.Errorf("unknown ecosystem %q in stored registries", ri.Ecosystem)
 		}
 	}
 	return nil
