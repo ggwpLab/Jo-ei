@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
 	"github.com/ggwpLab/Jo-ei/internal/revalidate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
+	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
@@ -115,6 +117,17 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
+	sdb, err := storage.Open(cfg.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database at %q: %w", cfg.Database.Path, err)
+	}
+	defer func() { _ = sdb.Close() }()
+
+	settingsStore, err := settings.New(sdb)
+	if err != nil {
+		return err
+	}
+
 	artifactCache, err := cache.New(cfg.Cache)
 	if err != nil {
 		return err
@@ -136,11 +149,14 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	// Runtime policy: engine + supply-chain filter behind an atomic swap so
-	// the console can apply edits without restart (runtime-only; the YAML
-	// config wins again after restart).
-	policyRuntime := policy.NewRuntime(cfg.SupplyChain, cfg.CVE, profile, fileAllow)
+	// the console can apply edits without restart. Edits now persist to the
+	// shared SQLite database so they survive a restart.
+	policyRuntime, err := policy.NewRuntimeWithStore(cfg.SupplyChain, cfg.CVE, profile, fileAllow, policySettingsStore{s: settingsStore})
+	if err != nil {
+		return err
+	}
 
-	store, err := buildTelemetryStore(cfg, logger)
+	store, err := buildTelemetryStore(sdb, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -460,6 +476,30 @@ func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
 	return a.c.Invalidate(ref)
 }
 
+// policySettingsStore adapts *settings.Store to policy.SettingsStore, storing
+// the runtime policy params as JSON under the "policy" key.
+type policySettingsStore struct{ s *settings.Store }
+
+func (p policySettingsStore) LoadPolicy() (policy.RuntimeParams, bool, error) {
+	b, ok, err := p.s.Get("policy")
+	if err != nil || !ok {
+		return policy.RuntimeParams{}, ok, err
+	}
+	var rp policy.RuntimeParams
+	if err := json.Unmarshal(b, &rp); err != nil {
+		return policy.RuntimeParams{}, false, fmt.Errorf("decoding stored policy: %w", err)
+	}
+	return rp, true, nil
+}
+
+func (p policySettingsStore) SavePolicy(rp policy.RuntimeParams) error {
+	b, err := json.Marshal(rp)
+	if err != nil {
+		return err
+	}
+	return p.s.Put("policy", b)
+}
+
 // toAuthUsers converts the config credential list into auth.User values.
 func toAuthUsers(in []config.AuthUser) []auth.User {
 	out := make([]auth.User, len(in))
@@ -480,17 +520,11 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 	}
 }
 
-// buildTelemetryStore opens the SQLite-backed telemetry store. Telemetry is
-// SQLite-only: a missing path is rejected by config validation, and any open
-// or schema error aborts startup (no in-memory fallback).
-func buildTelemetryStore(cfg *config.Config, logger zerolog.Logger) (*telemetry.Store, error) {
-	sdb, err := storage.Open(cfg.Database.Path)
-	if err != nil {
-		return nil, fmt.Errorf("opening telemetry database at %q: %w", cfg.Database.Path, err)
-	}
+// buildTelemetryStore initialises the SQLite-backed telemetry store on the
+// shared database. Telemetry is SQLite-only: any schema error aborts startup.
+func buildTelemetryStore(sdb *storage.DB, cfg *config.Config, logger zerolog.Logger) (*telemetry.Store, error) {
 	store, err := telemetry.Open(sdb, cfg.Database.EventRetentionDays, cfg.Database.DailyRetentionDays, logger)
 	if err != nil {
-		_ = sdb.Close()
 		return nil, fmt.Errorf("initialising telemetry store: %w", err)
 	}
 	logger.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
