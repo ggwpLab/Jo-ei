@@ -44,8 +44,23 @@ type Runtime struct {
 	cur       atomic.Pointer[runtimeSnapshot]
 	cveCfg    config.CVEConfig
 	profile   config.PolicyProfile
-	fileAllow []string // supply_chain.allowlist_path entries, immutable
+	fileAllow []string      // supply_chain.allowlist_path entries, immutable
+	store     SettingsStore // nil = runtime-only (no persistence)
 }
+
+// SettingsStore persists the runtime policy params. Implemented in cmd/jo-ei by
+// an adapter over *settings.Store that marshals RuntimeParams to/from JSON.
+type SettingsStore interface {
+	LoadPolicy() (RuntimeParams, bool, error)
+	SavePolicy(RuntimeParams) error
+}
+
+// PersistError wraps a failure to write the policy to the settings store. It is
+// distinct from ValidationError so the console can map it to HTTP 500.
+type PersistError struct{ Err error }
+
+func (e *PersistError) Error() string { return "persisting policy: " + e.Err.Error() }
+func (e *PersistError) Unwrap() error { return e.Err }
 
 // NewRuntime builds the boot snapshot from config. fileAllow entries are
 // always honored by the supply-chain filter regardless of runtime edits.
@@ -55,6 +70,39 @@ type Runtime struct {
 // (the console presents a single "always trust" list). This is broader than
 // the pre-console behavior where profile.Allowlist only bypassed CVE checks.
 func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile config.PolicyProfile, fileAllow []string) *Runtime {
+	r, seed := newRuntimeSeed(sc, cve, profile, fileAllow)
+	r.install(seed)
+	return r
+}
+
+// NewRuntimeWithStore seeds the store from YAML on first boot (empty store) or
+// installs the stored params otherwise (DB wins). A nil store behaves like
+// NewRuntime.
+func NewRuntimeWithStore(sc config.SupplyChainConfig, cve config.CVEConfig, profile config.PolicyProfile, fileAllow []string, store SettingsStore) (*Runtime, error) {
+	r, seed := newRuntimeSeed(sc, cve, profile, fileAllow)
+	r.store = store
+	if store != nil {
+		p, ok, err := store.LoadPolicy()
+		if err != nil {
+			return nil, fmt.Errorf("loading stored policy: %w", err)
+		}
+		if ok {
+			r.install(p)
+			return r, nil
+		}
+	}
+	r.install(seed)
+	if store != nil {
+		if err := store.SavePolicy(seed); err != nil {
+			return nil, fmt.Errorf("seeding policy store: %w", err)
+		}
+	}
+	return r, nil
+}
+
+// newRuntimeSeed builds the Runtime shell and the boot params derived from the
+// YAML config, without installing them.
+func newRuntimeSeed(sc config.SupplyChainConfig, cve config.CVEConfig, profile config.PolicyProfile, fileAllow []string) (*Runtime, RuntimeParams) {
 	blockOn := cve.BlockOn
 	if profile.CVEMinSeverity != "" {
 		blockOn = profile.CVEMinSeverity
@@ -66,14 +114,14 @@ func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile confi
 		blockOn = "LOW"
 	}
 	r := &Runtime{cveCfg: cve, profile: profile, fileAllow: append([]string{}, fileAllow...)}
-	r.install(RuntimeParams{
+	seed := RuntimeParams{
 		Mode:        sc.Mode,
 		MinAgeHours: sc.MinAgeHours,
 		CVEBlockOn:  blockOn,
 		Allowlist:   append([]string{}, profile.Allowlist...),
 		Denylist:    append([]string{}, profile.Denylist...),
-	})
-	return r
+	}
+	return r, seed
 }
 
 // install builds a fresh Engine/Filter pair for p and swaps it in atomically;
@@ -121,6 +169,11 @@ func (r *Runtime) Apply(p RuntimeParams) error {
 	for i, e := range p.Denylist {
 		if msg := validateListEntry(e); msg != "" {
 			return &ValidationError{Field: fmt.Sprintf("denylist[%d]", i), Message: msg}
+		}
+	}
+	if r.store != nil {
+		if err := r.store.SavePolicy(p); err != nil {
+			return &PersistError{Err: err}
 		}
 	}
 	r.install(p)
