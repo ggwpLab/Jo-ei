@@ -91,11 +91,15 @@ func newGateTestServer(t *testing.T) (string, string, string) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, tag), func(w http.ResponseWriter, r *http.Request) {
+	serveManifest := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", mediaTypeSchema2Manifest)
 		w.Header().Set("Docker-Content-Digest", imgDigest)
 		_, _ = w.Write(manifestBytes)
-	})
+	}
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, tag), serveManifest)
+	// Also serve by digest so re-validation (which calls Evaluate with a digest
+	// ref rather than a tag) can fetch the manifest without a 404.
+	mux.HandleFunc(fmt.Sprintf("/v2/%s/manifests/%s", repo, imgDigest), serveManifest)
 	mux.HandleFunc(fmt.Sprintf("/v2/%s/blobs/%s", repo, cfgDigest), func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write([]byte(cfgBody))

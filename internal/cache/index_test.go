@@ -138,6 +138,46 @@ func TestIndex_Delete(t *testing.T) {
 	assert.False(t, found)
 }
 
+func TestIndex_DueForRevalidationAndMarkValidated(t *testing.T) {
+	idx, cleanup := newTestIndex(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	// stored_at drives initial last_validated (set by Insert).
+	old := proxy.PackageRef{Ecosystem: "pypi", Name: "old", Version: "1.0"}
+	fresh := proxy.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	expired := proxy.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
+
+	require.NoError(t, idx.Insert(&old, &cache.CacheEntry{
+		ArtifactPath: "/c/old", ScanClean: true, ScanJSON: `{"clean":true}`,
+		StoredAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(24 * time.Hour), SizeBytes: 1,
+	}))
+	require.NoError(t, idx.Insert(&fresh, &cache.CacheEntry{
+		ArtifactPath: "/c/fresh", ScanClean: true,
+		StoredAt: now, ExpiresAt: now.Add(24 * time.Hour), SizeBytes: 1,
+	}))
+	require.NoError(t, idx.Insert(&expired, &cache.CacheEntry{
+		ArtifactPath: "/c/expired", ScanClean: true,
+		StoredAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(-1 * time.Hour), SizeBytes: 1,
+	}))
+
+	// Due = last_validated older than 24h ago AND not expired → only "old".
+	cutoff := now.Add(-24 * time.Hour).Unix()
+	due, err := idx.DueForRevalidation(cutoff, 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, "old", due[0].Ref.Name)
+	assert.Equal(t, "/c/old", due[0].FilePath)
+	assert.True(t, due[0].ScanClean)
+	assert.Equal(t, `{"clean":true}`, due[0].ScanJSON)
+
+	// After marking validated now, it is no longer due.
+	require.NoError(t, idx.MarkValidated(&old, now.Unix()))
+	due, err = idx.DueForRevalidation(cutoff, 10)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
+
 func TestIndex_LRUCandidates(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()

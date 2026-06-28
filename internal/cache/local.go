@@ -182,6 +182,16 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 	}
 }
 
+// DueForRevalidation returns cached entries due for re-validation. See Index.
+func (lc *LocalCache) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
+	return lc.index.DueForRevalidation(before, limit)
+}
+
+// MarkValidated records that ref passed re-validation at ts (unix seconds).
+func (lc *LocalCache) MarkValidated(ref *proxy.PackageRef, ts int64) error {
+	return lc.index.MarkValidated(ref, ts)
+}
+
 // Close stops the eviction worker and closes the index. Safe to call twice.
 func (lc *LocalCache) Close() error {
 	var closeErr error

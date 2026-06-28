@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	last_hit     INTEGER NOT NULL DEFAULT 0,
 	hit_count    INTEGER NOT NULL DEFAULT 0,
 	size_bytes   INTEGER NOT NULL DEFAULT 0,
+	last_validated INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(ecosystem, name, version, classifier)
 );
 CREATE INDEX IF NOT EXISTS idx_last_hit ON artifacts(last_hit);
@@ -50,6 +51,9 @@ func NewIndex(path string) (*Index, error) {
 	}
 	if err := migrateClassifier(db); err != nil {
 		return nil, fmt.Errorf("migrating schema: %w", err)
+	}
+	if err := migrateLastValidated(db); err != nil {
+		return nil, fmt.Errorf("migrating last_validated: %w", err)
 	}
 	return &Index{db: db}, nil
 }
@@ -94,6 +98,27 @@ func migrateClassifier(db *sql.DB) error {
 	return tx.Commit()
 }
 
+// migrateLastValidated adds the re-validation timestamp column to a pre-existing
+// database and backfills it from stored_at so old rows are treated as validated
+// at store time rather than all immediately due. No-op once present and backfilled.
+func migrateLastValidated(db *sql.DB) error {
+	has, err := hasColumn(db, "artifacts", "last_validated")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE artifacts ADD COLUMN last_validated INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	// Backfill rows that predate the column (last_validated == 0 is never a real
+	// timestamp). Idempotent: a no-op once every row has a real value.
+	if _, err := db.Exec(`UPDATE artifacts SET last_validated = stored_at WHERE last_validated = 0`); err != nil {
+		return err
+	}
+	return nil
+}
+
 // hasColumn reports whether table has a column with the given name.
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
@@ -129,20 +154,21 @@ func (idx *Index) Insert(ref *proxy.PackageRef, entry *CacheEntry) error {
 	_, err := idx.db.Exec(`
 		INSERT INTO artifacts
 			(ecosystem, name, version, classifier, file_path, scan_clean, scan_json,
-			 stored_at, expires_at, last_hit, hit_count, size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 stored_at, expires_at, last_hit, hit_count, size_bytes, last_validated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(ecosystem, name, version, classifier) DO UPDATE SET
-			file_path  = excluded.file_path,
-			scan_clean = excluded.scan_clean,
-			scan_json  = excluded.scan_json,
-			stored_at  = excluded.stored_at,
-			expires_at = excluded.expires_at,
-			last_hit   = excluded.last_hit,
-			size_bytes = excluded.size_bytes`,
+			file_path      = excluded.file_path,
+			scan_clean     = excluded.scan_clean,
+			scan_json      = excluded.scan_json,
+			stored_at      = excluded.stored_at,
+			expires_at     = excluded.expires_at,
+			last_hit       = excluded.last_hit,
+			size_bytes     = excluded.size_bytes,
+			last_validated = excluded.last_validated`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 		entry.ArtifactPath, boolToInt(entry.ScanClean), entry.ScanJSON,
 		entry.StoredAt.Unix(), entry.ExpiresAt.Unix(),
-		entry.StoredAt.Unix(), 0, entry.SizeBytes,
+		entry.StoredAt.Unix(), 0, entry.SizeBytes, entry.StoredAt.Unix(),
 	)
 	return err
 }
@@ -236,6 +262,50 @@ func (idx *Index) Count() (int64, error) {
 	var n int64
 	err := idx.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&n)
 	return n, err
+}
+
+// DueForRevalidation returns up to limit non-expired entries whose last_validated
+// is older than `before` (a unix timestamp), oldest-first. Expired entries are
+// excluded — they are dropped on access anyway.
+func (idx *Index) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
+	now := time.Now().Unix()
+	rows, err := idx.db.Query(`
+		SELECT ecosystem, name, version, classifier, file_path, scan_clean, scan_json
+		FROM artifacts
+		WHERE last_validated < ? AND expires_at > ?
+		ORDER BY last_validated ASC
+		LIMIT ?`, before, now, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RevalEntry
+	for rows.Next() {
+		var (
+			e            RevalEntry
+			scanCleanInt int
+		)
+		if err := rows.Scan(
+			&e.Ref.Ecosystem, &e.Ref.Name, &e.Ref.Version, &e.Ref.Classifier,
+			&e.FilePath, &scanCleanInt, &e.ScanJSON,
+		); err != nil {
+			return nil, err
+		}
+		e.ScanClean = scanCleanInt == 1
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// MarkValidated sets last_validated for ref to ts (a unix timestamp).
+func (idx *Index) MarkValidated(ref *proxy.PackageRef, ts int64) error {
+	_, err := idx.db.Exec(
+		`UPDATE artifacts SET last_validated = ? WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		ts, ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
+	)
+	return err
 }
 
 func boolToInt(b bool) int {
