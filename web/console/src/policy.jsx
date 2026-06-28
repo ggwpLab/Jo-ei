@@ -31,7 +31,7 @@ function ListEditor({ kind, items, onAdd, onRemove }) {
 
 function buildYaml(p) {
   return [
-    ["c", "# 浄衛 runtime policy — resets to config.yaml on restart"],
+    ["c", "# 浄衛 runtime policy — persisted to the database"],
     ["k", "mode", "v", p.mode],
     ["k", "min_age_hours", "d", p.min_age_hours],
     ["k", "cve_block_on", "v", p.cve_block_on],
@@ -90,7 +90,7 @@ function Policy({ notify }) {
       .then(() => {
         setDirty(false);
         notify({ kind: "ok", code: "200 OK", title: "Policy applied",
-          msg: <>Runtime policy updated — resets to the YAML config on restart.</> });
+          msg: <>Policy updated and saved to the database.</> });
       })
       .catch((err) => {
         setFieldError(err.field || null);
@@ -108,7 +108,7 @@ function Policy({ notify }) {
       <div className="section-head">
         <span className="head-kanji kanji">法</span>
         <div>
-          <div className="eyebrow">Runtime policy · applies immediately, resets on restart</div>
+          <div className="eyebrow">Runtime policy · applies immediately, persisted</div>
           <h2>Effective policy</h2>
         </div>
         <div className="spacer"></div>
@@ -123,8 +123,7 @@ function Policy({ notify }) {
       </div>
 
       <p className="muted" style={{ maxWidth: 680, marginTop: -4, marginBottom: 18, fontSize: 13 }}>
-        Changes are a <b style={{ color: "var(--gold-l)" }}>runtime override</b>: they apply to the gate
-        immediately but are not written to <span className="mono">config.yaml</span> — a restart restores the file policy.
+        Changes apply to the gate immediately and are <b style={{ color: "var(--jade-l)" }}>saved to the database</b>, so they survive a restart.
         {fieldError && <span role="alert" style={{ color: "var(--vermilion-l)" }}> · rejected field: <span className="mono">{fieldError}</span></span>}
       </p>
 

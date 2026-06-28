@@ -136,3 +136,21 @@ func TestConsoleServesVendoredReact(t *testing.T) {
 		}
 	}
 }
+
+func TestBundleIncludesRegistryEditor(t *testing.T) {
+	srv := http.NewServeMux()
+	srv.Handle("/console/", ConsoleHandler())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/console/app.bundle.js", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bundle status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"saveRegistries", "UpstreamEditor"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("app.bundle.js missing %q — rebuild with `go generate ./...`", want)
+		}
+	}
+}
