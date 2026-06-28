@@ -36,6 +36,11 @@ var cfgFile string
 // scanner listing when cve.base_url is unset.
 const defaultOSVBaseURL = "https://api.osv.dev"
 
+// defaultMaxConcurrentScans bounds simultaneous malware scans when
+// malware.max_concurrent_scans is unset. It roughly matches clamd's default
+// worker pool so bursts don't queue past the per-scan deadline.
+const defaultMaxConcurrentScans = 8
+
 // Upstream 429/503 circuit-breaker cooldown bounds (see httpx.CircuitBreaker).
 // The cooldown honors Retry-After when sent; these bound the fallback
 // exponential cooldown when it is absent.
@@ -211,7 +216,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			}
 			avScanners = append(avScanners, av)
 		}
-		shared.avScanner = scanner.NewMultiScanner(avScanners...)
+		limit := cfg.Malware.MaxConcurrentScans
+		if limit == 0 {
+			limit = defaultMaxConcurrentScans
+		}
+		// Cap concurrent scans so download bursts don't overwhelm the engines'
+		// worker pools and make clamd/ICAP responses time out.
+		shared.avScanner = scanner.NewLimitedScanner(scanner.NewMultiScanner(avScanners...), limit)
 		engineCount = len(avScanners)
 	} else if len(cfg.Malware.Scanners) > 0 {
 		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
