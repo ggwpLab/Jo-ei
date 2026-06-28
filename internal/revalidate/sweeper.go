@@ -57,6 +57,10 @@ func (s *Sweeper) Close() {
 	s.wg.Wait()
 }
 
+// SweepOnceForTest runs a single sweep synchronously. Exposed for integration
+// tests that drive the sweep deterministically instead of waiting on the ticker.
+func (s *Sweeper) SweepOnceForTest(ctx context.Context) { s.sweepOnce(ctx) }
+
 // sweepOnce processes one batch of due entries.
 func (s *Sweeper) sweepOnce(ctx context.Context) {
 	cutoff := time.Now().Add(-s.cfg.RevalidateAfter).Unix()

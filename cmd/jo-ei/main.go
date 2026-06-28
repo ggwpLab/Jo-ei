@@ -23,6 +23,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
+	"github.com/ggwpLab/Jo-ei/internal/revalidate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
@@ -265,6 +266,52 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 	healthMon.Start()
 	defer healthMon.Close() //nolint:errcheck
+
+	// Cache re-validation sweep (optional): periodically re-run the gates over
+	// cached artifacts and evict any that now fail.
+	if cfg.Cache.Revalidation.Enabled {
+		if rstore, ok := artifactCache.(revalidate.RevalidationStore); ok {
+			revalidators := map[string]revalidate.Revalidator{}
+			pr := revalidate.NewPackageRevalidator(shared.cveScanner, shared.policy, shared.avScanner)
+			for _, eco := range []string{"pypi", "npm", "maven", "rubygems"} {
+				revalidators[eco] = pr
+			}
+			if cfg.Registries.Docker.Enabled && trivyScanner != nil {
+				revalidators["docker"] = dockerproxy.NewRevalidator(dockerproxy.HandlerDeps{
+					Upstreams:     cfg.Registries.Docker.Upstreams,
+					Scanner:       trivyScanner,
+					AV:            shared.avScanner,
+					Filter:        policyRuntime,
+					Policy:        policyRuntime,
+					Cache:         artifactCache,
+					MaxLayerBytes: cfg.ImageScan.MaxLayerBytes,
+					Logger:        logger,
+					HTTPClient:    dockerClient,
+				})
+			}
+			interval := time.Duration(cfg.Cache.Revalidation.IntervalMinutes) * time.Minute
+			if interval <= 0 {
+				interval = 60 * time.Minute
+			}
+			revalAfter := time.Duration(cfg.Cache.Revalidation.RevalidateAfterHours) * time.Hour
+			if revalAfter <= 0 {
+				revalAfter = 24 * time.Hour
+			}
+			batch := cfg.Cache.Revalidation.BatchSize
+			if batch <= 0 {
+				batch = 50
+			}
+			sweeper := revalidate.NewSweeper(rstore, revalidators, shared.recorder, revalidate.Config{
+				Interval: interval, RevalidateAfter: revalAfter, BatchSize: batch,
+			}, logger)
+			sweeper.Start()
+			defer sweeper.Close()
+			logger.Info().Dur("interval", interval).Dur("revalidate_after", revalAfter).Int("batch", batch).
+				Msg("cache re-validation sweep enabled")
+		} else {
+			logger.Warn().Msg("cache.revalidation.enabled but cache backend does not support re-validation; skipping")
+		}
+	}
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)

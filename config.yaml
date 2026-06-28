@@ -84,6 +84,16 @@ cache:
   #   endpoint: "https://s3.amazonaws.com"
   #   bucket: "joei-cache"
   #   region: "us-east-1"
+  # Periodic re-validation: a background sweep re-runs the gates (CVE, malware,
+  # and for Docker the full image gate) over cached artifacts and evicts any that
+  # now fail — e.g. a newly published CVE, an updated ClamAV signature, or a
+  # newly denylisted package. A scanner that is temporarily unreachable does not
+  # evict; the entry is retried on the next sweep.
+  revalidation:
+    enabled: true
+    interval_minutes: 60         # how often the sweep ticks
+    revalidate_after_hours: 24   # re-check an entry when this long since last check
+    batch_size: 50               # max entries processed per tick
 
 # Persistent state (required). Telemetry — event history, lifetime counters and
 # per-day metrics — is stored in an embedded SQLite database and is the single
