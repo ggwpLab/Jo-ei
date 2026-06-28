@@ -76,6 +76,15 @@ func (c *Config) Validate() error {
 	if c.ImageScan.MaxLayerBytes < 0 {
 		return fmt.Errorf("image_scan.max_layer_bytes must not be negative")
 	}
+	if c.Cache.Revalidation.IntervalMinutes < 0 {
+		return fmt.Errorf("cache.revalidation.interval_minutes must not be negative")
+	}
+	if c.Cache.Revalidation.RevalidateAfterHours < 0 {
+		return fmt.Errorf("cache.revalidation.revalidate_after_hours must not be negative")
+	}
+	if c.Cache.Revalidation.BatchSize < 0 {
+		return fmt.Errorf("cache.revalidation.batch_size must not be negative")
+	}
 	return nil
 }
 
@@ -141,9 +150,10 @@ type SupplyChainConfig struct {
 }
 
 type CacheConfig struct {
-	Backend string     `mapstructure:"backend"` // local | s3
-	Local   LocalCache `mapstructure:"local"`
-	S3      S3Cache    `mapstructure:"s3"`
+	Backend      string             `mapstructure:"backend"` // local | s3
+	Local        LocalCache         `mapstructure:"local"`
+	S3           S3Cache            `mapstructure:"s3"`
+	Revalidation RevalidationConfig `mapstructure:"revalidation"`
 }
 
 type LocalCache struct {
@@ -155,6 +165,16 @@ type S3Cache struct {
 	Endpoint string `mapstructure:"endpoint"`
 	Bucket   string `mapstructure:"bucket"`
 	Region   string `mapstructure:"region"`
+}
+
+// RevalidationConfig tunes the periodic cache re-validation sweep. Zero values
+// use defaults (60 min interval, 24 h freshness, 50 per batch) applied at wiring
+// time; negative values are rejected. enabled:false disables the sweep.
+type RevalidationConfig struct {
+	Enabled              bool `mapstructure:"enabled"`
+	IntervalMinutes      int  `mapstructure:"interval_minutes"`
+	RevalidateAfterHours int  `mapstructure:"revalidate_after_hours"`
+	BatchSize            int  `mapstructure:"batch_size"`
 }
 
 type PolicyConfig struct {

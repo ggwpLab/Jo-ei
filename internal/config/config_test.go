@@ -429,3 +429,15 @@ database: { path: "/tmp/x.db" }
 		t.Errorf("max_layer_bytes = %d", cfg.ImageScan.MaxLayerBytes)
 	}
 }
+
+func TestValidate_RejectsNegativeRevalidation(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Cache.Revalidation.IntervalMinutes = -1
+	require.Error(t, c.Validate())
+
+	c2 := &config.Config{}
+	c2.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c2.Cache.Revalidation.BatchSize = -5
+	require.Error(t, c2.Validate())
+}
