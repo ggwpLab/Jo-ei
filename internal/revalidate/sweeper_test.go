@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -108,4 +109,32 @@ func TestSweeper_PassesBatchSizeAndCutoff(t *testing.T) {
 	s := NewSweeper(store, map[string]Revalidator{}, &recspy{}, Config{BatchSize: 7, RevalidateAfter: 0}, zerolog.Nop())
 	s.sweepOnce(context.Background())
 	assert.Equal(t, 7, store.lastLimit)
+}
+
+func TestSweeper_StartCloseDoesNotHang(t *testing.T) {
+	store := &fakeStore{}
+	// Interval 0 must not panic — Start normalises it to the default.
+	s := NewSweeper(store, map[string]Revalidator{}, &recspy{}, Config{Interval: 0, BatchSize: 1}, zerolog.Nop())
+	s.Start()
+	done := make(chan struct{})
+	go func() { s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return — goroutine leak or deadlock")
+	}
+}
+
+func TestSweeper_DoubleStartIsSafe(t *testing.T) {
+	store := &fakeStore{}
+	s := NewSweeper(store, map[string]Revalidator{}, &recspy{}, Config{Interval: time.Hour, BatchSize: 1}, zerolog.Nop())
+	s.Start()
+	s.Start() // second call must be a no-op (sync.Once), not leak a goroutine
+	done := make(chan struct{})
+	go func() { s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after double Start")
+	}
 }

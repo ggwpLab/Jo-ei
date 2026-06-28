@@ -19,8 +19,9 @@ type Sweeper struct {
 	cfg          Config
 	logger       zerolog.Logger
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	startOnce sync.Once
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 // NewSweeper builds a sweeper. revalidators is keyed by ecosystem; entries whose
@@ -29,24 +30,30 @@ func NewSweeper(store RevalidationStore, revalidators map[string]Revalidator, re
 	return &Sweeper{store: store, revalidators: revalidators, recorder: recorder, cfg: cfg, logger: logger}
 }
 
-// Start launches the background loop. Safe to call once.
+// Start launches the background loop. Safe to call multiple times — only the
+// first call has any effect (subsequent calls are no-ops via sync.Once).
 func (s *Sweeper) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		t := time.NewTicker(s.cfg.Interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				s.sweepOnce(ctx)
+	if s.cfg.Interval <= 0 {
+		s.cfg.Interval = 60 * time.Minute
+	}
+	s.startOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.cancel = cancel
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			t := time.NewTicker(s.cfg.Interval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					s.sweepOnce(ctx)
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Close stops the loop and waits for it to exit. Safe to call once.
