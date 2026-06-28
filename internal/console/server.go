@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -34,6 +35,15 @@ type RegistryInfo struct {
 	Upstreams []string `json:"upstreams"`
 }
 
+// RegistryStore persists the editable registry set. Implemented in cmd/jo-ei by
+// an adapter over *settings.Store. When nil, registries are read-only.
+type RegistryStore interface {
+	LoadRegistries() ([]RegistryInfo, bool, error)
+	SaveRegistries([]RegistryInfo) error
+}
+
+var knownEcos = []string{"pypi", "npm", "maven", "rubygems", "docker"}
+
 // ScannerHealthProvider supplies live scan-engine health for the overview.
 // *health.Monitor satisfies it.
 type ScannerHealthProvider interface {
@@ -48,8 +58,19 @@ type Config struct {
 	Cache         CacheStatsProvider // optional; nil reports zero stats
 	CacheMaxBytes int64
 	Registries    []RegistryInfo
-	Health        ScannerHealthProvider // optional; nil reports no scanners
-	Logger        zerolog.Logger
+	// RegistryStore persists registry edits (PUT /api/registries). Nil keeps the
+	// screen read-only using the static Registries field.
+	RegistryStore RegistryStore
+	// RunningRegistries is the registry set the live proxy mux actually serves
+	// (captured at boot). GET/PUT report pending_restart when the stored set
+	// differs from this.
+	RunningRegistries []RegistryInfo
+	// ImageScanEnabled reports whether Trivy image-scanning is configured; when
+	// false, enabling the docker registry produces a warning (the docker handler
+	// is gated on image-scan at boot).
+	ImageScanEnabled bool
+	Health           ScannerHealthProvider // optional; nil reports no scanners
+	Logger           zerolog.Logger
 	// SSEHeartbeat is the idle keep-alive interval for /api/events. With no
 	// traffic the stream is otherwise silent for hours and intermediaries
 	// (Docker port-forwards, AV web filters) drop the idle connection.
@@ -82,6 +103,7 @@ func NewHandler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/policy", s.getPolicy)
 	mux.HandleFunc("PUT /api/policy", s.putPolicy)
 	mux.HandleFunc("GET /api/registries", s.registries)
+	mux.HandleFunc("PUT /api/registries", s.putRegistries)
 	mux.HandleFunc("GET /api/metrics/daily", s.dailyMetrics)
 	return mux
 }
@@ -284,6 +306,12 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		var perr *policy.PersistError
+		if errors.As(err, &perr) {
+			s.cfg.Logger.Error().Err(err).Msg("console: policy persist")
+			s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+			return
+		}
 		s.cfg.Logger.Error().Err(err).Msg("console: policy apply")
 		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
 		return
@@ -297,7 +325,164 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) registries(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]any{"registries": s.cfg.Registries})
+	regs, err := s.storedRegistries()
+	if err != nil {
+		s.cfg.Logger.Error().Err(err).Msg("console: load registries")
+		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "registries_unavailable"})
+		return
+	}
+	s.writeRegistries(w, http.StatusOK, regs)
+}
+
+func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.RegistryStore == nil {
+		s.writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "registries_read_only"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var in struct {
+		Registries []RegistryInfo `json:"registries"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "invalid_registries", "field": "body", "message": err.Error(),
+		})
+		return
+	}
+	if field, msg := validateRegistries(in.Registries); field != "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "invalid_registries", "field": field, "message": msg,
+		})
+		return
+	}
+	for i := range in.Registries {
+		if in.Registries[i].Upstreams == nil {
+			in.Registries[i].Upstreams = []string{}
+		}
+	}
+	if err := s.cfg.RegistryStore.SaveRegistries(in.Registries); err != nil {
+		s.cfg.Logger.Error().Err(err).Msg("console: save registries")
+		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+		return
+	}
+	s.writeRegistries(w, http.StatusOK, in.Registries)
+}
+
+// storedRegistries returns the persisted set when a store is configured,
+// otherwise the static Registries (read-only mode).
+func (s *server) storedRegistries() ([]RegistryInfo, error) {
+	if s.cfg.RegistryStore != nil {
+		regs, ok, err := s.cfg.RegistryStore.LoadRegistries()
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return regs, nil
+		}
+	}
+	return s.cfg.Registries, nil
+}
+
+func (s *server) writeRegistries(w http.ResponseWriter, status int, regs []RegistryInfo) {
+	for i := range regs {
+		if regs[i].Upstreams == nil {
+			regs[i].Upstreams = []string{}
+		}
+	}
+	warnings := registryWarnings(regs, s.cfg.ImageScanEnabled)
+	s.writeJSON(w, status, map[string]any{
+		"registries":      regs,
+		"pending_restart": s.cfg.RunningRegistries != nil && !registriesEqual(regs, s.cfg.RunningRegistries),
+		"warnings":        warnings,
+	})
+}
+
+// validateRegistries checks the PUT payload. It returns ("","") when valid,
+// otherwise the offending field and a message.
+func validateRegistries(in []RegistryInfo) (field, msg string) {
+	seen := map[string]bool{}
+	for _, r := range in {
+		if !contains(knownEcos, r.Ecosystem) {
+			return "registries", fmt.Sprintf("unknown ecosystem %q", r.Ecosystem)
+		}
+		if seen[r.Ecosystem] {
+			return "registries", fmt.Sprintf("duplicate ecosystem %q", r.Ecosystem)
+		}
+		seen[r.Ecosystem] = true
+	}
+	if len(seen) != len(knownEcos) {
+		return "registries", fmt.Sprintf("must list all %d ecosystems", len(knownEcos))
+	}
+	for _, r := range in {
+		if !r.Enabled {
+			continue
+		}
+		if len(r.Upstreams) == 0 {
+			return r.Ecosystem, "an enabled registry needs at least one upstream"
+		}
+		for _, u := range r.Upstreams {
+			parsed, err := url.Parse(u)
+			if u == "" || err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				return r.Ecosystem, fmt.Sprintf("upstream %q must be an http(s) URL", u)
+			}
+		}
+	}
+	return "", ""
+}
+
+// registryWarnings flags non-fatal configuration problems (currently: docker
+// enabled without image-scan, which won't serve /v2/ after restart).
+func registryWarnings(regs []RegistryInfo, imageScan bool) []string {
+	warnings := []string{}
+	for _, r := range regs {
+		if r.Ecosystem == "docker" && r.Enabled && !imageScan {
+			warnings = append(warnings,
+				"docker is enabled but image_scan is not configured in config.yaml; /v2/ will not serve after restart")
+		}
+	}
+	return warnings
+}
+
+func contains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// registriesEqual compares two registry sets order-independently by ecosystem.
+// Upstreams are compared positionally (index 0 = primary).
+func registriesEqual(a, b []RegistryInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	idx := func(list []RegistryInfo) map[string]RegistryInfo {
+		m := make(map[string]RegistryInfo, len(list))
+		for _, r := range list {
+			m[r.Ecosystem] = r
+		}
+		return m
+	}
+	ma, mb := idx(a), idx(b)
+	for eco, ra := range ma {
+		rb, ok := mb[eco]
+		if !ok || ra.Enabled != rb.Enabled {
+			return false
+		}
+		if len(ra.Upstreams) != len(rb.Upstreams) {
+			return false
+		}
+		for i := range ra.Upstreams {
+			if ra.Upstreams[i] != rb.Upstreams[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // events streams new telemetry over SSE. The browser EventSource reconnects
