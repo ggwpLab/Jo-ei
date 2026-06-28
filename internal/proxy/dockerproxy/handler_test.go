@@ -79,6 +79,33 @@ func TestHandlerManifestCleanServes(t *testing.T) {
 	}
 }
 
+func TestHandlerManifestCacheHitRecordsCacheVerdict(t *testing.T) {
+	rec := &recspy{}
+	h, repo, ref := newTestHandler(t, stubScanner{}, stubAV{}, rec)
+
+	pull := func() {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("manifest status = %d, body=%s", w.Code, w.Body.String())
+		}
+	}
+	// First pull evaluates the gate; second is served from the cached verdict.
+	pull()
+	pull()
+
+	if len(rec.events) != 2 {
+		t.Fatalf("want 2 events, got %d: %+v", len(rec.events), rec.events)
+	}
+	if rec.events[0].Verdict != proxy.VerdictPass {
+		t.Errorf("first pull verdict = %q, want PASS", rec.events[0].Verdict)
+	}
+	if rec.events[1].Verdict != proxy.VerdictCache || rec.events[1].Gate != proxy.GateCache {
+		t.Errorf("second pull verdict/gate = %q/%q, want CACHE/cache",
+			rec.events[1].Verdict, rec.events[1].Gate)
+	}
+}
+
 func TestHandlerManifestCVEBlocked403(t *testing.T) {
 	rec := &recspy{}
 	h, repo, ref := newTestHandler(t,

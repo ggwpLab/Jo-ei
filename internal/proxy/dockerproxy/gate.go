@@ -42,6 +42,10 @@ type GateVerdict struct {
 	// manifest). The real image content is gated when the client requests the
 	// concrete platform image manifest by digest.
 	Passthrough bool
+	// FromCache is true when this verdict was served from a previously cached
+	// gate decision rather than freshly evaluated. The handler records it as a
+	// CACHE event so repeat pulls are distinguishable from first-time passes.
+	FromCache bool
 }
 
 type gateDeps struct {
@@ -90,7 +94,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// quarantine view) and would keep blocking it even after it matured. Fall
 	// through to a fresh evaluation instead.
 	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
-		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason)}
+		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
 		} else if path, ok := g.store.GetManifestBody(repo, digest); ok {

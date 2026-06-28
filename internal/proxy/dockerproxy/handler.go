@@ -91,10 +91,16 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.Passthrough {
 		log.Debug().Str("digest", digest).Str("reason", v.Reason).Msg("serving manifest passthrough (not gated)")
 	}
+	// A repeat pull served from the cached gate decision is a CACHE event, not a
+	// fresh PASS, so the feed distinguishes re-pulls from first-time evaluations.
+	passVerdict, passGate, passReason := proxy.VerdictPass, proxy.GateImageScan, v.Reason
+	if v.FromCache {
+		passVerdict, passGate, passReason = proxy.VerdictCache, proxy.GateCache, "cache_hit"
+	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		if recordPass {
-			h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
+			h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
 		}
 		return
 	}
@@ -115,7 +121,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		return
 	}
 	if recordPass {
-		h.record(requestID, pp, proxy.VerdictPass, proxy.GateImageScan, v.Reason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
+		h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
 	}
 }
 
