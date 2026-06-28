@@ -166,6 +166,97 @@ func TestPutRegistries_DockerWithoutImageScanWarns(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Defensive-copy test: writeRegistries must not mutate the store's backing slice.
+// ---------------------------------------------------------------------------
+
+func TestGetRegistries_DefensiveCopy(t *testing.T) {
+	// Store returns an entry with nil Upstreams each call; writeRegistries must
+	// make a copy and not write through to the store's internal slice.
+	fs := &fakeRegStore{
+		regs: []console.RegistryInfo{{Ecosystem: "pypi", Enabled: false, Upstreams: nil}},
+		ok:   true,
+	}
+	srv := regHandler(t, fs, nil, false)
+
+	doGet := func(label string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/api/registries")
+		require.NoError(t, err, label)
+		var rawBuf bytes.Buffer
+		_, _ = rawBuf.ReadFrom(resp.Body)
+		_ = resp.Body.Close()
+		body := rawBuf.String()
+		assert.Contains(t, body, `"upstreams":[]`, "%s: upstreams must be [] not null", label)
+		assert.NotContains(t, body, `"upstreams":null`, "%s: must not encode null", label)
+	}
+
+	doGet("first GET")
+	// Store's internal slice must not have been mutated.
+	assert.Nil(t, fs.regs[0].Upstreams, "writeRegistries must not mutate store's backing slice")
+	doGet("second GET")
+	assert.Nil(t, fs.regs[0].Upstreams, "still not mutated after second GET")
+}
+
+// ---------------------------------------------------------------------------
+// Validation-rule tests (spec-mandated, previously missing).
+// ---------------------------------------------------------------------------
+
+func TestPutRegistries_DuplicateEco(t *testing.T) {
+	running := allFive(false)
+	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
+
+	// Two "pypi" entries; all ecosystems are known, so the unknown-eco branch
+	// does not pre-empt the duplicate-eco branch.
+	bad := []console.RegistryInfo{
+		{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
+		{Ecosystem: "pypi", Enabled: false, Upstreams: []string{}}, // duplicate — no unknown eco here
+		{Ecosystem: "maven", Enabled: false, Upstreams: []string{}},
+		{Ecosystem: "rubygems", Enabled: false, Upstreams: []string{}},
+		{Ecosystem: "docker", Enabled: false, Upstreams: []string{}},
+	}
+	resp, body := putRegistries(t, srv.URL, bad)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var e struct{ Error, Field string }
+	require.NoError(t, json.Unmarshal(body, &e))
+	assert.Equal(t, "invalid_registries", e.Error)
+	assert.Equal(t, "registries", e.Field)
+}
+
+func TestPutRegistries_MissingEco(t *testing.T) {
+	running := allFive(false)
+	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
+
+	// Only 4 ecosystems — "docker" is absent.
+	bad := []console.RegistryInfo{
+		{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
+		{Ecosystem: "npm", Enabled: false, Upstreams: []string{}},
+		{Ecosystem: "maven", Enabled: false, Upstreams: []string{}},
+		{Ecosystem: "rubygems", Enabled: false, Upstreams: []string{}},
+	}
+	resp, body := putRegistries(t, srv.URL, bad)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var e struct{ Error, Field string }
+	require.NoError(t, json.Unmarshal(body, &e))
+	assert.Equal(t, "invalid_registries", e.Error)
+	assert.Equal(t, "registries", e.Field)
+}
+
+func TestPutRegistries_InvalidUpstreamURL(t *testing.T) {
+	running := allFive(false)
+	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
+
+	// pypi is enabled but its upstream uses ftp:// — not http(s).
+	bad := allFive(false)
+	bad[0].Upstreams = []string{"ftp://bad.example.com"}
+	resp, body := putRegistries(t, srv.URL, bad)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var e struct{ Error, Field string }
+	require.NoError(t, json.Unmarshal(body, &e))
+	assert.Equal(t, "invalid_registries", e.Error)
+	assert.Equal(t, "pypi", e.Field)
+}
+
+// ---------------------------------------------------------------------------
 // fakePolicyStore — in-memory policy.SettingsStore for persist_failed test.
 // ---------------------------------------------------------------------------
 

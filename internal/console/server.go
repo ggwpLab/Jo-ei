@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -386,15 +387,19 @@ func (s *server) storedRegistries() ([]RegistryInfo, error) {
 }
 
 func (s *server) writeRegistries(w http.ResponseWriter, status int, regs []RegistryInfo) {
-	for i := range regs {
-		if regs[i].Upstreams == nil {
-			regs[i].Upstreams = []string{}
+	// Defensive copy: normalising nil Upstreams must not mutate the caller's
+	// backing array (e.g. a store's internal slice or s.cfg.Registries).
+	out := make([]RegistryInfo, len(regs))
+	copy(out, regs)
+	for i := range out {
+		if out[i].Upstreams == nil {
+			out[i].Upstreams = []string{}
 		}
 	}
-	warnings := registryWarnings(regs, s.cfg.ImageScanEnabled)
+	warnings := registryWarnings(out, s.cfg.ImageScanEnabled)
 	s.writeJSON(w, status, map[string]any{
-		"registries":      regs,
-		"pending_restart": s.cfg.RunningRegistries != nil && !registriesEqual(regs, s.cfg.RunningRegistries),
+		"registries":      out,
+		"pending_restart": s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries),
 		"warnings":        warnings,
 	})
 }
@@ -404,7 +409,7 @@ func (s *server) writeRegistries(w http.ResponseWriter, status int, regs []Regis
 func validateRegistries(in []RegistryInfo) (field, msg string) {
 	seen := map[string]bool{}
 	for _, r := range in {
-		if !contains(knownEcos, r.Ecosystem) {
+		if !slices.Contains(knownEcos, r.Ecosystem) {
 			return "registries", fmt.Sprintf("unknown ecosystem %q", r.Ecosystem)
 		}
 		if seen[r.Ecosystem] {
@@ -445,17 +450,9 @@ func registryWarnings(regs []RegistryInfo, imageScan bool) []string {
 	return warnings
 }
 
-func contains(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
-// registriesEqual compares two registry sets order-independently by ecosystem.
-// Upstreams are compared positionally (index 0 = primary).
+// registriesEqual reports whether two registry sets are identical. Ecosystems
+// are matched order-independently (by name); upstreams within each ecosystem
+// are compared positionally — index 0 is the primary URL.
 func registriesEqual(a, b []RegistryInfo) bool {
 	if len(a) != len(b) {
 		return false
