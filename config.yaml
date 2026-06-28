@@ -52,6 +52,10 @@ image_scan:
   max_layer_bytes: 2147483648   # 2 GB; a larger layer fails closed (blocks the image)
 
 malware:
+  # Cap simultaneous scans so download bursts don't overwhelm the engines'
+  # worker pools and make clamd/ICAP responses time out. 0 = default (8),
+  # roughly clamd's default thread pool. Raise it if you tuned clamd MaxThreads.
+  max_concurrent_scans: 8
   scanners:
     - type: clamav
       # clamav/clamav image listens on TCP 3310 by default; its unix socket

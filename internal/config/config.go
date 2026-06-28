@@ -52,6 +52,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("malware.scanners[%d]: icap scanner requires a service", i)
 		}
 	}
+	if c.Malware.MaxConcurrentScans < 0 {
+		return fmt.Errorf("malware.max_concurrent_scans must not be negative")
+	}
 	if c.Health.ProbeIntervalSeconds < 0 {
 		return fmt.Errorf("health.probe_interval_seconds must not be negative")
 	}
@@ -189,6 +192,11 @@ type ImageScanConfig struct {
 // MalwareConfig configures the malware-scanning engines run after download.
 type MalwareConfig struct {
 	Scanners []ScannerConfig `mapstructure:"scanners"`
+	// MaxConcurrentScans caps how many artifacts are scanned at once across all
+	// engines. It applies backpressure so bursts don't overwhelm clamd/ICAP
+	// worker pools and make scans time out. Zero uses a default (applied at
+	// wiring time); a negative value is rejected.
+	MaxConcurrentScans int `mapstructure:"max_concurrent_scans"`
 }
 
 // ScannerConfig configures a single malware-scanning engine.

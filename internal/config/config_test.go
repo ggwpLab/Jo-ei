@@ -331,6 +331,15 @@ func TestValidate_RejectsNegativeRetention(t *testing.T) {
 	require.Error(t, c2.Validate())
 }
 
+func TestValidate_RejectsNegativeMaxConcurrentScans(t *testing.T) {
+	c := &config.Config{}
+	c.Malware.MaxConcurrentScans = -1
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_concurrent_scans")
+}
+
 func TestValidate_RequiresDatabasePath(t *testing.T) {
 	c := &config.Config{}
 	c.Database.Path = ""
