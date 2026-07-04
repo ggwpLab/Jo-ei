@@ -20,9 +20,9 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
@@ -92,11 +92,11 @@ func getJSON(t *testing.T, url string, into any) int {
 	return resp.StatusCode
 }
 
-func blockEvent(id string, until time.Time) proxy.Event {
-	return proxy.Event{
+func blockEvent(id string, until time.Time) gate.Event {
+	return gate.Event{
 		RequestID: id, Time: time.Now(),
 		Ecosystem: "npm", Package: "fresh", Version: "1.0.0",
-		Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
+		Verdict: gate.VerdictBlock, Gate: gate.GateSupply,
 		Reason: "package_younger_than_min_age", HTTPStatus: 423,
 		BlockedBy:   []string{"supply_chain"},
 		PublishedAt: time.Now().Add(-time.Hour), BlockUntil: until,
@@ -105,7 +105,7 @@ func blockEvent(id string, until time.Time) proxy.Event {
 
 func TestOverview(t *testing.T) {
 	f := newFixture(t)
-	f.store.Record(proxy.Event{Verdict: proxy.VerdictCache, Gate: proxy.GateCache, Time: time.Now()})
+	f.store.Record(gate.Event{Verdict: gate.VerdictCache, Gate: gate.GateCache, Time: time.Now()})
 
 	var body struct {
 		StartedAt time.Time `json:"started_at"`
@@ -142,7 +142,7 @@ func TestOverview(t *testing.T) {
 func TestRequests(t *testing.T) {
 	f := newFixture(t)
 	for _, id := range []string{"r1", "r2", "r3"} {
-		f.store.Record(proxy.Event{RequestID: id, Verdict: proxy.VerdictPass, Gate: proxy.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
+		f.store.Record(gate.Event{RequestID: id, Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
 	}
 
 	var body struct {
@@ -299,7 +299,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 
 	// Outlive both server deadlines, then publish.
 	time.Sleep(600 * time.Millisecond)
-	hub.Record(proxy.Event{RequestID: "req_late", Verdict: proxy.VerdictPass, Gate: proxy.GateCache, Time: time.Now()})
+	hub.Record(gate.Event{RequestID: "req_late", Verdict: gate.VerdictPass, Gate: gate.GateCache, Time: time.Now()})
 
 	line, err = reader.ReadString('\n')
 	require.NoError(t, err, "stream died after the server write deadline")
@@ -396,7 +396,7 @@ func TestEventsSSE(t *testing.T) {
 	_, err = reader.ReadString('\n')
 	require.NoError(t, err)
 
-	f.hub.Record(proxy.Event{RequestID: "req_sse", Verdict: proxy.VerdictPass, Gate: proxy.GateMalware, Time: time.Now()})
+	f.hub.Record(gate.Event{RequestID: "req_sse", Verdict: gate.VerdictPass, Gate: gate.GateMalware, Time: time.Now()})
 
 	line, err := reader.ReadString('\n')
 	require.NoError(t, err)
@@ -406,8 +406,8 @@ func TestEventsSSE(t *testing.T) {
 
 func TestDailyMetrics(t *testing.T) {
 	f := newFixture(t)
-	f.store.Record(proxy.Event{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC), Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
-	f.store.Record(proxy.Event{Time: time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC), Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+	f.store.Record(gate.Event{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC), Verdict: gate.VerdictCache, Gate: gate.GateCache})
+	f.store.Record(gate.Event{Time: time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC), Verdict: gate.VerdictCache, Gate: gate.GateCache})
 
 	var body struct {
 		Daily []telemetry.DailyMetric `json:"daily"`
@@ -451,9 +451,9 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 
 func TestRequestsFilterByVerdictAndPage(t *testing.T) {
 	f := newFixture(t)
-	f.store.Record(proxy.Event{RequestID: "pass1", Verdict: proxy.VerdictPass, Gate: proxy.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
-	f.store.Record(proxy.Event{RequestID: "block1", Verdict: proxy.VerdictBlock, Gate: proxy.GateCVE, Time: time.Now().Add(time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
-	f.store.Record(proxy.Event{RequestID: "block2", Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, Time: time.Now().Add(2 * time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+	f.store.Record(gate.Event{RequestID: "pass1", Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
+	f.store.Record(gate.Event{RequestID: "block1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: time.Now().Add(time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+	f.store.Record(gate.Event{RequestID: "block2", Verdict: gate.VerdictBlock, Gate: gate.GateSupply, Time: time.Now().Add(2 * time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
 
 	var page1 struct {
 		Requests []struct {

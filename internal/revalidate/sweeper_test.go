@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 type fakeStore struct {
@@ -19,8 +19,8 @@ type fakeStore struct {
 	due         []cache.RevalEntry
 	lastBefore  int64
 	lastLimit   int
-	validated   []proxy.PackageRef
-	invalidated []proxy.PackageRef
+	validated   []gate.PackageRef
+	invalidated []gate.PackageRef
 }
 
 func (f *fakeStore) DueForRevalidation(before int64, limit int) ([]cache.RevalEntry, error) {
@@ -31,13 +31,13 @@ func (f *fakeStore) DueForRevalidation(before int64, limit int) ([]cache.RevalEn
 	f.due = nil // consumed
 	return out, nil
 }
-func (f *fakeStore) MarkValidated(ref *proxy.PackageRef, _ int64) error {
+func (f *fakeStore) MarkValidated(ref *gate.PackageRef, _ int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.validated = append(f.validated, *ref)
 	return nil
 }
-func (f *fakeStore) Invalidate(ref *proxy.PackageRef) error {
+func (f *fakeStore) Invalidate(ref *gate.PackageRef) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.invalidated = append(f.invalidated, *ref)
@@ -53,26 +53,26 @@ func (s stubRevalidator) Revalidate(context.Context, cache.RevalEntry) (Outcome,
 	return s.outcome, s.reason
 }
 
-type recspy struct{ events []proxy.Event }
+type recspy struct{ events []gate.Event }
 
-func (r *recspy) Record(e proxy.Event) { r.events = append(r.events, e) }
+func (r *recspy) Record(e gate.Event) { r.events = append(r.events, e) }
 
 func pkgEntry(name string) cache.RevalEntry {
-	return cache.RevalEntry{Ref: proxy.PackageRef{Ecosystem: "pypi", Name: name, Version: "1.0"}}
+	return cache.RevalEntry{Ref: gate.PackageRef{Ecosystem: "pypi", Name: name, Version: "1.0"}}
 }
 
 func TestSweeper_KeepBumpsValidated(t *testing.T) {
 	store := &fakeStore{due: []cache.RevalEntry{pkgEntry("a")}}
 	s := NewSweeper(store, map[string]Revalidator{"pypi": stubRevalidator{outcome: Keep}}, &recspy{}, Config{BatchSize: 10}, zerolog.Nop())
 	s.sweepOnce(context.Background())
-	assert.Equal(t, []proxy.PackageRef{{Ecosystem: "pypi", Name: "a", Version: "1.0"}}, store.validated)
+	assert.Equal(t, []gate.PackageRef{{Ecosystem: "pypi", Name: "a", Version: "1.0"}}, store.validated)
 	assert.Empty(t, store.invalidated)
 }
 
 func TestSweeper_EvictInvalidatesAndRecords(t *testing.T) {
 	store := &fakeStore{due: []cache.RevalEntry{pkgEntry("bad")}}
 	rec := &recspy{}
-	reason := &EvictReason{Gate: proxy.GateMalware, Reason: "malware_found", BlockedBy: "malware", Engine: "clamav", Signature: "EICAR"}
+	reason := &EvictReason{Gate: gate.GateMalware, Reason: "malware_found", BlockedBy: "malware", Engine: "clamav", Signature: "EICAR"}
 	s := NewSweeper(store, map[string]Revalidator{"pypi": stubRevalidator{outcome: Evict, reason: reason}}, rec, Config{BatchSize: 10}, zerolog.Nop())
 	s.sweepOnce(context.Background())
 
@@ -81,8 +81,8 @@ func TestSweeper_EvictInvalidatesAndRecords(t *testing.T) {
 	assert.Empty(t, store.validated)
 	require.Len(t, rec.events, 1)
 	ev := rec.events[0]
-	assert.Equal(t, proxy.VerdictBlock, ev.Verdict)
-	assert.Equal(t, proxy.GateMalware, ev.Gate)
+	assert.Equal(t, gate.VerdictBlock, ev.Verdict)
+	assert.Equal(t, gate.GateMalware, ev.Gate)
 	assert.Equal(t, "revalidation", ev.RequestID)
 	assert.Equal(t, "EICAR", ev.MalwareSignature)
 	assert.Equal(t, []string{"malware"}, ev.BlockedBy)
@@ -97,7 +97,7 @@ func TestSweeper_RetryLeavesEntry(t *testing.T) {
 }
 
 func TestSweeper_UnknownEcosystemSkipped(t *testing.T) {
-	store := &fakeStore{due: []cache.RevalEntry{{Ref: proxy.PackageRef{Ecosystem: "go", Name: "m", Version: "1"}}}}
+	store := &fakeStore{due: []cache.RevalEntry{{Ref: gate.PackageRef{Ecosystem: "go", Name: "m", Version: "1"}}}}
 	s := NewSweeper(store, map[string]Revalidator{"pypi": stubRevalidator{outcome: Keep}}, &recspy{}, Config{BatchSize: 10}, zerolog.Nop())
 	s.sweepOnce(context.Background())
 	assert.Empty(t, store.validated)

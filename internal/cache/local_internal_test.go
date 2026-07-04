@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // legacySchema is the pre-classifier table definition shipped in production.
@@ -56,14 +56,14 @@ func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer idx.Close()
 
-	main := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	main := gate.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
 	got, found := idx.Get(&main)
 	require.True(t, found, "legacy row must survive migration")
 	assert.Equal(t, "/cache/a-1.0.jar", got.ArtifactPath)
 	assert.Equal(t, int64(123), got.SizeBytes)
 
 	// And the classifier column now works: a sources jar is a distinct row.
-	sources := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
+	sources := gate.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
 	require.NoError(t, idx.Insert(&sources, &CacheEntry{
 		ArtifactPath: "/cache/a-1.0-sources.jar",
 		ScanClean:    true,
@@ -93,7 +93,7 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	defer lc.Close()
 
 	for _, n := range []string{"a", "b", "c"} {
-		ref := &proxy.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
 		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
 	}
 	before, err := lc.index.Count()
@@ -124,7 +124,7 @@ func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ref := &proxy.PackageRef{Ecosystem: "pypi", Name: fmt.Sprintf("pkg%d", i), Version: "1.0"}
+			ref := &gate.PackageRef{Ecosystem: "pypi", Name: fmt.Sprintf("pkg%d", i), Version: "1.0"}
 			_ = lc.Put(ref, paths[i], true, "")
 		}(i)
 	}

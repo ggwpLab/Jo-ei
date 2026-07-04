@@ -4,7 +4,7 @@ package cache
 import (
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // CacheEntry stores an artifact path and its scan results.
@@ -37,11 +37,11 @@ type CacheStats struct {
 // Cache is the storage interface for package artifacts and scan results.
 type Cache interface {
 	// Get returns the cached entry for ref, or (nil, false) on miss or expiry.
-	Get(ref *proxy.PackageRef) (*CacheEntry, bool)
+	Get(ref *gate.PackageRef) (*CacheEntry, bool)
 	// Put copies the artifact at tmpPath into the cache store and records the scan result.
-	Put(ref *proxy.PackageRef, tmpPath string, scanClean bool, scanJSON string) error
+	Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error
 	// Invalidate removes the cached entry and its artifact file for ref.
-	Invalidate(ref *proxy.PackageRef) error
+	Invalidate(ref *gate.PackageRef) error
 	// Stats returns aggregate cache statistics.
 	Stats() (CacheStats, error)
 	// Close stops background workers and releases the index.

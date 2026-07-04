@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // Passthrough reasons: manifests served without gating because they carry no
@@ -32,7 +32,7 @@ type GateVerdict struct {
 	Allowed      bool
 	Reason       string // "ok" | "index_passthrough" | "attestation_passthrough" | "cve_found" | "denylisted" | "malware_found" | supply-chain reason
 	BlockedBy    string // "supply_chain" | "cve" | "denylist" | "malware" (empty when allowed)
-	Findings     []proxy.CVEFinding
+	Findings     []gate.CVEFinding
 	ManifestPath string // cached manifest body (allowed only)
 	ContentType  string
 	PublishedAt  time.Time
@@ -51,9 +51,9 @@ type GateVerdict struct {
 type gateDeps struct {
 	adapter       *Adapter
 	scanner       ImageScanner
-	av            proxy.AVScanner
-	filter        proxy.SCFilter
-	policy        proxy.PolicyDecider
+	av            gate.AVScanner
+	filter        gate.SCFilter
+	policy        gate.PolicyDecider
 	store         *verdictStore
 	tags          *tagIndex
 	maxLayerBytes int64
@@ -118,7 +118,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonAttestationPassthrough)
 	}
 
-	pkgRef := &proxy.PackageRef{Ecosystem: "docker", Name: repo, Version: ref}
+	pkgRef := &gate.PackageRef{Ecosystem: "docker", Name: repo, Version: ref}
 
 	// Parse manifest → config.created + config digest + layer digests.
 	created, configDigest, layers, err := g.adapter.ImageConfig(ctx, repo, manifestBody)
@@ -127,7 +127,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	}
 
 	// 1. Supply-chain (config.created as the publish proxy).
-	fr := g.filter.Check(ctx, pkgRef, &proxy.PackageMetadata{PublishedAt: created})
+	fr := g.filter.Check(ctx, pkgRef, &gate.PackageMetadata{PublishedAt: created})
 	if !fr.Allowed {
 		// A supply-chain hold is time-based: it expires when the image matures.
 		// Do NOT cache it — re-evaluate on every pull so the block lifts on its
@@ -148,13 +148,13 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		return "", GateVerdict{}, err
 	}
 	if g.policy != nil {
-		decision := g.policy.Evaluate(pkgRef, &proxy.ScanResult{
+		decision := g.policy.Evaluate(pkgRef, &gate.ScanResult{
 			Clean:    len(scan.Findings) == 0,
 			Findings: scan.Findings,
 		})
 		if !decision.Allowed {
 			by := "cve"
-			if decision.Reason == proxy.ReasonDenylisted {
+			if decision.Reason == gate.ReasonDenylisted {
 				by = "denylist"
 			}
 			v := GateVerdict{Allowed: false, Reason: decision.Reason, BlockedBy: by, Findings: decision.Findings}
@@ -301,7 +301,7 @@ func blockedByForReason(reason string) string {
 	switch reason {
 	case "malware_found":
 		return "malware"
-	case proxy.ReasonDenylisted:
+	case gate.ReasonDenylisted:
 		return "denylist"
 	case "cve_found":
 		return "cve"

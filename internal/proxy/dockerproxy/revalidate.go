@@ -21,12 +21,12 @@ type Revalidator struct {
 func NewRevalidator(d HandlerDeps) *Revalidator {
 	adapter := NewAdapter(d.Upstreams, d.HTTPClient)
 	store := newVerdictStore(d.Cache)
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
 		filter: d.Filter, policy: d.Policy, store: store, tags: newTagIndex(0),
 		maxLayerBytes: d.MaxLayerBytes, logger: d.Logger,
 	})
-	return &Revalidator{gate: gate, cache: d.Cache}
+	return &Revalidator{gate: mgate, cache: d.Cache}
 }
 
 // Revalidate re-runs the gate for an image-verdict entry. Standalone blob entries

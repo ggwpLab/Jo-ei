@@ -13,23 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/revalidate"
 )
 
 // switchableAV reports clean until flipped to infected.
 type switchableAV struct{ infected bool }
 
-func (s *switchableAV) Scan(context.Context, string) (*proxy.AVResult, error) {
+func (s *switchableAV) Scan(context.Context, string) (*gate.AVResult, error) {
 	if s.infected {
-		return &proxy.AVResult{Clean: false, Engine: "clamav", Signature: "EICAR"}, nil
+		return &gate.AVResult{Clean: false, Engine: "clamav", Signature: "EICAR"}, nil
 	}
-	return &proxy.AVResult{Clean: true}, nil
+	return &gate.AVResult{Clean: true}, nil
 }
 
-type recSpy struct{ events []proxy.Event }
+type recSpy struct{ events []gate.Event }
 
-func (r *recSpy) Record(e proxy.Event) { r.events = append(r.events, e) }
+func (r *recSpy) Record(e gate.Event) { r.events = append(r.events, e) }
 
 func TestRevalidationEvictsNewlyInfected(t *testing.T) {
 	dir := t.TempDir()
@@ -40,7 +40,7 @@ func TestRevalidationEvictsNewlyInfected(t *testing.T) {
 	// Cache a clean artifact.
 	art := filepath.Join(dir, "pkg.whl")
 	require.NoError(t, os.WriteFile(art, []byte("payload"), 0o600))
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0"}
 	require.NoError(t, lc.Put(&ref, art, true, ""))
 
 	// Make it due immediately (last_validated far in the past).
@@ -62,6 +62,6 @@ func TestRevalidationEvictsNewlyInfected(t *testing.T) {
 	_, found := lc.Get(&ref)
 	require.False(t, found, "infected artifact must be evicted")
 	require.Len(t, rec.events, 1)
-	require.Equal(t, proxy.VerdictBlock, rec.events[0].Verdict)
-	require.Equal(t, proxy.GateMalware, rec.events[0].Gate)
+	require.Equal(t, gate.VerdictBlock, rec.events[0].Verdict)
+	require.Equal(t, gate.GateMalware, rec.events[0].Gate)
 }

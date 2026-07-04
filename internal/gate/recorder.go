@@ -1,4 +1,4 @@
-package proxy
+package gate
 
 import "time"
 
@@ -54,8 +54,7 @@ const ReasonDenylisted = "denylisted"
 
 // Recorder receives telemetry events. Implementations must be safe for
 // concurrent use and must never block or fail the proxy data path: Record
-// returns nothing. Defined here (like ArtifactCache) to avoid the import
-// cycle proxy → telemetry → proxy; telemetry.Hub satisfies it structurally.
+// returns nothing. telemetry.Hub satisfies it structurally.
 type Recorder interface {
 	Record(Event)
 }

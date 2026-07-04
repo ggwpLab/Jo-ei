@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
@@ -23,7 +23,7 @@ type blockingScanner struct {
 	peak     int32
 }
 
-func (b *blockingScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, error) {
+func (b *blockingScanner) Scan(_ context.Context, _ string) (*gate.AVResult, error) {
 	cur := atomic.AddInt32(&b.inFlight, 1)
 	for {
 		p := atomic.LoadInt32(&b.peak)
@@ -34,7 +34,7 @@ func (b *blockingScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, er
 	b.entered <- struct{}{}
 	<-b.release
 	atomic.AddInt32(&b.inFlight, -1)
-	return &proxy.AVResult{Clean: true, Engine: "stub"}, nil
+	return &gate.AVResult{Clean: true, Engine: "stub"}, nil
 }
 
 func TestLimitedScanner_CapsConcurrency(t *testing.T) {
@@ -76,7 +76,7 @@ func TestLimitedScanner_CapsConcurrency(t *testing.T) {
 }
 
 func TestLimitedScanner_PassesResultThrough(t *testing.T) {
-	infected := stubScanner{result: &proxy.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}}
+	infected := stubScanner{result: &gate.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}}
 	lim := scanner.NewLimitedScanner(infected, 1)
 	res, err := lim.Scan(context.Background(), "/tmp/x")
 	require.NoError(t, err)
@@ -114,5 +114,5 @@ func TestLimitedScanner_ContextCancelledWhileWaiting(t *testing.T) {
 func TestLimitedScanner_NonPositiveLimitDisablesLimiting(t *testing.T) {
 	inner := clean("clamav")
 	lim := scanner.NewLimitedScanner(inner, 0)
-	assert.Equal(t, proxy.AVScanner(inner), lim, "limit <= 0 should return the scanner unwrapped")
+	assert.Equal(t, gate.AVScanner(inner), lim, "limit <= 0 should return the scanner unwrapped")
 }

@@ -11,17 +11,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
-func evt(id, verdict, gate, reason string) proxy.Event {
-	return proxy.Event{
+func evt(id, verdict, gateName, reason string) gate.Event {
+	return gate.Event{
 		RequestID: id, Time: time.Now(),
 		Ecosystem: "pypi", Package: "requests", Version: "2.31.0",
-		Verdict: verdict, Gate: gate, Reason: reason,
+		Verdict: verdict, Gate: gateName, Reason: reason,
 	}
 }
 
@@ -40,7 +40,7 @@ func newStore(t *testing.T) *telemetry.Store {
 func TestStoreRecentOrderAndLimit(t *testing.T) {
 	s := newStore(t)
 	for i := 1; i <= 6; i++ {
-		s.Record(evt(fmt.Sprintf("r%d", i), proxy.VerdictPass, proxy.GateSupply, "ok"))
+		s.Record(evt(fmt.Sprintf("r%d", i), gate.VerdictPass, gate.GateSupply, "ok"))
 	}
 
 	got := s.Recent(10)
@@ -56,13 +56,13 @@ func TestStoreRecentOrderAndLimit(t *testing.T) {
 
 func TestStoreCounters(t *testing.T) {
 	s := newStore(t)
-	s.Record(evt("r1", proxy.VerdictCache, proxy.GateCache, "cache_hit"))
-	s.Record(evt("r2", proxy.VerdictPass, proxy.GateMalware, "ok"))
-	s.Record(evt("r3", proxy.VerdictBlock, proxy.GateCVE, "cve_found"))
-	s.Record(evt("r4", proxy.VerdictBlock, proxy.GateCVE, "denylisted"))
-	s.Record(evt("r5", proxy.VerdictBlock, proxy.GateSupply, "package_younger_than_min_age"))
-	s.Record(evt("r6", proxy.VerdictBlock, proxy.GateMalware, "malware_found"))
-	s.Record(evt("r7", proxy.VerdictError, proxy.GateSupply, "upstream_metadata_unavailable"))
+	s.Record(evt("r1", gate.VerdictCache, gate.GateCache, "cache_hit"))
+	s.Record(evt("r2", gate.VerdictPass, gate.GateMalware, "ok"))
+	s.Record(evt("r3", gate.VerdictBlock, gate.GateCVE, "cve_found"))
+	s.Record(evt("r4", gate.VerdictBlock, gate.GateCVE, "denylisted"))
+	s.Record(evt("r5", gate.VerdictBlock, gate.GateSupply, "package_younger_than_min_age"))
+	s.Record(evt("r6", gate.VerdictBlock, gate.GateMalware, "malware_found"))
+	s.Record(evt("r7", gate.VerdictError, gate.GateSupply, "upstream_metadata_unavailable"))
 
 	snap := s.Snapshot()
 	assert.Equal(t, uint64(7), snap.Requests)
@@ -75,31 +75,31 @@ func TestStoreCounters(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.MalwareBlocked)
 	assert.False(t, snap.StartedAt.IsZero())
 
-	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, snap.Gates[proxy.GateCache])
-	assert.Equal(t, telemetry.GateCounts{Pass: 4, Block: 1}, snap.Gates[proxy.GateSupply])
-	assert.Equal(t, telemetry.GateCounts{Pass: 2, Block: 2}, snap.Gates[proxy.GateCVE])
-	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 1}, snap.Gates[proxy.GateMalware])
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, snap.Gates[gate.GateCache])
+	assert.Equal(t, telemetry.GateCounts{Pass: 4, Block: 1}, snap.Gates[gate.GateSupply])
+	assert.Equal(t, telemetry.GateCounts{Pass: 2, Block: 2}, snap.Gates[gate.GateCVE])
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 1}, snap.Gates[gate.GateMalware])
 }
 
 func TestStoreCacheScanFailedBlockDoesNotCountPipelinePasses(t *testing.T) {
 	s := newStore(t)
-	s.Record(evt("r1", proxy.VerdictBlock, proxy.GateCache, "scan_failed"))
+	s.Record(evt("r1", gate.VerdictBlock, gate.GateCache, "scan_failed"))
 
 	snap := s.Snapshot()
-	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[proxy.GateCache])
-	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[proxy.GateSupply])
-	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[proxy.GateCVE])
+	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateCache])
+	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateSupply])
+	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateCVE])
 }
 
 func TestStoreQuarantine(t *testing.T) {
 	now := time.Now()
 	s := newStore(t)
 
-	active := evt("r1", proxy.VerdictBlock, proxy.GateSupply, "package_younger_than_min_age")
+	active := evt("r1", gate.VerdictBlock, gate.GateSupply, "package_younger_than_min_age")
 	active.BlockUntil = now.Add(6 * time.Hour)
 	s.Record(active)
 
-	expired := evt("r2", proxy.VerdictBlock, proxy.GateSupply, "package_younger_than_min_age")
+	expired := evt("r2", gate.VerdictBlock, gate.GateSupply, "package_younger_than_min_age")
 	expired.Package = "old-pkg"
 	expired.BlockUntil = now.Add(-time.Hour)
 	s.Record(expired)
@@ -108,7 +108,7 @@ func TestStoreQuarantine(t *testing.T) {
 	dup.RequestID = "r3"
 	s.Record(dup)
 
-	s.Record(evt("r4", proxy.VerdictPass, proxy.GateSupply, "ok"))
+	s.Record(evt("r4", gate.VerdictPass, gate.GateSupply, "ok"))
 
 	q := s.Quarantine(now)
 	require.Len(t, q, 1)
@@ -130,9 +130,9 @@ func TestStoreConcurrent(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < 200; i++ {
-				ev := evt(fmt.Sprintf("g%d-%d", g, i), proxy.VerdictPass, proxy.GateSupply, "ok")
+				ev := evt(fmt.Sprintf("g%d-%d", g, i), gate.VerdictPass, gate.GateSupply, "ok")
 				if i%10 == 0 {
-					ev.Verdict = proxy.VerdictBlock
+					ev.Verdict = gate.VerdictBlock
 					ev.BlockUntil = time.Now().Add(time.Hour)
 					ev.Version = fmt.Sprintf("1.0.%d", i)
 				}
@@ -151,9 +151,9 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	s := newStore(t)
 	day1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
-	s.Record(proxy.Event{Time: day1, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
-	s.Record(proxy.Event{Time: day1, Verdict: proxy.VerdictPass, Gate: proxy.GateMalware})
-	s.Record(proxy.Event{Time: day2, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
+	s.Record(gate.Event{Time: day1, Verdict: gate.VerdictCache, Gate: gate.GateCache})
+	s.Record(gate.Event{Time: day1, Verdict: gate.VerdictPass, Gate: gate.GateMalware})
+	s.Record(gate.Event{Time: day2, Verdict: gate.VerdictCache, Gate: gate.GateCache})
 
 	daily, err := s.DailyMetrics(0)
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	assert.Equal(t, "2026-01-01", daily[1].Day)
 	assert.Equal(t, uint64(2), daily[1].Requests)
 	assert.Equal(t, uint64(1), daily[1].CacheHits)
-	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, daily[1].Gates[proxy.GateCache])
+	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, daily[1].Gates[gate.GateCache])
 
 	limited, err := s.DailyMetrics(1)
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 
 func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 	s := newStore(t)
-	s.Record(proxy.Event{Verdict: proxy.VerdictError}) // zero Time
+	s.Record(gate.Event{Verdict: gate.VerdictError}) // zero Time
 	daily, err := s.DailyMetrics(0)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
@@ -191,8 +191,8 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	require.NoError(t, err)
 	s1, err := telemetry.Open(db1, 30, 365, zerolog.Nop())
 	require.NoError(t, err)
-	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
-	s1.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply, Reason: "x",
+	s1.Record(gate.Event{Time: now, Verdict: gate.VerdictCache, Gate: gate.GateCache})
+	s1.Record(gate.Event{Time: now, Verdict: gate.VerdictBlock, Gate: gate.GateSupply, Reason: "x",
 		Ecosystem: "npm", Package: "p", Version: "1", BlockUntil: now.Add(time.Hour)})
 	require.NoError(t, s1.Close())
 	require.NoError(t, db1.Close())
@@ -209,7 +209,7 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.CacheHits)
 	assert.Equal(t, uint64(1), snap.Blocked)
 	assert.Equal(t, uint64(1), snap.SupplyBlocked)
-	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[proxy.GateSupply])
+	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateSupply])
 
 	require.Len(t, s2.Recent(0), 2)
 
@@ -231,16 +231,16 @@ func TestStore_CloseIdempotent(t *testing.T) {
 
 func TestStorePageFiltersAndPages(t *testing.T) {
 	s := newStore(t)
-	s.Record(evt("pass1", proxy.VerdictPass, proxy.GateSupply, "ok"))
-	s.Record(evt("block1", proxy.VerdictBlock, proxy.GateCVE, "cve_found"))
-	s.Record(evt("block2", proxy.VerdictBlock, proxy.GateSupply, "young"))
+	s.Record(evt("pass1", gate.VerdictPass, gate.GateSupply, "ok"))
+	s.Record(evt("block1", gate.VerdictBlock, gate.GateCVE, "cve_found"))
+	s.Record(evt("block2", gate.VerdictBlock, gate.GateSupply, "young"))
 
-	evs, next := s.Page(proxy.VerdictBlock, telemetry.Cursor{}, 1)
+	evs, next := s.Page(gate.VerdictBlock, telemetry.Cursor{}, 1)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "block2", evs[0].RequestID, "newest first")
 	require.False(t, next.Zero(), "more pages remain")
 
-	evs2, next2 := s.Page(proxy.VerdictBlock, next, 1)
+	evs2, next2 := s.Page(gate.VerdictBlock, next, 1)
 	require.Len(t, evs2, 1)
 	assert.Equal(t, "block1", evs2[0].RequestID)
 	assert.True(t, next2.Zero(), "last page")

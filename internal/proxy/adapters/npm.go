@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // npmLicense decodes npm's polymorphic "license" field. Modern packages use a
@@ -50,7 +50,7 @@ type npmMetadata struct {
 	} `json:"versions"`
 }
 
-// NPMAdapter implements proxy.RegistryAdapter for the npm registry.
+// NPMAdapter implements gate.RegistryAdapter for the npm registry.
 type NPMAdapter struct {
 	upstreams  []string
 	httpClient *http.Client
@@ -72,7 +72,7 @@ func (a *NPMAdapter) Name() string { return "npm" }
 
 // NormalizeRequest intercepts tarball downloads (path contains "/-/" and ends ".tgz").
 // Metadata documents (e.g. "/lodash") are proxied transparently.
-func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool) {
+func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
 	path := r.URL.Path
 	if !strings.HasSuffix(path, ".tgz") {
 		return nil, false
@@ -87,7 +87,7 @@ func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool)
 	if !ok {
 		return nil, false
 	}
-	return &proxy.PackageRef{Ecosystem: "npm", Name: name, Version: version}, true
+	return &gate.PackageRef{Ecosystem: "npm", Name: name, Version: version}, true
 }
 
 // parseNPMVersion extracts the version from a tarball filename "<unscoped>-<version>.tgz".
@@ -110,7 +110,7 @@ func parseNPMVersion(name, filename string) (string, bool) {
 
 // FetchMetadata walks the configured upstreams in order, returning the first
 // success. If all upstreams fail, the last error is returned.
-func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for npm")
 	for _, base := range a.upstreams {
 		meta, err := a.fetchMetadataFrom(ctx, base, ref)
@@ -122,7 +122,7 @@ func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (
 	return nil, lastErr
 }
 
-func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	apiURL := base + "/" + ref.Name
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -154,7 +154,7 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *pr
 	if !ok {
 		return nil, fmt.Errorf("version %s missing from npm versions map for %s", ref.Version, ref.Name)
 	}
-	return &proxy.PackageMetadata{
+	return &gate.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		License:     string(versionInfo.License),
 		Checksum:    versionInfo.Dist.Shasum,

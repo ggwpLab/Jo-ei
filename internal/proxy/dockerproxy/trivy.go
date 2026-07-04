@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // commandRunner runs an external command and returns its stdout. Injectable for
@@ -86,7 +86,7 @@ type trivyReport struct {
 	} `json:"Results"`
 }
 
-// ScanImage runs trivy against imageRef and maps findings to proxy.CVEFinding.
+// ScanImage runs trivy against imageRef and maps findings to gate.CVEFinding.
 func (s *TrivyScanner) ScanImage(ctx context.Context, imageRef string) (*ImageScanResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -108,12 +108,12 @@ func (s *TrivyScanner) ScanImage(ctx context.Context, imageRef string) (*ImageSc
 	if err := json.Unmarshal(out, &report); err != nil {
 		return nil, fmt.Errorf("decoding trivy output: %w", err)
 	}
-	var findings []proxy.CVEFinding
+	var findings []gate.CVEFinding
 	for _, r := range report.Results {
 		for _, v := range r.Vulnerabilities {
-			findings = append(findings, proxy.CVEFinding{
+			findings = append(findings, gate.CVEFinding{
 				ID:       v.VulnerabilityID,
-				Severity: proxy.ParseSeverity(v.Severity),
+				Severity: gate.ParseSeverity(v.Severity),
 				Summary:  v.Title,
 			})
 		}

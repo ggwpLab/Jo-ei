@@ -4,21 +4,21 @@ import (
 	"context"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // packageRevalidator re-checks a cached package artifact (pypi/npm/maven/rubygems)
 // against CVE+policy and malware. The supply-chain time rule is not re-run (a
 // cached entry has matured); denylist changes are caught by the policy step.
 type packageRevalidator struct {
-	cve    proxy.CVEScanner
-	policy proxy.PolicyDecider
-	av     proxy.AVScanner
+	cve    gate.CVEScanner
+	policy gate.PolicyDecider
+	av     gate.AVScanner
 }
 
 // NewPackageRevalidator builds a Revalidator for package ecosystems. Any of the
 // scanners may be nil (that check is skipped).
-func NewPackageRevalidator(cve proxy.CVEScanner, policy proxy.PolicyDecider, av proxy.AVScanner) Revalidator {
+func NewPackageRevalidator(cve gate.CVEScanner, policy gate.PolicyDecider, av gate.AVScanner) Revalidator {
 	return &packageRevalidator{cve: cve, policy: policy, av: av}
 }
 
@@ -33,11 +33,11 @@ func (p *packageRevalidator) Revalidate(ctx context.Context, e cache.RevalEntry)
 		}
 		if decision := p.policy.Evaluate(&ref, res); !decision.Allowed {
 			by := "cve"
-			if decision.Reason == proxy.ReasonDenylisted {
+			if decision.Reason == gate.ReasonDenylisted {
 				by = "denylist"
 			}
 			return Evict, &EvictReason{
-				Gate: proxy.GateCVE, Reason: decision.Reason,
+				Gate: gate.GateCVE, Reason: decision.Reason,
 				BlockedBy: by, Findings: decision.Findings,
 			}
 		}
@@ -51,7 +51,7 @@ func (p *packageRevalidator) Revalidate(ctx context.Context, e cache.RevalEntry)
 		}
 		if !res.Clean {
 			return Evict, &EvictReason{
-				Gate: proxy.GateMalware, Reason: "malware_found",
+				Gate: gate.GateMalware, Reason: "malware_found",
 				BlockedBy: "malware", Engine: res.Engine, Signature: res.Signature,
 			}
 		}

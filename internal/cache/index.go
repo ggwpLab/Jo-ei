@@ -7,7 +7,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // classifier distinguishes secondary artifacts (Maven sources/javadoc jars)
@@ -150,7 +150,7 @@ func (idx *Index) Close() error {
 }
 
 // Insert adds or updates a cache entry (UPSERT semantics).
-func (idx *Index) Insert(ref *proxy.PackageRef, entry *CacheEntry) error {
+func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 	_, err := idx.db.Exec(`
 		INSERT INTO artifacts
 			(ecosystem, name, version, classifier, file_path, scan_clean, scan_json,
@@ -174,7 +174,7 @@ func (idx *Index) Insert(ref *proxy.PackageRef, entry *CacheEntry) error {
 }
 
 // Get retrieves a cache entry. Returns (nil, false) if not found or expired.
-func (idx *Index) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
+func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	row := idx.db.QueryRow(`
 		SELECT file_path, scan_clean, scan_json, stored_at, expires_at, hit_count, size_bytes
 		FROM artifacts
@@ -211,7 +211,7 @@ func (idx *Index) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
 }
 
 // IncrementHit bumps the hit counter and updates last_hit timestamp.
-func (idx *Index) IncrementHit(ref *proxy.PackageRef) error {
+func (idx *Index) IncrementHit(ref *gate.PackageRef) error {
 	_, err := idx.db.Exec(`
 		UPDATE artifacts SET hit_count=hit_count+1, last_hit=?
 		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
@@ -221,7 +221,7 @@ func (idx *Index) IncrementHit(ref *proxy.PackageRef) error {
 }
 
 // Delete removes an entry from the index.
-func (idx *Index) Delete(ref *proxy.PackageRef) error {
+func (idx *Index) Delete(ref *gate.PackageRef) error {
 	_, err := idx.db.Exec(
 		`DELETE FROM artifacts WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
@@ -230,7 +230,7 @@ func (idx *Index) Delete(ref *proxy.PackageRef) error {
 }
 
 // LRUCandidates returns up to n entries sorted by last_hit ascending (LRU first).
-func (idx *Index) LRUCandidates(n int) ([]proxy.PackageRef, error) {
+func (idx *Index) LRUCandidates(n int) ([]gate.PackageRef, error) {
 	rows, err := idx.db.Query(
 		`SELECT ecosystem, name, version, classifier FROM artifacts ORDER BY last_hit ASC LIMIT ?`, n,
 	)
@@ -239,9 +239,9 @@ func (idx *Index) LRUCandidates(n int) ([]proxy.PackageRef, error) {
 	}
 	defer rows.Close()
 
-	var refs []proxy.PackageRef
+	var refs []gate.PackageRef
 	for rows.Next() {
-		var ref proxy.PackageRef
+		var ref gate.PackageRef
 		if err := rows.Scan(&ref.Ecosystem, &ref.Name, &ref.Version, &ref.Classifier); err != nil {
 			return nil, err
 		}
@@ -300,7 +300,7 @@ func (idx *Index) DueForRevalidation(before int64, limit int) ([]RevalEntry, err
 }
 
 // MarkValidated sets last_validated for ref to ts (a unix timestamp).
-func (idx *Index) MarkValidated(ref *proxy.PackageRef, ts int64) error {
+func (idx *Index) MarkValidated(ref *gate.PackageRef, ts int64) error {
 	_, err := idx.db.Exec(
 		`UPDATE artifacts SET last_validated = ? WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ts, ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,

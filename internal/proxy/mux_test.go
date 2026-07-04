@@ -10,13 +10,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
 // buildHandlerFor wires a minimal handler for a single registry adapter.
-func buildHandlerFor(adapter proxy.RegistryAdapter) *proxy.Handler {
+func buildHandlerFor(adapter gate.RegistryAdapter) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter: adapter,
 		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
@@ -21,9 +21,9 @@ func TestLoadAllowlist_ParsesEntriesIgnoringCommentsAndBlanks(t *testing.T) {
 	al, err := supplychain.LoadAllowlist(path)
 	require.NoError(t, err)
 
-	assert.True(t, al.Contains(&proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "9.9.9"}))
-	assert.True(t, al.Contains(&proxy.PackageRef{Ecosystem: "npm", Name: "left-pad", Version: "1.3.0"}))
-	assert.False(t, al.Contains(&proxy.PackageRef{Ecosystem: "npm", Name: "left-pad", Version: "2.0.0"}))
+	assert.True(t, al.Contains(&gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "9.9.9"}))
+	assert.True(t, al.Contains(&gate.PackageRef{Ecosystem: "npm", Name: "left-pad", Version: "1.3.0"}))
+	assert.False(t, al.Contains(&gate.PackageRef{Ecosystem: "npm", Name: "left-pad", Version: "2.0.0"}))
 }
 
 func TestLoadAllowlist_MissingFileIsError(t *testing.T) {

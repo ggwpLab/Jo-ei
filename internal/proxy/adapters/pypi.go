@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // pypiJSONResponse represents the PyPI JSON API response for a specific version.
@@ -30,7 +30,7 @@ type pypiJSONResponse struct {
 	} `json:"urls"`
 }
 
-// PyPIAdapter implements proxy.RegistryAdapter for PyPI.
+// PyPIAdapter implements gate.RegistryAdapter for PyPI.
 type PyPIAdapter struct {
 	upstreams  []string
 	httpClient *http.Client
@@ -55,7 +55,7 @@ var packagePathRe = regexp.MustCompile(`^/packages/`)
 
 // NormalizeRequest extracts a PackageRef from download requests.
 // Returns false for /simple/ and /pypi/ (metadata) requests.
-func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool) {
+func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
 	if !packagePathRe.MatchString(r.URL.Path) {
 		return nil, false
 	}
@@ -76,7 +76,7 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool
 		return nil, false
 	}
 
-	return &proxy.PackageRef{
+	return &gate.PackageRef{
 		Ecosystem: "pypi",
 		Name:      name,
 		Version:   version,
@@ -85,7 +85,7 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool
 
 // FetchMetadata walks the configured upstreams in order, returning the first
 // success. If all upstreams fail, the last error is returned.
-func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for pypi")
 	for _, base := range a.upstreams {
 		meta, err := a.fetchMetadataFrom(ctx, base, ref)
@@ -97,7 +97,7 @@ func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) 
 	return nil, lastErr
 }
 
-func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	apiURL := fmt.Sprintf("%s/pypi/%s/%s/json", base, ref.Name, ref.Version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -132,7 +132,7 @@ func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *p
 			return nil, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", info.URLs[0].UploadTimeISO, err)
 		}
 	}
-	return &proxy.PackageMetadata{
+	return &gate.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		Maintainer:  info.Info.Author,
 		License:     info.Info.License,

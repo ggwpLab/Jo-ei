@@ -3,7 +3,7 @@ package telemetry
 import (
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // Cursor is a keyset position in the event log — the (ts, id) of a row under
@@ -23,11 +23,11 @@ func (c Cursor) Zero() bool { return c.ID == 0 }
 type Repo interface {
 	// RecordEvent durably persists one event and applies its tallies to the
 	// cumulative counters and the event's UTC-day metrics row, atomically.
-	RecordEvent(ev proxy.Event) error
+	RecordEvent(ev gate.Event) error
 	// Snapshot returns the cumulative counters, stamped with started as StartedAt.
 	Snapshot(started time.Time) (Snapshot, error)
 	// Recent returns up to limit events, newest first. limit <= 0 means all.
-	Recent(limit int) ([]proxy.Event, error)
+	Recent(limit int) ([]gate.Event, error)
 	// Page returns up to limit events with the given verdict (empty = any),
 	// newest-first, strictly older than cursor. A zero cursor starts at the
 	// newest matching event. The second return is the cursor of the last row
@@ -35,10 +35,10 @@ type Repo interface {
 	// When limit <= 0 all matching rows are returned in one call; the second
 	// return is then the cursor of the last row (non-zero if any rows exist),
 	// but no further rows exist beyond it.
-	Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor, error)
+	Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor, error)
 	// Quarantine returns active supply-chain holds (newest BLOCK@supply per
 	// eco/pkg@ver whose block_until is after now), newest first.
-	Quarantine(now time.Time) ([]proxy.Event, error)
+	Quarantine(now time.Time) ([]gate.Event, error)
 	// DailyMetrics returns per-UTC-day rows, newest first (days <= 0 → all).
 	DailyMetrics(days int) ([]DailyMetric, error)
 	// Prune deletes events and daily rows older than the configured retention.

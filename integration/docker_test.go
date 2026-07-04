@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
 )
 
@@ -67,18 +67,18 @@ func (dockerOKScanner) Health() health.Sample { return health.Sample{} }
 
 type dockerCleanAV struct{}
 
-func (dockerCleanAV) Scan(context.Context, string) (*proxy.AVResult, error) {
-	return &proxy.AVResult{Clean: true}, nil
+func (dockerCleanAV) Scan(context.Context, string) (*gate.AVResult, error) {
+	return &gate.AVResult{Clean: true}, nil
 }
 
 type dockerAllowAll struct{}
 
-func (dockerAllowAll) Check(context.Context, *proxy.PackageRef, *proxy.PackageMetadata) proxy.FilterResult {
-	return proxy.FilterResult{Allowed: true, Reason: "ok"}
+func (dockerAllowAll) Check(context.Context, *gate.PackageRef, *gate.PackageMetadata) gate.FilterResult {
+	return gate.FilterResult{Allowed: true, Reason: "ok"}
 }
 
-func (dockerAllowAll) Evaluate(*proxy.PackageRef, *proxy.ScanResult) proxy.PolicyDecision {
-	return proxy.PolicyDecision{Allowed: true, Reason: "ok"}
+func (dockerAllowAll) Evaluate(*gate.PackageRef, *gate.ScanResult) gate.PolicyDecision {
+	return gate.PolicyDecision{Allowed: true, Reason: "ok"}
 }
 
 func TestDockerPullFlow(t *testing.T) {

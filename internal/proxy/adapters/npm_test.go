@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 )
 
@@ -65,7 +65,7 @@ func TestNPMAdapter_FetchMetadata(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 
@@ -81,7 +81,7 @@ func TestNPMAdapter_FetchMetadata_VersionMissing(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "9.9.9"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "9.9.9"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
 }
@@ -104,7 +104,7 @@ func TestNPMAdapter_FetchMetadata_VersionInTimeButNotVersions(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	assert.Error(t, err)
 }
@@ -126,7 +126,7 @@ func TestNPMAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	defer up.Close()
 
 	a := adapters.NewNPMAdapter([]string{down.URL, up.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "lodash", Version: "1.0.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.WithinDuration(t, published, meta.PublishedAt, time.Second)
@@ -162,7 +162,7 @@ func TestNPMAdapter_FetchMetadata_LegacyObjectLicenseInOtherVersion(t *testing.T
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "minimatch", Version: "5.1.9"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "minimatch", Version: "5.1.9"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "ISC", meta.License)
@@ -187,7 +187,7 @@ func TestNPMAdapter_FetchMetadata_ObjectLicenseOnRequestedVersion(t *testing.T) 
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "MIT", meta.License)
@@ -211,7 +211,7 @@ func TestNPMAdapter_FetchMetadata_UnknownLicenseShapeDegrades(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "", meta.License)

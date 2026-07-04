@@ -3,7 +3,7 @@ package console
 import (
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // Wire shapes mirror the field names the SPA already renders (web/console),
@@ -45,7 +45,7 @@ type eventJSON struct {
 	Supply    *supplyJSON  `json:"supply,omitempty"`
 }
 
-func toEventJSON(ev proxy.Event) eventJSON {
+func toEventJSON(ev gate.Event) eventJSON {
 	out := eventJSON{
 		RequestID: ev.RequestID, TS: ev.Time,
 		Eco: ev.Ecosystem, Pkg: ev.Package, Ver: ev.Version,

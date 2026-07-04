@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func newTestIndex(t *testing.T) (*cache.Index, func()) {
@@ -24,7 +24,7 @@ func TestIndex_InsertAndGet(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
 	entry := cache.CacheEntry{
 		ArtifactPath: "/cache/pypi/requests-2.31.0.whl",
 		ScanClean:    true,
@@ -48,8 +48,8 @@ func TestIndex_ClassifierIsDistinctEntry(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	main := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
-	sources := proxy.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
+	main := gate.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0"}
+	sources := gate.PackageRef{Ecosystem: "maven", Name: "g:a", Version: "1.0", Classifier: "sources"}
 
 	mainEntry := cache.CacheEntry{
 		ArtifactPath: "/cache/a-1.0.jar",
@@ -91,7 +91,7 @@ func TestIndex_GetMissing(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "nonexistent", Version: "9.9.9"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "nonexistent", Version: "9.9.9"}
 	_, found := idx.Get(&ref)
 	assert.False(t, found)
 }
@@ -100,7 +100,7 @@ func TestIndex_IncrementHitCount(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "flask", Version: "3.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "flask", Version: "3.0.0"}
 	entry := cache.CacheEntry{
 		ArtifactPath: "/cache/flask.whl",
 		ScanClean:    true,
@@ -122,7 +122,7 @@ func TestIndex_Delete(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "boto3", Version: "1.34.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "boto3", Version: "1.34.0"}
 	entry := cache.CacheEntry{
 		ArtifactPath: "/cache/boto3.whl",
 		ScanClean:    true,
@@ -144,9 +144,9 @@ func TestIndex_DueForRevalidationAndMarkValidated(t *testing.T) {
 
 	now := time.Now().UTC()
 	// stored_at drives initial last_validated (set by Insert).
-	old := proxy.PackageRef{Ecosystem: "pypi", Name: "old", Version: "1.0"}
-	fresh := proxy.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
-	expired := proxy.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
+	old := gate.PackageRef{Ecosystem: "pypi", Name: "old", Version: "1.0"}
+	fresh := gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	expired := gate.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
 
 	require.NoError(t, idx.Insert(&old, &cache.CacheEntry{
 		ArtifactPath: "/c/old", ScanClean: true, ScanJSON: `{"clean":true}`,
@@ -182,7 +182,7 @@ func TestIndex_LRUCandidates(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
 
-	refs := []proxy.PackageRef{
+	refs := []gate.PackageRef{
 		{Ecosystem: "pypi", Name: "a", Version: "1.0.0"},
 		{Ecosystem: "pypi", Name: "b", Version: "1.0.0"},
 		{Ecosystem: "pypi", Name: "c", Version: "1.0.0"},

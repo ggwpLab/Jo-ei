@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // ecosystemMap maps our internal ecosystem names to OSV API ecosystem names.
@@ -50,12 +50,12 @@ type osvVulnerability struct {
 
 // cveEntry wraps a cached ScanResult with its expiry time.
 type cveEntry struct {
-	result    *proxy.ScanResult
+	result    *gate.ScanResult
 	expiresAt time.Time
 }
 
 // OSVScanner queries api.osv.dev for known vulnerabilities.
-// It implements proxy.CVEScanner and caches results in memory.
+// It implements gate.CVEScanner and caches results in memory.
 type OSVScanner struct {
 	baseURL string
 	client  *http.Client
@@ -126,8 +126,8 @@ func (s *OSVScanner) Close() error {
 	return nil
 }
 
-// Scan implements proxy.CVEScanner.
-func (s *OSVScanner) Scan(ctx context.Context, ref *proxy.PackageRef) (*proxy.ScanResult, error) {
+// Scan implements gate.CVEScanner.
+func (s *OSVScanner) Scan(ctx context.Context, ref *gate.PackageRef) (*gate.ScanResult, error) {
 	key := ref.Key()
 
 	// Check in-memory cache first.
@@ -154,7 +154,7 @@ func (s *OSVScanner) Scan(ctx context.Context, ref *proxy.PackageRef) (*proxy.Sc
 }
 
 // queryOSV performs the actual HTTP request to api.osv.dev.
-func (s *OSVScanner) queryOSV(ctx context.Context, ref *proxy.PackageRef) (*proxy.ScanResult, error) {
+func (s *OSVScanner) queryOSV(ctx context.Context, ref *gate.PackageRef) (*gate.ScanResult, error) {
 	eco := strings.ToLower(ref.Ecosystem)
 	ecosystem, ok := ecosystemMap[eco]
 	if !ok {
@@ -201,15 +201,15 @@ func (s *OSVScanner) queryOSV(ctx context.Context, ref *proxy.PackageRef) (*prox
 	return s.toScanResult(osvResp)
 }
 
-// toScanResult converts an OSV API response to a proxy.ScanResult.
-func (s *OSVScanner) toScanResult(resp osvQueryResponse) (*proxy.ScanResult, error) {
-	var findings []proxy.CVEFinding
+// toScanResult converts an OSV API response to a gate.ScanResult.
+func (s *OSVScanner) toScanResult(resp osvQueryResponse) (*gate.ScanResult, error) {
+	var findings []gate.CVEFinding
 	for _, v := range resp.Vulns {
 		id := canonicalID(v.ID, v.Aliases)
-		findings = append(findings, proxy.CVEFinding{
+		findings = append(findings, gate.CVEFinding{
 			ID:       id,
 			Aliases:  aliasesWithout(v.ID, v.Aliases, id),
-			Severity: proxy.ParseSeverity(v.DatabaseSpecific.Severity),
+			Severity: gate.ParseSeverity(v.DatabaseSpecific.Severity),
 			Summary:  v.Summary,
 		})
 	}
@@ -219,7 +219,7 @@ func (s *OSVScanner) toScanResult(resp osvQueryResponse) (*proxy.ScanResult, err
 		return nil, fmt.Errorf("marshalling scan findings: %w", err)
 	}
 
-	return &proxy.ScanResult{
+	return &gate.ScanResult{
 		Clean:    len(findings) == 0,
 		Findings: findings,
 		ScanJSON: string(scanJSON),

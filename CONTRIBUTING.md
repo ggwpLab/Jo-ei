@@ -101,11 +101,12 @@ unused, ineffassign, errcheck, misspell, goimports).
 ## Architecture Orientation
 
 Start with [docs/release-preparation-plan.md](docs/release-preparation-plan.md)
-for a package map. The short version: `internal/proxy` holds the domain types
-and ports (`RegistryAdapter`, `CVEScanner`, `AVScanner`, …); scanners,
-registry adapters, the policy engine, and the cache all implement or consume
-those interfaces; `cmd/jo-ei` wires everything together. Design documents for
-every shipped feature live under `docs/superpowers/`.
+for a package map. The short version: `internal/gate` holds the domain types
+and ports (`RegistryAdapter`, `CVEScanner`, `AVScanner`, …) and imports only
+the standard library; scanners, registry adapters, the policy engine, the
+cache, and the HTTP layer (`internal/proxy`) all implement or consume those
+interfaces; `cmd/jo-ei` wires everything together. Design documents for every
+shipped feature live under `docs/superpowers/`.
 
 ## Code of Conduct
 

@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // icapChunkSize is the size of each chunk streamed in the RESPMOD body.
 const icapChunkSize = 8192
 
 // ICAPScanner scans files via the ICAP RESPMOD method. It works with any ICAP
-// AV server (Kaspersky, Dr.Web, ClamAV behind c-icap). Implements proxy.AVScanner.
+// AV server (Kaspersky, Dr.Web, ClamAV behind c-icap). Implements gate.AVScanner.
 type ICAPScanner struct {
 	network string
 	addr    string
@@ -43,8 +43,8 @@ func NewICAPScanner(address, service string, timeout time.Duration) (*ICAPScanne
 	return &ICAPScanner{network: network, addr: addr, service: service, timeout: timeout}, nil
 }
 
-// Scan implements proxy.AVScanner using ICAP RESPMOD.
-func (s *ICAPScanner) Scan(ctx context.Context, filePath string) (*proxy.AVResult, error) {
+// Scan implements gate.AVScanner using ICAP RESPMOD.
+func (s *ICAPScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening artifact for scan: %w", err)
@@ -117,7 +117,7 @@ func (s *ICAPScanner) writeRespmod(conn net.Conn, f *os.File) error {
 // parseICAPResponse interprets an ICAP reply. With "Allow: 204" sent, a clean
 // object yields 204 No Content; a 200 OK means the server modified/flagged the
 // object (treated as infected, signature read from vendor headers).
-func parseICAPResponse(r *bufio.Reader) (*proxy.AVResult, error) {
+func parseICAPResponse(r *bufio.Reader) (*gate.AVResult, error) {
 	tp := textproto.NewReader(r)
 	statusLine, err := tp.ReadLine()
 	if err != nil {
@@ -134,13 +134,13 @@ func parseICAPResponse(r *bufio.Reader) (*proxy.AVResult, error) {
 
 	switch code {
 	case 204:
-		return &proxy.AVResult{Clean: true, Engine: "icap"}, nil
+		return &gate.AVResult{Clean: true, Engine: "icap"}, nil
 	case 200:
 		sig := infectionSignature(hdr)
 		if sig == "" {
 			sig = "icap.infected"
 		}
-		return &proxy.AVResult{Clean: false, Signature: sig, Engine: "icap"}, nil
+		return &gate.AVResult{Clean: false, Signature: sig, Engine: "icap"}, nil
 	default:
 		return nil, fmt.Errorf("icap server returned status %d", code)
 	}

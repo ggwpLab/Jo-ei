@@ -8,14 +8,14 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // Sweeper periodically re-validates due cache entries and evicts failures.
 type Sweeper struct {
 	store        RevalidationStore
 	revalidators map[string]Revalidator
-	recorder     proxy.Recorder
+	recorder     gate.Recorder
 	cfg          Config
 	logger       zerolog.Logger
 
@@ -26,7 +26,7 @@ type Sweeper struct {
 
 // NewSweeper builds a sweeper. revalidators is keyed by ecosystem; entries whose
 // ecosystem has no revalidator are skipped.
-func NewSweeper(store RevalidationStore, revalidators map[string]Revalidator, recorder proxy.Recorder, cfg Config, logger zerolog.Logger) *Sweeper {
+func NewSweeper(store RevalidationStore, revalidators map[string]Revalidator, recorder gate.Recorder, cfg Config, logger zerolog.Logger) *Sweeper {
 	return &Sweeper{store: store, revalidators: revalidators, recorder: recorder, cfg: cfg, logger: logger}
 }
 
@@ -110,13 +110,13 @@ func (s *Sweeper) recordEviction(e cache.RevalEntry, r *EvictReason) {
 	if s.recorder == nil || r == nil {
 		return
 	}
-	s.recorder.Record(proxy.Event{
+	s.recorder.Record(gate.Event{
 		RequestID:        "revalidation",
 		Time:             time.Now(),
 		Ecosystem:        e.Ref.Ecosystem,
 		Package:          e.Ref.Name,
 		Version:          e.Ref.Version,
-		Verdict:          proxy.VerdictBlock,
+		Verdict:          gate.VerdictBlock,
 		Gate:             r.Gate,
 		Reason:           r.Reason,
 		BlockedBy:        []string{r.BlockedBy},

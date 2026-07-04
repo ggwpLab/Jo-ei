@@ -2,7 +2,7 @@ package dockerproxy
 
 import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // verdictStore is a thin digest-keyed facade over the shared cache.Cache. Blob
@@ -15,12 +15,12 @@ type verdictStore struct {
 
 func newVerdictStore(c cache.Cache) *verdictStore { return &verdictStore{c: c} }
 
-func blobRef(digest string) *proxy.PackageRef {
-	return &proxy.PackageRef{Ecosystem: "docker", Name: "blobs", Version: digest}
+func blobRef(digest string) *gate.PackageRef {
+	return &gate.PackageRef{Ecosystem: "docker", Name: "blobs", Version: digest}
 }
 
-func imageRefKey(repo, digest string) *proxy.PackageRef {
-	return &proxy.PackageRef{Ecosystem: "docker", Name: repo, Version: digest}
+func imageRefKey(repo, digest string) *gate.PackageRef {
+	return &gate.PackageRef{Ecosystem: "docker", Name: repo, Version: digest}
 }
 
 // GetBlob returns the cached path and clean flag for a layer/config blob.

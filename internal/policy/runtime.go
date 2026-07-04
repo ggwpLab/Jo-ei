@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
@@ -41,7 +41,7 @@ type runtimeSnapshot struct {
 
 // Runtime holds the current policy Engine and supply-chain Filter behind an
 // atomic pointer so the console can swap both without restart. It implements
-// proxy.PolicyDecider and proxy.SCFilter. Edits are runtime-only: the YAML
+// gate.PolicyDecider and gate.SCFilter. Edits are runtime-only: the YAML
 // config wins again after a restart.
 type Runtime struct {
 	cur       atomic.Pointer[runtimeSnapshot]
@@ -216,12 +216,12 @@ func (r *Runtime) Current() RuntimeParams {
 	return p
 }
 
-// Evaluate implements proxy.PolicyDecider against the current snapshot.
-func (r *Runtime) Evaluate(ref *proxy.PackageRef, result *proxy.ScanResult) proxy.PolicyDecision {
+// Evaluate implements gate.PolicyDecider against the current snapshot.
+func (r *Runtime) Evaluate(ref *gate.PackageRef, result *gate.ScanResult) gate.PolicyDecision {
 	return r.cur.Load().engine.Evaluate(ref, result)
 }
 
-// Check implements proxy.SCFilter against the current snapshot.
-func (r *Runtime) Check(ctx context.Context, ref *proxy.PackageRef, meta *proxy.PackageMetadata) proxy.FilterResult {
+// Check implements gate.SCFilter against the current snapshot.
+func (r *Runtime) Check(ctx context.Context, ref *gate.PackageRef, meta *gate.PackageMetadata) gate.FilterResult {
 	return r.cur.Load().filter.Check(ctx, ref, meta)
 }

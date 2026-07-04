@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // LocalCacheConfig configures the local filesystem cache.
@@ -48,14 +48,14 @@ func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
 
 // artifactPath returns the deterministic on-disk path for a cached artifact.
 // Uses SHA256(key) to avoid filesystem name collisions and long paths.
-func (lc *LocalCache) artifactPath(ref *proxy.PackageRef) string {
+func (lc *LocalCache) artifactPath(ref *gate.PackageRef) string {
 	hash := sha256.Sum256([]byte(ref.Key()))
 	hex := fmt.Sprintf("%x", hash)
 	return filepath.Join(lc.cfg.RootPath, "artifacts", hex[:2], hex)
 }
 
 // Get returns a cached entry, or (nil, false) on miss or expiry.
-func (lc *LocalCache) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
+func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	entry, found := lc.index.Get(ref)
 	if !found {
 		return nil, false
@@ -72,7 +72,7 @@ func (lc *LocalCache) Get(ref *proxy.PackageRef) (*CacheEntry, bool) {
 }
 
 // Put copies the artifact from tmpPath into the cache store and records scan results.
-func (lc *LocalCache) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
+func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
 	destPath := lc.artifactPath(ref)
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("creating artifact dir: %w", err)
@@ -125,7 +125,7 @@ func (lc *LocalCache) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool,
 }
 
 // Invalidate removes an entry from both the index and disk.
-func (lc *LocalCache) Invalidate(ref *proxy.PackageRef) error {
+func (lc *LocalCache) Invalidate(ref *gate.PackageRef) error {
 	entry, found := lc.index.Get(ref)
 	if found {
 		_ = os.Remove(entry.ArtifactPath)
@@ -188,7 +188,7 @@ func (lc *LocalCache) DueForRevalidation(before int64, limit int) ([]RevalEntry,
 }
 
 // MarkValidated records that ref passed re-validation at ts (unix seconds).
-func (lc *LocalCache) MarkValidated(ref *proxy.PackageRef, ts int64) error {
+func (lc *LocalCache) MarkValidated(ref *gate.PackageRef, ts int64) error {
 	return lc.index.MarkValidated(ref, ts)
 }
 

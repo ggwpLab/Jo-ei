@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 )
 
@@ -85,7 +85,7 @@ func TestPyPIAdapter_FetchMetadata(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewPyPIAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 
@@ -114,7 +114,7 @@ func TestPyPIAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	defer up.Close()
 
 	a := adapters.NewPyPIAdapter([]string{down.URL, up.URL})
-	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.WithinDuration(t, published, meta.PublishedAt, time.Second)
