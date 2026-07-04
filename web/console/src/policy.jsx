@@ -36,8 +36,11 @@ function buildYaml(p) {
     ["k", "min_age_hours", "d", p.min_age_hours],
     ["k", "cve_block_on", "v", p.cve_block_on],
     ["c", ""],
-    ["k", "allowlist:"],
-    ...p.allowlist.map((x) => ["li", x]),
+    ["k", "allowlist_supply:"],
+    ...p.allowlist_supply.map((x) => ["li", x]),
+    ["c", ""],
+    ["k", "allowlist_cve:"],
+    ...p.allowlist_cve.map((x) => ["li", x]),
     ["c", ""],
     ["k", "denylist:"],
     ...p.denylist.map((x) => ["li", x]),
@@ -171,16 +174,29 @@ function Policy({ notify }) {
             </div>
           </div>
 
-          {/* allowlist */}
+          {/* supply-chain allowlist */}
           <div className="card" style={{ padding: 22 }}>
             <div className="field">
-              <label style={{ color: "var(--jade-l)" }}>Allowlist · always trust</label>
-              <div className="hint">Format <span className="mono">ecosystem/name</span> or <span className="mono">ecosystem/name@version</span>. Bypasses all gates.</div>
+              <label style={{ color: "var(--jade-l)" }}>Allowlist · 衛 supply-chain</label>
+              <div className="hint">Format <span className="mono">ecosystem/name</span> or <span className="mono">ecosystem/name@version</span>. Bypasses only the minimum-age hold — CVE and malware scans still run.</div>
             </div>
             <div style={{ marginTop: 12 }}>
-              <ListEditor kind="allow" items={p.allowlist}
-                onAdd={(v) => update({ allowlist: [...p.allowlist, v] })}
-                onRemove={(v) => update({ allowlist: p.allowlist.filter((x) => x !== v) })} />
+              <ListEditor kind="allow" items={p.allowlist_supply}
+                onAdd={(v) => update({ allowlist_supply: [...p.allowlist_supply, v] })}
+                onRemove={(v) => update({ allowlist_supply: p.allowlist_supply.filter((x) => x !== v) })} />
+            </div>
+          </div>
+
+          {/* CVE allowlist */}
+          <div className="card" style={{ padding: 22 }}>
+            <div className="field">
+              <label style={{ color: "var(--jade-l)" }}>Allowlist · 浄 CVE</label>
+              <div className="hint">Format <span className="mono">ecosystem/name</span> or <span className="mono">ecosystem/name@version</span>. Bypasses only the CVE block — age hold and malware scan still run.</div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <ListEditor kind="allow" items={p.allowlist_cve}
+                onAdd={(v) => update({ allowlist_cve: [...p.allowlist_cve, v] })}
+                onRemove={(v) => update({ allowlist_cve: p.allowlist_cve.filter((x) => x !== v) })} />
             </div>
           </div>
 

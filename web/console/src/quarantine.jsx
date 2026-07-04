@@ -37,7 +37,6 @@ function QuarantineCard({ q, onAllowlist }) {
         <button className="btn jade sm grow" onClick={() => onAllowlist(q)}>
           <Icons.check /> Allowlist (trust)
         </button>
-        <button className="btn ghost sm">Wait</button>
       </div>
     </div>
   );
@@ -53,7 +52,7 @@ function Quarantine({ onAllowlist }) {
   }, []);
   const handle = (q) => {
     setItems((xs) => xs.filter((x) => x !== q));
-    onAllowlist(q);
+    onAllowlist(q, "supply");
   };
 
   return (
@@ -70,7 +69,7 @@ function Quarantine({ onAllowlist }) {
 
       <p className="muted" style={{ maxWidth: 680, marginTop: -4, marginBottom: 22, fontSize: 13.5, lineHeight: 1.6 }}>
         Packages published less than <b style={{ color: "var(--washi)" }}>{JOEI.policy.min_age_hours} hours</b> ago are held at the 衛 gate
-        until they mature — the window where most malicious releases are caught and yanked. Trust one early by adding it to the allowlist.
+        until they mature — the window where most malicious releases are caught and yanked. Trust one early by adding it to the supply-chain allowlist — CVE and malware scans still apply.
       </p>
 
       {items.length === 0 ? (
