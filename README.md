@@ -434,7 +434,8 @@ The downloaded artifact matched a malware signature.
 
 **What to do:** Do not install this artifact. If you believe it is a false
 positive, verify the package out-of-band and report the signature to your
-security team before adding an allowlist entry.
+security team. Malware verdicts cannot be allowlisted — the scan runs on
+every download regardless of policy.
 
 ## Building from Source
 
