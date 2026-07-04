@@ -15,11 +15,11 @@ import (
 // Allowlists are per-gate: supply entries bypass only the min-age hold, cve
 // entries bypass only the CVE block. Nothing bypasses the malware gate.
 type RuntimeParams struct {
-	Mode            string   `json:"mode"`              // supply-chain mode: enforce | dry_run | off
-	MinAgeHours     int      `json:"min_age_hours"`     // supply-chain minimum age, >= 0
-	CVEBlockOn      string   `json:"cve_block_on"`      // CRITICAL | HIGH | MEDIUM | LOW
+	Mode            string   `json:"mode"`             // supply-chain mode: enforce | dry_run | off
+	MinAgeHours     int      `json:"min_age_hours"`    // supply-chain minimum age, >= 0
+	CVEBlockOn      string   `json:"cve_block_on"`     // CRITICAL | HIGH | MEDIUM | LOW
 	AllowlistSupply []string `json:"allowlist_supply"` // "eco/name[@version]", bypasses the age hold
-	AllowlistCVE    []string `json:"allowlist_cve"`     // "eco/name[@version]", bypasses the CVE block
+	AllowlistCVE    []string `json:"allowlist_cve"`    // "eco/name[@version]", bypasses the CVE block
 	Denylist        []string `json:"denylist"`
 }
 
