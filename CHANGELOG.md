@@ -1,0 +1,49 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-04
+
+First public release.
+
+### Added
+
+- **Transparent proxy** for PyPI, npm (with a Yarn alias), Maven, and RubyGems
+  with multi-upstream failover per ecosystem, and a **Docker Hub pull-through
+  registry mirror** (Registry v2 API).
+- **Supply-chain min-age gate**: packages younger than a configurable
+  threshold (24h default) are held with HTTP 423; `enforce` / `dry_run` /
+  `off` modes.
+- **CVE gate** backed by osv.dev with a configurable severity threshold and
+  TTL-cached scan results; fails closed on scanner errors.
+- **Malware gate**: pluggable engines — ClamAV (clamd protocol) and any
+  ICAP-speaking scanner (Kaspersky, Dr.Web, …); all engines scan every
+  artifact, any detection blocks, verdicts are never allowlisted.
+- **Trivy image gate** for Docker pulls (vulnerability + secret scanning,
+  client/server mode); the verdict is decided on the manifest request so a
+  rejected image is never served.
+- **Artifact cache** with LRU eviction and periodic **revalidation** sweeps
+  that re-run the gates over cached entries and evict newly failing ones.
+- **Policy profiles** (dev/staging/production) with per-gate allowlists and a
+  denylist; runtime edits via the console persist to the database and apply
+  without restart.
+- **Admin console** (embedded React SPA, works offline, no npm toolchain) with
+  overview dashboard, live request feed (SSE), quarantine queue, policy
+  editor, and registries/cache view — behind HTTP Basic auth (bcrypt,
+  fail-closed when unconfigured).
+- **Persistent telemetry**: request events, per-day metrics, and lifetime
+  counters in embedded SQLite (pure Go) with configurable retention.
+- **Scanner health probes** surfaced in the console.
+- **Operational hardening**: per-upstream-host concurrency caps, token-bucket
+  rate limiting, 429/503 circuit breakers, malware-scan concurrency limits,
+  structured JSON logging.
+- Distroless non-root Docker image and a compose stack with ClamAV and Trivy
+  sidecars.
+
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ggwpLab/Jo-ei/releases/tag/v0.1.0

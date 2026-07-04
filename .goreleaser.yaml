@@ -1,0 +1,106 @@
+# goreleaser v2 configuration. Local dry run:
+#   go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=docker
+version: 2
+
+project_name: jo-ei
+
+builds:
+  - id: jo-ei
+    main: ./cmd/jo-ei
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: jo-ei
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - config.yaml
+      - examples/**
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.*\))?!?:'
+      order: 0
+    - title: Bug fixes
+      regexp: '^fix(\(.*\))?!?:'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^docs'
+      - '^test'
+      - '^chore'
+      - '^ci'
+
+dockers:
+  - id: amd64
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-amd64
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.title={{ .ProjectName }}
+      - --label=org.opencontainers.image.description=Transparent supply chain security proxy for package registries and Docker images
+      - --label=org.opencontainers.image.source=https://github.com/ggwpLab/Jo-ei
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.revision={{ .FullCommit }}
+      - --label=org.opencontainers.image.licenses=MIT
+    extra_files:
+      - config.yaml
+  - id: arm64
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    image_templates:
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-arm64
+    build_flag_templates:
+      - --platform=linux/arm64
+      - --label=org.opencontainers.image.title={{ .ProjectName }}
+      - --label=org.opencontainers.image.description=Transparent supply chain security proxy for package registries and Docker images
+      - --label=org.opencontainers.image.source=https://github.com/ggwpLab/Jo-ei
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.revision={{ .FullCommit }}
+      - --label=org.opencontainers.image.licenses=MIT
+    extra_files:
+      - config.yaml
+
+docker_manifests:
+  - name_template: ghcr.io/ggwplab/jo-ei:{{ .Version }}
+    image_templates:
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-amd64
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-arm64
+  - name_template: ghcr.io/ggwplab/jo-ei:latest
+    image_templates:
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-amd64
+      - ghcr.io/ggwplab/jo-ei:{{ .Version }}-arm64
+
+release:
+  footer: |
+    **Docker image:** `docker pull ghcr.io/ggwplab/jo-ei:{{ .Version }}`

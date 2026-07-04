@@ -450,6 +450,17 @@ positive, verify the package out-of-band and report the signature to your
 security team. Malware verdicts cannot be allowlisted — the scan runs on
 every download regardless of policy.
 
+## Installing a Release
+
+Prebuilt binaries for Linux, macOS, and Windows (amd64/arm64) with checksums
+are published on the [releases page](https://github.com/ggwpLab/Jo-ei/releases).
+The container image ships on GHCR:
+
+```bash
+docker pull ghcr.io/ggwplab/jo-ei:latest
+jo-ei --version   # prints version, commit, and build date
+```
+
 ## Building from Source
 
 **Prerequisites:** Go 1.25+ (see [go.dev/dl](https://go.dev/dl/) for downloads)
