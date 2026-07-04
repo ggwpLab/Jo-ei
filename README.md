@@ -40,7 +40,7 @@ from cache without contacting the upstream registry.
 **1. Start the proxy**
 
 ```bash
-git clone <repo-url> && cd Jo-ei
+git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
 ```
 
 **Configure secrets** — copy the example env file and fill it in:
