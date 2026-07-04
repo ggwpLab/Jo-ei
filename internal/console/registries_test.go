@@ -283,6 +283,36 @@ func (f *fakePolicyStore) SavePolicy(p policy.RuntimeParams) error {
 // persist_failed branch in putPolicy
 // ---------------------------------------------------------------------------
 
+func TestGetPolicy_ReportsDatabasePersistence(t *testing.T) {
+	rt, err := policy.NewRuntimeWithStore(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{},
+		config.PolicyProfile{},
+		nil,
+		&fakePolicyStore{},
+	)
+	require.NoError(t, err)
+
+	h := console.NewHandler(console.Config{
+		Store:       newTelemetryStore(t),
+		Broadcaster: telemetry.NewBroadcaster(),
+		Policy:      rt,
+		Logger:      zerolog.Nop(),
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/policy")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out struct {
+		Persistence string `json:"persistence"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.Equal(t, "database", out.Persistence, "store-backed runtime must report database persistence")
+}
+
 func TestPutPolicy_PersistFailed(t *testing.T) {
 	fps := &fakePolicyStore{}
 	rt, err := policy.NewRuntimeWithStore(

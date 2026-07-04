@@ -201,6 +201,12 @@ func validateListEntry(e string) string {
 	return ""
 }
 
+// Persistent reports whether policy edits are saved to a settings store and
+// therefore survive a restart (false = runtime-only, YAML wins after restart).
+func (r *Runtime) Persistent() bool {
+	return r.store != nil
+}
+
 // Current returns a copy of the active params.
 func (r *Runtime) Current() RuntimeParams {
 	p := r.cur.Load().params
