@@ -100,8 +100,8 @@ unused, ineffassign, errcheck, misspell, goimports).
 
 ## Architecture Orientation
 
-Start with [docs/release-preparation-plan.md](docs/release-preparation-plan.md)
-for a package map. The short version: `internal/gate` holds the domain types
+Start with [docs/architecture.md](docs/architecture.md) for the package map
+and dependency rules. The short version: `internal/gate` holds the domain types
 and ports (`RegistryAdapter`, `CVEScanner`, `AVScanner`, …) and imports only
 the standard library; scanners, registry adapters, the policy engine, the
 cache, and the HTTP layer (`internal/proxy`) all implement or consume those

@@ -1,0 +1,211 @@
+# Configuration Reference
+
+Jōei is configured by a single YAML file passed via `--config` (default in the
+Docker image: `/etc/jo-ei/config.yaml`). The repository's
+[`config.yaml`](../config.yaml) is a fully commented working example.
+
+## Loading & environment overrides
+
+Any config key can be overridden by an environment variable: take the key
+path, replace dots with underscores, uppercase it, and prefix `JOEI_`.
+
+| Config key | Environment variable |
+|---|---|
+| `logging.level` | `JOEI_LOGGING_LEVEL` |
+| `cve.block_on` | `JOEI_CVE_BLOCK_ON` |
+| `supply_chain.min_age_hours` | `JOEI_SUPPLY_CHAIN_MIN_AGE_HOURS` |
+
+Only keys that appear in the YAML file can be overridden (the override
+replaces the file's value; it cannot introduce a key the file omits).
+
+Two special cases are read directly from the environment, not through this
+mechanism:
+
+- **`JOEI_CONSOLE_AUTH_USERS`** — console credentials as
+  `username:bcrypt-hash`, multiple users separated by `;`. Merged with (and
+  taking precedence over) `console.auth.users` from the file. Preferred over
+  the file so password hashes stay out of version control.
+
+Validation runs at startup; an invalid config prints the offending key and the
+process exits non-zero.
+
+## `server`
+
+| Key | Default | Description |
+|---|---|---|
+| `listen` | — | Listen address, e.g. `":8080"`. |
+| `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
+| `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
+
+Upstream responses of 429/503 additionally trip a per-host circuit breaker
+with exponential cooldown (1s–20s, honoring `Retry-After`).
+
+## `registries`
+
+Five fixed ecosystems: `pypi`, `npm`, `maven`, `rubygems`, `docker`. Each:
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Serve this ecosystem. An enabled registry **must** list at least one upstream. |
+| `upstreams` | — | Upstream base URLs, tried in order (first success wins; failover on error). |
+
+Client-facing paths: `/pypi/simple/…`, `/npm/…` (alias `/yarn/`),
+`/maven/…`, `/rubygems/…`, and the Docker Registry v2 API (`/v2/…`) for use
+as a `registry-mirrors` entry. Yarn uses the npm protocol; the `/yarn/` alias
+exists so both package managers can be pointed at the proxy independently.
+
+Docker caveat: only Docker Hub (`registry-1.docker.io`) is supported as an
+upstream.
+
+## `supply_chain`
+
+The min-age gate: packages published less than `min_age_hours` ago are blocked
+with HTTP 423 (Locked) until they age past the threshold.
+
+| Key | Default | Description |
+|---|---|---|
+| `min_age_hours` | — | Minimum package age. `24` blocks day-old poisoning attacks. |
+| `mode` | — | `enforce` (block), `dry_run` (log what would block, allow), `off`. |
+| `allowlist_path` | — | Optional file of packages exempt from this gate (format below). |
+
+Allowlist file format — one entry per line, `#` comments and blank lines
+ignored:
+
+```
+# ecosystem/name         → all versions
+pypi/requests
+# ecosystem/name@version → one version
+npm/lodash@4.17.21
+```
+
+The file seeds the **supply-chain** allowlist at first boot; after that the
+per-gate allowlists (supply-chain and CVE) are edited in the console and
+persist in the database.
+
+## `cve`
+
+Known-vulnerability gate backed by [osv.dev](https://osv.dev). Runs before the
+artifact download; fails closed on scanner errors (HTTP 503).
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Query osv.dev for each package version. |
+| `base_url` | `https://api.osv.dev` | OSV-compatible API endpoint. |
+| `block_on` | — | Minimum severity that blocks: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. The active policy profile's `cve_min_severity` overrides this when set. |
+| `cache_ttl_minutes` | `1440` | How long scan results are reused before re-querying. |
+
+## `image_scan`
+
+Trivy gate for Docker images (client/server mode — Jōei talks to a `trivy
+server`). Separate engine from the osv.dev scanner. The verdict is returned on
+the **manifest** request, so a rejected image never reaches the client.
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Scan images pulled through the Docker proxy. Requires `trivy_server`. |
+| `trivy_server` | — | Trivy server URL, e.g. `http://trivy:4954`. |
+| `timeout_seconds` | `120` | Per-scan timeout. |
+| `scanners` | `vuln,secret` | Passed to Trivy `--scanners`. |
+| `max_layer_bytes` | `0` (no limit) | Layers larger than this fail closed (block the image). The example config uses 2 GiB. |
+
+Severity threshold and denylist come from the active policy profile.
+
+## `malware`
+
+Post-download antivirus gate. Zero scanners is valid — the gate is skipped.
+
+| Key | Default | Description |
+|---|---|---|
+| `max_concurrent_scans` | `8` | Cap on simultaneous scans across all engines (backpressure; roughly clamd's default worker pool). |
+| `scanners` | `[]` | List of engines, each: |
+
+Per scanner:
+
+| Key | Default | Description |
+|---|---|---|
+| `type` | — | `clamav` (clamd protocol) or `icap` (RFC 3507 — Kaspersky, Dr.Web, …). |
+| `address` | — | `tcp:host:port` or `unix:///path/to/socket`. |
+| `timeout_seconds` | `30` | Per-scan timeout. |
+| `service` | — | ICAP service name (required for `icap`). |
+
+All configured engines scan every artifact; any single detection blocks.
+Malware verdicts cannot be allowlisted.
+
+## `health`
+
+Background liveness probes for socket scanners (clamd/ICAP), surfaced in the
+console overview.
+
+| Key | Default | Description |
+|---|---|---|
+| `probe_interval_seconds` | `30` | Probe frequency. |
+| `slow_threshold_ms` | `2000` | Latency above this shows the scanner as "warn". |
+
+## `cache`
+
+| Key | Default | Description |
+|---|---|---|
+| `backend` | — | `local`. (`s3` is reserved and currently fails fast at startup.) |
+| `local.path` | — | Directory for cached artifacts. |
+| `local.max_size_gb` | — | Size cap; least-recently-used entries are evicted. |
+
+### `cache.revalidation`
+
+Background sweep that re-runs the gates (CVE, malware, and the full image gate
+for Docker) over cached artifacts and evicts entries that now fail — a newly
+published CVE, an updated ClamAV signature, a new denylist entry. An
+unreachable scanner never evicts; the entry is retried next sweep.
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable the sweep. |
+| `interval_minutes` | `60` | Sweep tick interval. |
+| `revalidate_after_hours` | `24` | Re-check an entry when this long since its last check. |
+| `batch_size` | `50` | Max entries per tick. |
+
+## `database`
+
+Embedded SQLite (pure Go, no cgo). **Required** — telemetry, runtime policy
+edits, and registry toggles persist here and survive restarts.
+
+| Key | Default | Description |
+|---|---|---|
+| `path` | — (required) | Database file path. The parent directory is created if missing. |
+| `event_retention_days` | `30` | Prune request events older than this. |
+| `daily_retention_days` | `365` | Prune per-day metric rows older than this. |
+
+## `policy`
+
+Named profiles; `active_profile` selects one at boot.
+
+| Key (per profile) | Description |
+|---|---|
+| `cve_block` | Enforce the CVE gate. |
+| `cve_min_severity` | Blocking threshold; overrides `cve.block_on` when non-empty. |
+| `supply_chain_block` | Enforce the min-age gate. |
+| `malware_block` | Enforce the malware gate. |
+| `allowlist` | Entries (`eco/name` or `eco/name@version`) that seed **both** per-gate allowlists (supply-chain and CVE). |
+| `denylist` | Always-blocked packages, same entry format. |
+
+The profile seeds the runtime policy on **first boot only**; after that the
+console's policy editor is the source of truth (persisted in the database,
+applied atomically without restart).
+
+## `logging`
+
+| Key | Default | Description |
+|---|---|---|
+| `level` | `info` (unknown values warn and fall back) | zerolog level: `trace`…`error`. |
+| `format` | `json` | `json` or `text` (human-readable console writer). |
+| `output` | `stderr` | `stdout`, `stderr`, or a file path (opened append). |
+
+## `console`
+
+| Key | Description |
+|---|---|
+| `auth.users` | List of `{username, password_hash}` (bcrypt). Prefer `JOEI_CONSOLE_AUTH_USERS`. |
+
+Generate a hash: `printf '%s' 'your-password' | jo-ei hashpw`
+
+**Fail-closed:** with zero users configured, `/console/` and `/api/` return
+HTTP 503; the proxy data path and `/health` stay open.
