@@ -338,7 +338,7 @@ and `_` as separator (e.g. `JOEI_SUPPLY_CHAIN_MODE=dry_run`).
 | `image_scan.scanners` | `vuln,secret` | Comma-separated Trivy scanner types |
 | `image_scan.max_layer_bytes` | `2147483648` | Maximum layer size (bytes); larger layers fail closed |
 | `policy.active_profile` | `production` | Name of the active policy profile |
-| `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks. Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
+| `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks at boot (seeds both per-gate runtime allowlists). Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
 | `policy.profiles.<name>.denylist` | `[]` | Packages always blocked regardless of scan results. Same format as `allowlist` |
 | `cache.local.path` | `/var/cache/jo-ei` | Directory for cached artifacts |
 | `cache.local.max_size_gb` | `100` | Maximum cache size; oldest entries evicted when exceeded (LRU) |
@@ -369,7 +369,7 @@ The package was published too recently.
 
 **What to do:**
 - Wait until `block_until` and retry.
-- Or add the package to `policy.profiles.<name>.allowlist` to bypass the age check for
+- Or add the package to the supply-chain allowlist (console → Policy → Allowlist · supply-chain, or `policy.profiles.<name>.allowlist` in YAML) to bypass the age check for
   trusted packages (e.g. internal packages, approved hotfixes).
 
 ### 403 Forbidden — CVE found
@@ -396,7 +396,7 @@ A known vulnerability meets or exceeds the configured severity threshold.
 
 **What to do:**
 - Upgrade to a version with no CVEs at or above the threshold.
-- Or add the package+version to `allowlist` if the CVE has been reviewed and accepted
+- Or add the package+version to the CVE allowlist (console → Policy → Allowlist · CVE) if the CVE has been reviewed and accepted
   as a known risk.
 
 ### 403 Forbidden — Denylist
@@ -434,7 +434,7 @@ The downloaded artifact matched a malware signature.
 
 **What to do:** Do not install this artifact. If you believe it is a false
 positive, verify the package out-of-band and report the signature to your
-security team before adding an `allowlist` entry.
+security team before adding an allowlist entry.
 
 ## Building from Source
 
