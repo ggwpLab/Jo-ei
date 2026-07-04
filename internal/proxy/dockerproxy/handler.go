@@ -148,7 +148,7 @@ func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPat
 	}
 	// Open before writing any header so a cache-read failure yields the Docker
 	// error envelope rather than a half-written 200.
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path comes from the verdict store, always inside the cache root
 	if err != nil {
 		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("opening cached blob")
 		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")

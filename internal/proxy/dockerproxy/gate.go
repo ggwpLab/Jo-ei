@@ -17,7 +17,7 @@ import (
 // manifests (each gated on its own request); an attestation manifest's "layers"
 // are in-toto JSON (SBOM/provenance), not a filesystem.
 const (
-	reasonIndexPassthrough       = "index_passthrough"
+	reasonIndexPassthrough       = "index_passthrough" // #nosec G101 -- verdict reason labels, not credentials
 	reasonAttestationPassthrough = "attestation_passthrough"
 )
 

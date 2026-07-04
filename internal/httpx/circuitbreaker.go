@@ -126,7 +126,7 @@ func (c *CircuitBreaker) jitter() time.Duration {
 	if c.baseDelay <= 0 {
 		return 0
 	}
-	return time.Duration(rand.Int64N(int64(c.baseDelay) + 1))
+	return time.Duration(rand.Int64N(int64(c.baseDelay) + 1)) // #nosec G404 -- retry jitter, not cryptographic
 }
 
 // parseRetryAfter parses a Retry-After header (delta-seconds or HTTP-date)

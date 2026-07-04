@@ -58,7 +58,7 @@ func (r *Revalidator) Revalidate(ctx context.Context, e cache.RevalEntry) (reval
 // manifestBlobDigests reads the cached manifest file and returns its config and
 // layer digests. Best-effort: read/parse failures yield nil.
 func manifestBlobDigests(manifestPath string) []string {
-	body, err := os.ReadFile(manifestPath)
+	body, err := os.ReadFile(manifestPath) // #nosec G304 -- cached manifest path from the verdict store, inside the cache root
 	if err != nil {
 		return nil
 	}

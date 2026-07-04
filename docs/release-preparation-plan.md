@@ -1,7 +1,14 @@
 # Open Source Release Preparation Plan
 
-Status: draft · Date: 2026-07-04 · Scope: audit of the current repository and a
-roadmap to a public open source release.
+Status: **completed** (phases 1–6 executed in PRs #37–#42, 2026-07-04/05) ·
+Scope: audit of the repository as of 2026-07-04 and the roadmap to a public
+open source release. Kept as a historical record; the findings below describe
+the pre-release state. Outcomes beyond the plan: the `JOEI_*` env-override
+mechanism turned out to be broken and was fixed (PR #40), and a Windows
+test flake was root-caused to SQLite handle release timing (PR #37).
+Remaining follow-ups: config-struct decoupling (assessed low-value, skipped),
+goreleaser `dockers_v2` migration when the old syntax is removed, README
+console screenshot.
 
 ---
 

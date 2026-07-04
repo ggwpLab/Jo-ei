@@ -26,7 +26,7 @@ type commandRunner func(ctx context.Context, name string, args ...string) ([]byt
 // opaque "exit status 1".
 func execRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- binary and args come from wiring/config, never from request input
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

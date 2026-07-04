@@ -12,7 +12,7 @@ import (
 // "ecosystem/name@version". Lines beginning with '#' and blank lines are
 // ignored; entries are whitespace-trimmed.
 func LoadAllowlist(path string) (*Allowlist, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path comes from operator config, not request input
 	if err != nil {
 		return nil, fmt.Errorf("opening allowlist %q: %w", path, err)
 	}
