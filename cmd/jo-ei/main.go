@@ -53,14 +53,26 @@ const (
 	upstreamRetryMaxDelay  = 20 * time.Second
 )
 
+// Build metadata, overridden at release time via
+// -ldflags "-X main.version=… -X main.commit=… -X main.date=…" (see
+// .goreleaser.yaml). Defaults identify a from-source build.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 var rootCmd = &cobra.Command{
-	Use:   "jo-ei",
-	Short: "Jōei — transparent supply chain security proxy for package registries",
-	RunE:  runProxy,
+	Use:     "jo-ei",
+	Short:   "Jōei — transparent supply chain security proxy for package registries",
+	Version: version,
+	RunE:    runProxy,
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "config.yaml", "path to config file")
+	rootCmd.SetVersionTemplate(fmt.Sprintf(
+		"jo-ei {{.Version}} (commit %s, built %s)\n", commit, date))
 }
 
 func main() {
