@@ -44,7 +44,8 @@ func TestRuntimeBootFromConfig(t *testing.T) {
 	assert.Equal(t, "enforce", p.Mode)
 	assert.Equal(t, 24, p.MinAgeHours)
 	assert.Equal(t, "CRITICAL", p.CVEBlockOn)
-	assert.Empty(t, p.Allowlist)
+	assert.Empty(t, p.AllowlistSupply)
+	assert.Empty(t, p.AllowlistCVE)
 	assert.Empty(t, p.Denylist)
 }
 
@@ -101,8 +102,10 @@ func TestRuntimeApplyValidation(t *testing.T) {
 		{"mode", func(p *policy.RuntimeParams) { p.Mode = "yolo" }},
 		{"min_age_hours", func(p *policy.RuntimeParams) { p.MinAgeHours = -1 }},
 		{"cve_block_on", func(p *policy.RuntimeParams) { p.CVEBlockOn = "SEVERE" }},
-		{"allowlist[0]", func(p *policy.RuntimeParams) { p.Allowlist = []string{"no-slash"} }},
-		{"allowlist[0]", func(p *policy.RuntimeParams) { p.Allowlist = []string{"eco / name"} }},
+		{"allowlist_supply[0]", func(p *policy.RuntimeParams) { p.AllowlistSupply = []string{"no-slash"} }},
+		{"allowlist_supply[0]", func(p *policy.RuntimeParams) { p.AllowlistSupply = []string{"eco / name"} }},
+		{"allowlist_cve[0]", func(p *policy.RuntimeParams) { p.AllowlistCVE = []string{"no-slash"} }},
+		{"allowlist_cve[0]", func(p *policy.RuntimeParams) { p.AllowlistCVE = []string{"eco / name"} }},
 		{"denylist[0]", func(p *policy.RuntimeParams) { p.Denylist = []string{"/noeco"} }},
 	}
 	for _, tc := range cases {
@@ -124,7 +127,7 @@ func TestRuntimeFileAllowlistAlwaysMerged(t *testing.T) {
 
 	// Runtime edit with an empty allowlist must not drop the file entries.
 	p := r.Current()
-	p.Allowlist = []string{}
+	p.AllowlistSupply = []string{}
 	require.NoError(t, r.Apply(p))
 	assert.Equal(t, "allowlisted", r.Check(context.Background(), rtRef(), freshMeta()).Reason)
 }
@@ -149,6 +152,47 @@ func TestRuntimeConcurrentApplyAndEvaluate(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+func TestRuntimePerGateAllowlists(t *testing.T) {
+	r := newRuntime(t, nil)
+
+	// Supply-only entry: bypasses the age hold, NOT the CVE block.
+	p := r.Current()
+	p.CVEBlockOn = "HIGH"
+	p.AllowlistSupply = []string{"pypi/requests@2.31.0"}
+	require.NoError(t, r.Apply(p))
+	res := r.Check(context.Background(), rtRef(), freshMeta())
+	assert.True(t, res.Allowed, "supply allowlist bypasses min-age hold")
+	assert.Equal(t, "allowlisted", res.Reason)
+	d := r.Evaluate(rtRef(), highFinding())
+	assert.False(t, d.Allowed, "supply allowlist must NOT bypass the CVE gate")
+	assert.Equal(t, "cve_found", d.Reason)
+
+	// CVE-only entry: bypasses the CVE block, NOT the age hold.
+	p = r.Current()
+	p.AllowlistSupply = []string{}
+	p.AllowlistCVE = []string{"pypi/requests@2.31.0"}
+	require.NoError(t, r.Apply(p))
+	d = r.Evaluate(rtRef(), highFinding())
+	assert.True(t, d.Allowed, "cve allowlist bypasses the CVE gate")
+	assert.Equal(t, "allowlisted_bypass", d.Reason)
+	res = r.Check(context.Background(), rtRef(), freshMeta())
+	assert.False(t, res.Allowed, "cve allowlist must NOT bypass min-age hold")
+}
+
+func TestRuntimeSeedsProfileAllowlistIntoBothLists(t *testing.T) {
+	r := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{Enabled: true, BlockOn: "HIGH"},
+		config.PolicyProfile{CVEBlock: true, Allowlist: []string{"pypi/requests"}},
+		nil,
+	)
+	p := r.Current()
+	assert.Equal(t, []string{"pypi/requests"}, p.AllowlistSupply)
+	assert.Equal(t, []string{"pypi/requests"}, p.AllowlistCVE)
+	assert.True(t, r.Check(context.Background(), rtRef(), freshMeta()).Allowed)
+	assert.True(t, r.Evaluate(rtRef(), highFinding()).Allowed)
 }
 
 func TestRuntimeEmptyBlockOnDefaultsToLow(t *testing.T) {

@@ -12,12 +12,15 @@ import (
 )
 
 // RuntimeParams are the console-editable policy knobs (PUT /api/policy).
+// Allowlists are per-gate: supply entries bypass only the min-age hold, cve
+// entries bypass only the CVE block. Nothing bypasses the malware gate.
 type RuntimeParams struct {
-	Mode        string   `json:"mode"`          // supply-chain mode: enforce | dry_run | off
-	MinAgeHours int      `json:"min_age_hours"` // supply-chain minimum age, >= 0
-	CVEBlockOn  string   `json:"cve_block_on"`  // CRITICAL | HIGH | MEDIUM | LOW
-	Allowlist   []string `json:"allowlist"`     // "eco/name[@version]"
-	Denylist    []string `json:"denylist"`
+	Mode            string   `json:"mode"`              // supply-chain mode: enforce | dry_run | off
+	MinAgeHours     int      `json:"min_age_hours"`     // supply-chain minimum age, >= 0
+	CVEBlockOn      string   `json:"cve_block_on"`      // CRITICAL | HIGH | MEDIUM | LOW
+	AllowlistSupply []string `json:"allowlist_supply"` // "eco/name[@version]", bypasses the age hold
+	AllowlistCVE    []string `json:"allowlist_cve"`     // "eco/name[@version]", bypasses the CVE block
+	Denylist        []string `json:"denylist"`
 }
 
 // ValidationError names the parameter that failed validation.
@@ -65,10 +68,8 @@ func (e *PersistError) Unwrap() error { return e.Err }
 // NewRuntime builds the boot snapshot from config. fileAllow entries are
 // always honored by the supply-chain filter regardless of runtime edits.
 //
-// Note an intentional semantic: the profile/runtime allowlist applies to ALL
-// gates — entries bypass both the CVE policy and the supply-chain age check
-// (the console presents a single "always trust" list). This is broader than
-// the pre-console behavior where profile.Allowlist only bypassed CVE checks.
+// The YAML profile allowlist historically bypassed CVE and age checks, so it
+// seeds BOTH per-gate lists. Runtime edits manage the two lists independently.
 func NewRuntime(sc config.SupplyChainConfig, cve config.CVEConfig, profile config.PolicyProfile, fileAllow []string) *Runtime {
 	r, seed := newRuntimeSeed(sc, cve, profile, fileAllow)
 	r.install(seed)
@@ -115,11 +116,12 @@ func newRuntimeSeed(sc config.SupplyChainConfig, cve config.CVEConfig, profile c
 	}
 	r := &Runtime{cveCfg: cve, profile: profile, fileAllow: append([]string{}, fileAllow...)}
 	seed := RuntimeParams{
-		Mode:        sc.Mode,
-		MinAgeHours: sc.MinAgeHours,
-		CVEBlockOn:  blockOn,
-		Allowlist:   append([]string{}, profile.Allowlist...),
-		Denylist:    append([]string{}, profile.Denylist...),
+		Mode:            sc.Mode,
+		MinAgeHours:     sc.MinAgeHours,
+		CVEBlockOn:      blockOn,
+		AllowlistSupply: append([]string{}, profile.Allowlist...),
+		AllowlistCVE:    append([]string{}, profile.Allowlist...),
+		Denylist:        append([]string{}, profile.Denylist...),
 	}
 	return r, seed
 }
@@ -127,16 +129,17 @@ func newRuntimeSeed(sc config.SupplyChainConfig, cve config.CVEConfig, profile c
 // install builds a fresh Engine/Filter pair for p and swaps it in atomically;
 // there is no partial application.
 func (r *Runtime) install(p RuntimeParams) {
-	p.Allowlist = append([]string{}, p.Allowlist...)
+	p.AllowlistSupply = append([]string{}, p.AllowlistSupply...)
+	p.AllowlistCVE = append([]string{}, p.AllowlistCVE...)
 	p.Denylist = append([]string{}, p.Denylist...)
-	merged := append(append([]string{}, r.fileAllow...), p.Allowlist...)
+	merged := append(append([]string{}, r.fileAllow...), p.AllowlistSupply...)
 	filter := supplychain.NewFilter(
 		config.SupplyChainConfig{Mode: p.Mode, MinAgeHours: p.MinAgeHours},
 		supplychain.NewAllowlist(merged),
 	)
 	prof := r.profile
 	prof.CVEMinSeverity = p.CVEBlockOn
-	prof.Allowlist = p.Allowlist
+	prof.Allowlist = p.AllowlistCVE
 	prof.Denylist = p.Denylist
 	r.cur.Store(&runtimeSnapshot{
 		engine: NewEngine(r.cveCfg, prof),
@@ -161,9 +164,14 @@ func (r *Runtime) Apply(p RuntimeParams) error {
 	if !validSeverities[p.CVEBlockOn] {
 		return &ValidationError{Field: "cve_block_on", Message: fmt.Sprintf("must be CRITICAL, HIGH, MEDIUM or LOW (got %q)", p.CVEBlockOn)}
 	}
-	for i, e := range p.Allowlist {
+	for i, e := range p.AllowlistSupply {
 		if msg := validateListEntry(e); msg != "" {
-			return &ValidationError{Field: fmt.Sprintf("allowlist[%d]", i), Message: msg}
+			return &ValidationError{Field: fmt.Sprintf("allowlist_supply[%d]", i), Message: msg}
+		}
+	}
+	for i, e := range p.AllowlistCVE {
+		if msg := validateListEntry(e); msg != "" {
+			return &ValidationError{Field: fmt.Sprintf("allowlist_cve[%d]", i), Message: msg}
 		}
 	}
 	for i, e := range p.Denylist {
@@ -196,7 +204,8 @@ func validateListEntry(e string) string {
 // Current returns a copy of the active params.
 func (r *Runtime) Current() RuntimeParams {
 	p := r.cur.Load().params
-	p.Allowlist = append([]string{}, p.Allowlist...)
+	p.AllowlistSupply = append([]string{}, p.AllowlistSupply...)
+	p.AllowlistCVE = append([]string{}, p.AllowlistCVE...)
 	p.Denylist = append([]string{}, p.Denylist...)
 	return p
 }
