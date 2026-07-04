@@ -264,12 +264,13 @@ func (s *server) quarantine(w http.ResponseWriter, _ *http.Request) {
 func (s *server) writePolicy(w http.ResponseWriter, status int) {
 	p := s.cfg.Policy.Current()
 	s.writeJSON(w, status, map[string]any{
-		"mode":          p.Mode,
-		"min_age_hours": p.MinAgeHours,
-		"cve_block_on":  p.CVEBlockOn,
-		"allowlist":     p.Allowlist,
-		"denylist":      p.Denylist,
-		"persistence":   "runtime",
+		"mode":             p.Mode,
+		"min_age_hours":    p.MinAgeHours,
+		"cve_block_on":     p.CVEBlockOn,
+		"allowlist_supply": p.AllowlistSupply,
+		"allowlist_cve":    p.AllowlistCVE,
+		"denylist":         p.Denylist,
+		"persistence":      "runtime",
 	})
 }
 
