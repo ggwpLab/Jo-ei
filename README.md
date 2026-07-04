@@ -1,5 +1,10 @@
 # Jōei
 
+[![CI](https://github.com/ggwpLab/Jo-ei/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ggwpLab/Jo-ei/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ggwpLab/Jo-ei)](https://goreportcard.com/report/github.com/ggwpLab/Jo-ei)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ggwpLab/Jo-ei.svg)](https://pkg.go.dev/github.com/ggwpLab/Jo-ei)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A transparent supply chain security proxy for package registries and Docker images.
 Supports PyPI, npm, Maven, and Docker Hub (Go support ships in a later phase).
 Point your package manager at Jōei instead of the upstream registry — it intercepts
@@ -169,15 +174,16 @@ the effective policy at runtime. It is backed by a JSON API under `/api/`:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/overview` | GET | KPIs, per-gate counters, cache stats, configured scanners (since process start) |
-| `/api/requests?limit=N` | GET | recent request events, newest first (in-memory ring, last 500) |
+| `/api/requests?limit=N` | GET | recent request events, newest first (SQLite-backed, cursor pagination) |
 | `/api/events` | GET | Server-Sent Events stream of new request events |
 | `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
 | `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |
 | `/api/registries` | GET | configured registries and upstreams |
 
-Policy edits made through the console are **runtime-only**: they apply
-immediately without restart, but the YAML config wins again after a restart.
-Event history and counters are in-memory and reset on restart.
+Policy edits made through the console apply immediately without restart and
+are **persisted to the database**: they survive restarts, and the YAML policy
+values only seed the very first boot. Event history and telemetry are also
+persistent (SQLite, with configurable retention).
 
 ### Console authentication
 
@@ -460,3 +466,16 @@ go test ./...
 # Integration tests (use in-process mocks; no external services required)
 go test ./integration/... -tags integration
 ```
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development setup, testing requirements, and PR workflow. This project follows
+a [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Found a security vulnerability? Please report it privately — see
+[SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE)
