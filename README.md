@@ -349,7 +349,14 @@ and `_` as separator (e.g. `JOEI_SUPPLY_CHAIN_MODE=dry_run`).
 | `cache.local.path` | `/var/cache/jo-ei` | Directory for cached artifacts |
 | `cache.local.max_size_gb` | `100` | Maximum cache size; oldest entries evicted when exceeded (LRU) |
 
-The full default configuration is in [`config.yaml`](./config.yaml).
+The table above covers the most common keys. The complete reference — every
+key, default, and the environment-variable override rules — is in
+[`docs/configuration.md`](docs/configuration.md); the full commented default
+configuration is in [`config.yaml`](./config.yaml).
+
+Ready-made client configs (pip, npm, Yarn, Maven, Gradle, Bundler, Docker)
+live in [`examples/`](examples/), and the package/dependency layout is
+documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## Understanding Block Responses
 

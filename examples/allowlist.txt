@@ -1,0 +1,15 @@
+# Jōei supply-chain allowlist. Wire it up in config.yaml:
+#   supply_chain:
+#     allowlist_path: "/etc/jo-ei/allowlist.txt"
+#
+# One entry per line; '#' comments and blank lines are ignored.
+# Entries seed the supply-chain and CVE allowlists on first boot; afterwards
+# edit them in the console (persisted in the database).
+
+# All versions of an ecosystem/package:
+pypi/requests
+npm/lodash
+
+# A single pinned version:
+maven/org.apache.commons:commons-lang3@3.14.0
+rubygems/rails@7.1.3
