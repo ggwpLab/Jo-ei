@@ -13,6 +13,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
@@ -27,7 +28,7 @@ func evt(id, verdict, gate, reason string) proxy.Event {
 // newStore returns a SQLite-backed Store on a fresh temp-file database.
 func newStore(t *testing.T) *telemetry.Store {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
@@ -183,7 +184,7 @@ func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 }
 
 func TestStore_PersistsAcrossReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "t.db")
+	path := filepath.Join(storagetest.TempDir(t), "t.db")
 	now := time.Now().UTC()
 
 	db1, err := storage.Open(path)

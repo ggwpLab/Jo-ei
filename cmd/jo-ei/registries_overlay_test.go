@@ -12,11 +12,12 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
 
 func newOverlayStore(t *testing.T) *settings.Store {
 	t.Helper()
-	sdb, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	sdb, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sdb.Close() })
 	st, err := settings.New(sdb)

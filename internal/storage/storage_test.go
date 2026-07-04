@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
 
 func TestOpen_CreatesDirAndDB(t *testing.T) {
@@ -21,7 +22,7 @@ func TestOpen_CreatesDirAndDB(t *testing.T) {
 }
 
 func TestApplyMigrations_IdempotentAndVersioned(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "jo-ei.db")
+	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 	db, err := storage.Open(path)
 	require.NoError(t, err)
 	defer db.Close()

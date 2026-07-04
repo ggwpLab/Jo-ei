@@ -11,12 +11,13 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
 func newRepo(t *testing.T) telemetry.Repo {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
@@ -129,7 +130,7 @@ func TestSQLiteRepo_DailyMetricsLimit(t *testing.T) {
 }
 
 func TestSQLiteRepo_PruneRemovesOldEvents(t *testing.T) {
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	repo, err := telemetry.NewSQLiteRepo(db, 1, 1) // 1-day retention
