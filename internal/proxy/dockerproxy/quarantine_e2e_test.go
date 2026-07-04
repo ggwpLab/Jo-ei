@@ -14,6 +14,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
@@ -63,7 +64,7 @@ func youngRegistry(t *testing.T, age time.Duration) (url, repo, tag string) {
 func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 	srvURL, repo, tag := youngRegistry(t, 1*time.Hour) // 1h old < 24h min-age → blocked
 
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -228,7 +229,7 @@ func youngMultiArchRegistry(t *testing.T, age time.Duration) (url, repo, tag, ch
 func TestDockerMultiArchSupplyBlockReachesQuarantine(t *testing.T) {
 	srvURL, repo, tag, childDigest := youngMultiArchRegistry(t, 1*time.Hour)
 
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

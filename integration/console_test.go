@@ -22,12 +22,13 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
 func newTelemetryStore(t *testing.T) *telemetry.Store {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "t.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	s, err := telemetry.Open(db, 30, 365, zerolog.Nop())

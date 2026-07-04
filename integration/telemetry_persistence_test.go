@@ -13,11 +13,12 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
 func TestTelemetryPersistsAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "jo-ei.db")
+	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 	now := time.Now().UTC()
 
 	// First "process": record (durable at write time), then close.

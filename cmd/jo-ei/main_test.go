@@ -11,6 +11,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
 
 func TestBuildTelemetryStore_FailsOnUnopenablePath(t *testing.T) {
@@ -24,7 +25,7 @@ func TestBuildTelemetryStore_FailsOnUnopenablePath(t *testing.T) {
 }
 
 func TestBuildTelemetryStore_SucceedsOnValidPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := storagetest.TempDir(t)
 	cfg := &config.Config{}
 	cfg.Database.Path = filepath.Join(dir, "jo-ei.db")
 	sdb, err := storage.Open(cfg.Database.Path)

@@ -9,11 +9,12 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
 
 func newStore(t *testing.T) *settings.Store {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "s.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "s.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	st, err := settings.New(db)
@@ -49,7 +50,7 @@ func TestPutOverwrites(t *testing.T) {
 }
 
 func TestNewIsIdempotent(t *testing.T) {
-	db, err := storage.Open(filepath.Join(t.TempDir(), "s.db"))
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "s.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	_, err = settings.New(db)

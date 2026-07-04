@@ -15,6 +15,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
 
 // policyStore mirrors cmd/jo-ei's policySettingsStore (unexported there).
@@ -43,7 +44,7 @@ func scCfg() config.SupplyChainConfig {
 func cveCfg() config.CVEConfig { return config.CVEConfig{Enabled: true, BlockOn: "CRITICAL"} }
 
 func TestPolicyPersistsAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "jo-ei.db")
+	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 
 	// First process: seed from YAML, then apply an edit.
 	{
@@ -80,7 +81,7 @@ func TestPolicyPersistsAcrossRestart(t *testing.T) {
 }
 
 func TestRegistriesPersistAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "jo-ei.db")
+	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 	edited := []console.RegistryInfo{
 		{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
 		{Ecosystem: "npm", Enabled: true, Upstreams: []string{"https://registry.npmjs.org"}},
