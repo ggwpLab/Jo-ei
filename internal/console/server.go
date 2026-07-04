@@ -259,10 +259,15 @@ func (s *server) quarantine(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"quarantine": out})
 }
 
-// writePolicy renders the current runtime policy. "persistence":"runtime"
-// tells the UI that edits reset to the YAML config on restart.
+// writePolicy renders the current runtime policy. "persistence" tells the UI
+// whether edits survive a restart: "database" when the runtime is backed by a
+// settings store, "runtime" when edits reset to the YAML config on restart.
 func (s *server) writePolicy(w http.ResponseWriter, status int) {
 	p := s.cfg.Policy.Current()
+	persistence := "runtime"
+	if s.cfg.Policy.Persistent() {
+		persistence = "database"
+	}
 	s.writeJSON(w, status, map[string]any{
 		"mode":             p.Mode,
 		"min_age_hours":    p.MinAgeHours,
@@ -270,7 +275,7 @@ func (s *server) writePolicy(w http.ResponseWriter, status int) {
 		"allowlist_supply": p.AllowlistSupply,
 		"allowlist_cve":    p.AllowlistCVE,
 		"denylist":         p.Denylist,
-		"persistence":      "runtime",
+		"persistence":      persistence,
 	})
 }
 

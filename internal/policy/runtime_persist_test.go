@@ -61,6 +61,19 @@ func TestNewRuntimeWithStore_LoadsExisting(t *testing.T) {
 	assert.Equal(t, 0, fs.saves, "loading an existing row must not re-seed")
 }
 
+func TestRuntimePersistent(t *testing.T) {
+	r := policy.NewRuntime(sc(), cve(), prof(), nil)
+	assert.False(t, r.Persistent(), "no store — edits are runtime-only")
+
+	rs, err := policy.NewRuntimeWithStore(sc(), cve(), prof(), nil, &fakeStore{})
+	require.NoError(t, err)
+	assert.True(t, rs.Persistent(), "store-backed — edits survive a restart")
+
+	rn, err := policy.NewRuntimeWithStore(sc(), cve(), prof(), nil, nil)
+	require.NoError(t, err)
+	assert.False(t, rn.Persistent(), "nil store behaves like NewRuntime")
+}
+
 func TestApply_PersistsThenInstalls(t *testing.T) {
 	fs := &fakeStore{loadOK: false}
 	r, err := policy.NewRuntimeWithStore(sc(), cve(), prof(), nil, fs)
