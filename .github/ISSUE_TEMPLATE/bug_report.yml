@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in Jōei doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Security vulnerabilities do not belong here** —
+        please follow [SECURITY.md](../blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        `pip install requests` through the proxy returned 502, expected the artifact.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, including the client command and relevant config.
+      placeholder: |
+        1. config.yaml: registries.pypi.enabled: true, cve.enabled: true
+        2. docker-compose up -d
+        3. pip install requests --index-url http://localhost:8080/pypi/simple/
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / block response
+      description: Relevant proxy log lines (JSON) or the HTTP block-response body. Redact secrets.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Jōei version or commit
+      placeholder: v0.1.0 / 9f70419
+    validations:
+      required: true
+  - type: dropdown
+    id: ecosystem
+    attributes:
+      label: Affected ecosystem
+      multiple: true
+      options:
+        - PyPI
+        - npm / Yarn
+        - Maven
+        - RubyGems
+        - Docker
+        - Admin console / API
+        - Other / not ecosystem-specific
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS + how you run Jōei (compose, bare binary, k8s, …)
+      placeholder: Ubuntu 24.04, docker-compose
