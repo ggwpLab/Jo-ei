@@ -137,7 +137,7 @@ func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
 	var logBuf bytes.Buffer
 	srv := authConsoleStack(t, upstream, testUsers(t), &logBuf)
 
-	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`
+	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", strings.NewReader(body))
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "s3cret")

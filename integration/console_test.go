@@ -119,7 +119,7 @@ func TestConsole_EndToEnd(t *testing.T) {
 	assert.Equal(t, "fresh-pkg", quar.Quarantine[0].Pkg)
 
 	// 4. PUT /api/policy lowers min_age to 0 — applies without restart.
-	body := `{"mode":"enforce","min_age_hours":0,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`
+	body := `{"mode":"enforce","min_age_hours":0,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", bytes.NewBufferString(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")

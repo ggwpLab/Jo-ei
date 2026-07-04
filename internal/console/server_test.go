@@ -190,11 +190,12 @@ func TestPolicyGetAndPut(t *testing.T) {
 	f := newFixture(t)
 
 	var pol struct {
-		Mode        string   `json:"mode"`
-		MinAgeHours int      `json:"min_age_hours"`
-		CVEBlockOn  string   `json:"cve_block_on"`
-		Allowlist   []string `json:"allowlist"`
-		Persistence string   `json:"persistence"`
+		Mode            string   `json:"mode"`
+		MinAgeHours     int      `json:"min_age_hours"`
+		CVEBlockOn      string   `json:"cve_block_on"`
+		AllowlistSupply []string `json:"allowlist_supply"`
+		AllowlistCVE    []string `json:"allowlist_cve"`
+		Persistence     string   `json:"persistence"`
 	}
 	code := getJSON(t, f.srv.URL+"/api/policy", &pol)
 	require.Equal(t, http.StatusOK, code)
@@ -225,16 +226,17 @@ func TestPolicyGetAndPut(t *testing.T) {
 	defer roundTrip.Body.Close()
 	require.Equal(t, http.StatusOK, roundTrip.StatusCode, "GET→PUT round-trip must succeed when persistence field is present")
 
-	resp := put(`{"mode":"dry_run","min_age_hours":48,"cve_block_on":"CRITICAL","allowlist":["pypi/requests"],"denylist":[]}`)
+	resp := put(`{"mode":"dry_run","min_age_hours":48,"cve_block_on":"CRITICAL","allowlist_supply":["pypi/requests"],"allowlist_cve":["npm/left-pad"],"denylist":[]}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pol))
 	assert.Equal(t, "dry_run", pol.Mode)
 	assert.Equal(t, 48, pol.MinAgeHours)
-	assert.Equal(t, []string{"pypi/requests"}, pol.Allowlist)
+	assert.Equal(t, []string{"pypi/requests"}, pol.AllowlistSupply)
+	assert.Equal(t, []string{"npm/left-pad"}, pol.AllowlistCVE)
 	assert.Equal(t, "dry_run", f.runtime.Current().Mode, "runtime actually swapped")
 
-	resp = put(`{"mode":"yolo","min_age_hours":1,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`)
+	resp = put(`{"mode":"yolo","min_age_hours":1,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	var errBody struct {
@@ -245,6 +247,10 @@ func TestPolicyGetAndPut(t *testing.T) {
 	assert.Equal(t, "invalid_policy", errBody.Error)
 	assert.Equal(t, "mode", errBody.Field)
 	assert.Equal(t, "dry_run", f.runtime.Current().Mode, "policy unchanged after 400")
+
+	resp = put(`{"mode":"enforce","min_age_hours":1,"cve_block_on":"HIGH","allowlist":["pypi/x"],"denylist":[]}`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "legacy allowlist key rejected by DisallowUnknownFields")
 }
 
 func TestRegistries(t *testing.T) {
@@ -431,7 +437,7 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 		Policy: rt, Logger: logger,
 	})
 
-	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`
+	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

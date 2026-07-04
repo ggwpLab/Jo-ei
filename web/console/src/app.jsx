@@ -102,15 +102,22 @@ function App() {
       }));
   };
 
-  // target: { eco, pkg, ver }. Entries added from the console always pin the
-  // exact version — a bare eco/pkg entry would trust every future release of
-  // a package that was just blocked.
-  const onAllowlist = (target) => {
+  // target: { eco, pkg, ver }; gate: "supply" | "cve" — each gate has its own
+  // allowlist, so trusting a quarantined package does not waive its CVE check
+  // (and vice versa). Entries added from the console always pin the exact
+  // version — a bare eco/pkg entry would trust every future release of a
+  // package that was just blocked.
+  const GATE_LIST = {
+    supply: { key: "allowlist_supply", label: "supply-chain gate" },
+    cve: { key: "allowlist_cve", label: "CVE gate" },
+  };
+  const onAllowlist = (target, gate) => {
+    const { key, label } = GATE_LIST[gate] || GATE_LIST.supply;
     const t = `${target.eco}/${target.pkg}@${target.ver}`;
     saveLists(() => {
-      const list = JOEI.policy.allowlist;
-      return { allowlist: list.includes(t) ? list : [...list, t] };
-    }, { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted on all gates: <span className="t-pkg">{t}</span></> });
+      const list = JOEI.policy[key];
+      return { [key]: list.includes(t) ? list : [...list, t] };
+    }, { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted at the {label}: <span className="t-pkg">{t}</span></> });
   };
   const onDenylist = (target) => {
     saveLists(() => {

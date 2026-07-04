@@ -103,6 +103,8 @@ database:
   event_retention_days: 30    # prune persisted events older than this
   daily_retention_days: 365   # prune per-day metric rows older than this
 
+# Profile allowlists seed BOTH runtime per-gate lists (supply-chain age hold
+# and CVE block). Per-gate edits live in the console and persist to the DB.
 policy:
   active_profile: "production"
   profiles:

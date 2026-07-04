@@ -306,7 +306,7 @@ func TestPutPolicy_PersistFailed(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy",
-		strings.NewReader(`{"mode":"dry_run","min_age_hours":24,"cve_block_on":"HIGH","allowlist":[],"denylist":[]}`))
+		strings.NewReader(`{"mode":"dry_run","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)

@@ -51,7 +51,7 @@ func TestNewRuntimeWithStore_SeedsEmptyStore(t *testing.T) {
 func TestNewRuntimeWithStore_LoadsExisting(t *testing.T) {
 	fs := &fakeStore{loadOK: true, loadVal: policy.RuntimeParams{
 		Mode: "dry_run", MinAgeHours: 5, CVEBlockOn: "HIGH",
-		Allowlist: []string{}, Denylist: []string{},
+		AllowlistSupply: []string{}, AllowlistCVE: []string{}, Denylist: []string{},
 	}}
 	r, err := policy.NewRuntimeWithStore(sc(), cve(), prof(), nil, fs)
 	require.NoError(t, err)

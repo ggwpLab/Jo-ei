@@ -35,7 +35,7 @@
     daily: [], // per-UTC-day metric rows, oldest-first (for left→right sparklines)
     policy: {
       mode: "off", min_age_hours: 0, cve_block_on: "CRITICAL",
-      allowlist: [], denylist: [], persistence: "database",
+      allowlist_supply: [], allowlist_cve: [], denylist: [], persistence: "database",
     },
     registries: [],
     registriesPending: false, registriesWarnings: [],
@@ -159,7 +159,7 @@
   async function savePolicy(p) {
     const body = {
       mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on,
-      allowlist: p.allowlist, denylist: p.denylist,
+      allowlist_supply: p.allowlist_supply, allowlist_cve: p.allowlist_cve, denylist: p.denylist,
     };
     const res = await fetch("/api/policy", {
       method: "PUT",

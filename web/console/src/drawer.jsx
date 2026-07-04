@@ -61,6 +61,9 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
     : "Package is denylisted";
 
   const target = `${r.eco}/${r.pkg}`;
+  const allowGate = r.blocked_by.includes("cve") ? "cve"
+    : r.blocked_by.includes("supply_chain") ? "supply" : null;
+  const allowGateLabel = allowGate === "cve" ? "CVE gate" : "supply-chain gate";
 
   return (
     <>
@@ -152,11 +155,11 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
         </div>
 
         <div className="drawer-foot">
-          {confirm === "allow" ? (
+          {confirm === "allow" && allowGate ? (
             <>
-              <span className="muted grow" style={{ fontSize: 12.5 }}>Trust <b className="mono" style={{ color: "var(--washi)" }}>{target}@{r.ver}</b> on all gates?</span>
+              <span className="muted grow" style={{ fontSize: 12.5 }}>Trust <b className="mono" style={{ color: "var(--washi)" }}>{target}@{r.ver}</b> at the {allowGateLabel}?</span>
               <button className="btn ghost sm" onClick={() => setConfirm(null)}>Cancel</button>
-              <button className="btn jade sm" onClick={() => { onAllowlist({ eco: r.eco, pkg: r.pkg, ver: r.ver }); onClose(); }}>Confirm allowlist</button>
+              <button className="btn jade sm" onClick={() => { onAllowlist({ eco: r.eco, pkg: r.pkg, ver: r.ver }, allowGate); onClose(); }}>Confirm allowlist</button>
             </>
           ) : confirm === "deny" ? (
             <>
@@ -166,10 +169,12 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
             </>
           ) : (
             <>
-              <button className="btn primary grow" onClick={() => setConfirm("allow")}>
-                <Icons.check /> Add to allowlist
-              </button>
-              <button className="btn danger" onClick={() => setConfirm("deny")}>Add to denylist</button>
+              {allowGate && (
+                <button className="btn primary grow" onClick={() => setConfirm("allow")}>
+                  <Icons.check /> Add to allowlist
+                </button>
+              )}
+              <button className={`btn danger${allowGate ? "" : " grow"}`} onClick={() => setConfirm("deny")}>Add to denylist</button>
             </>
           )}
         </div>
