@@ -296,7 +296,7 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]gate.Even
 	}
 	query := "SELECT id, ts, detail_json FROM events"
 	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
+		query += " WHERE " + strings.Join(conds, " AND ") // #nosec G202 -- conds are static SQL fragments; all values are bound parameters
 	}
 	query += " ORDER BY ts DESC, id DESC"
 	if limit > 0 {

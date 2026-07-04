@@ -52,7 +52,7 @@ func parseScannerAddress(address string) (network, addr string, err error) {
 
 // Scan implements gate.AVScanner using the clamd INSTREAM protocol.
 func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult, error) {
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) // #nosec G304 -- scan target is the proxy's own just-downloaded temp file
 	if err != nil {
 		return nil, fmt.Errorf("opening artifact for scan: %w", err)
 	}
@@ -82,7 +82,7 @@ func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*gate.AVResu
 		n, readErr := f.Read(buf)
 		if n > 0 {
 			var sizeBuf [4]byte
-			binary.BigEndian.PutUint32(sizeBuf[:], uint32(n))
+			binary.BigEndian.PutUint32(sizeBuf[:], uint32(n)) // #nosec G115 -- n <= len(buf) == clamavChunkSize, always fits
 			if _, err := conn.Write(sizeBuf[:]); err != nil {
 				return nil, fmt.Errorf("sending chunk size: %w", err)
 			}

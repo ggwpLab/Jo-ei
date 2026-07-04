@@ -25,7 +25,7 @@ type DB struct {
 // keeps writes serialized, matching internal/cache.
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- parent dir for the db file; the db itself is not world-writable
 			return nil, fmt.Errorf("creating db dir %q: %w", dir, err)
 		}
 	}

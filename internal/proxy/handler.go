@@ -314,7 +314,7 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 			req.Header.Del(hop)
 		}
 
-		resp, err := h.httpClient.Do(req)
+		resp, err := h.httpClient.Do(req) // #nosec G704 -- fetching configured upstream registries is the proxy's purpose
 		if err != nil {
 			allNotFound = false
 			continue

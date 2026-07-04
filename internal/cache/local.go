@@ -30,7 +30,7 @@ type LocalCache struct {
 
 // NewLocalCache creates a LocalCache rooted at cfg.RootPath.
 func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
-	if err := os.MkdirAll(cfg.RootPath, 0755); err != nil {
+	if err := os.MkdirAll(cfg.RootPath, 0755); err != nil { // #nosec G301 -- cache of public package artifacts
 		return nil, fmt.Errorf("creating cache dir %q: %w", cfg.RootPath, err)
 	}
 
@@ -74,17 +74,17 @@ func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 // Put copies the artifact from tmpPath into the cache store and records scan results.
 func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
 	destPath := lc.artifactPath(ref)
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil { // #nosec G301 -- cache of public package artifacts
 		return fmt.Errorf("creating artifact dir: %w", err)
 	}
 
-	srcFile, err := os.Open(tmpPath)
+	srcFile, err := os.Open(tmpPath) // #nosec G304 -- tmpPath is our own just-downloaded temp file, not user input
 	if err != nil {
 		return fmt.Errorf("opening temp file %q: %w", tmpPath, err)
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(destPath)
+	dstFile, err := os.Create(destPath) // #nosec G304 -- destPath is RootPath/artifacts/<sha256 of the key>; no user-controlled path segments
 	if err != nil {
 		return fmt.Errorf("creating cached file %q: %w", destPath, err)
 	}

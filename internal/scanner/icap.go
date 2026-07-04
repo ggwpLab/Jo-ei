@@ -45,7 +45,7 @@ func NewICAPScanner(address, service string, timeout time.Duration) (*ICAPScanne
 
 // Scan implements gate.AVScanner using ICAP RESPMOD.
 func (s *ICAPScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult, error) {
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) // #nosec G304 -- scan target is the proxy's own just-downloaded temp file
 	if err != nil {
 		return nil, fmt.Errorf("opening artifact for scan: %w", err)
 	}

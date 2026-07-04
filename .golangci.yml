@@ -7,7 +7,13 @@ linters:
     - staticcheck
     - unused
     - misspell
+    - gosec
   settings:
+    gosec:
+      excludes:
+        # Unhandled errors are errcheck's job (with its exclusion list);
+        # G104 would re-flag the deliberate exclusions like Body.Close.
+        - G104
     errcheck:
       exclude-functions:
         - (*os.File).Close
@@ -18,10 +24,12 @@ linters:
         - os.Remove
   exclusions:
     rules:
-      # Tests deliberately ignore many error returns (mock servers, cleanup).
+      # Tests deliberately ignore many error returns (mock servers, cleanup)
+      # and freely use variable URLs, loose file modes and local listeners.
       - path: _test\.go
         linters:
           - errcheck
+          - gosec
 formatters:
   enable:
     - gofmt
