@@ -1,5 +1,9 @@
-// Package proxy contains the HTTP handler, routing, and shared registry types.
-package proxy
+// Package gate holds Jōei's domain vocabulary: the types that describe
+// packages, scan results, verdicts, and telemetry events, and the ports
+// (interfaces) implemented by registry adapters, scanners, the policy engine,
+// the artifact cache, and telemetry. It imports nothing but the standard
+// library; every other package depends inward on it.
+package gate
 
 import (
 	"context"
@@ -161,8 +165,6 @@ type PolicyDecider interface {
 }
 
 // FilterResult describes the outcome of a supply chain check.
-// Defined here (in proxy) to avoid import cycles: supplychain imports proxy,
-// so proxy cannot import supplychain.
 type FilterResult struct {
 	Allowed     bool
 	Reason      string // "ok" | "allowlisted" | "dry_run" | "off" | "package_younger_than_min_age"

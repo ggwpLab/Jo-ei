@@ -3,7 +3,7 @@ package telemetry
 import (
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // aggregate holds the counter tallies shared by lifetime totals and per-day
@@ -16,16 +16,16 @@ type aggregate struct {
 
 func newAggregate() *aggregate {
 	return &aggregate{gates: map[string]*GateCounts{
-		proxy.GateCache:   {},
-		proxy.GateSupply:  {},
-		proxy.GateCVE:     {},
-		proxy.GateMalware: {},
+		gate.GateCache:   {},
+		gate.GateSupply:  {},
+		gate.GateCVE:     {},
+		gate.GateMalware: {},
 	}}
 }
 
 // gatePipeline is the order an artifact clears the scanning gates. A verdict
 // at gate i implies a pass at every earlier pipeline gate.
-var gatePipeline = []string{proxy.GateSupply, proxy.GateCVE, proxy.GateMalware}
+var gatePipeline = []string{gate.GateSupply, gate.GateCVE, gate.GateMalware}
 
 func pipelineIndex(gate string) int {
 	for i, g := range gatePipeline {
@@ -37,13 +37,13 @@ func pipelineIndex(gate string) int {
 }
 
 // record applies one event to the tallies.
-func (a *aggregate) record(ev proxy.Event) {
+func (a *aggregate) record(ev gate.Event) {
 	a.requests++
 	switch ev.Verdict {
-	case proxy.VerdictCache:
+	case gate.VerdictCache:
 		a.cacheHits++
-		a.gates[proxy.GateCache].Pass++
-	case proxy.VerdictPass:
+		a.gates[gate.GateCache].Pass++
+	case gate.VerdictPass:
 		idx := pipelineIndex(ev.Gate)
 		if idx < 0 {
 			idx = len(gatePipeline) - 1
@@ -51,7 +51,7 @@ func (a *aggregate) record(ev proxy.Event) {
 		for _, g := range gatePipeline[:idx+1] {
 			a.gates[g].Pass++
 		}
-	case proxy.VerdictBlock:
+	case gate.VerdictBlock:
 		a.blocked++
 		if c, ok := a.gates[ev.Gate]; ok {
 			c.Block++
@@ -65,16 +65,16 @@ func (a *aggregate) record(ev proxy.Event) {
 			}
 		}
 		switch {
-		case ev.Reason == proxy.ReasonDenylisted:
+		case ev.Reason == gate.ReasonDenylisted:
 			a.denylisted++
-		case ev.Gate == proxy.GateSupply:
+		case ev.Gate == gate.GateSupply:
 			a.supplyBlocked++
-		case ev.Gate == proxy.GateCVE:
+		case ev.Gate == gate.GateCVE:
 			a.cveBlocked++
-		case ev.Gate == proxy.GateMalware:
+		case ev.Gate == gate.GateMalware:
 			a.malwareBlocked++
 		}
-	case proxy.VerdictError:
+	case gate.VerdictError:
 		// Errors are infrastructure failures, not gate verdicts: they count
 		// toward Errors only and intentionally leave gate tallies untouched.
 		a.errors++
@@ -142,7 +142,7 @@ func (a *aggregate) dailyMetric(day string) DailyMetric {
 
 func gatesToPtr(src map[string]GateCounts) map[string]*GateCounts {
 	out := map[string]*GateCounts{
-		proxy.GateCache: {}, proxy.GateSupply: {}, proxy.GateCVE: {}, proxy.GateMalware: {},
+		gate.GateCache: {}, gate.GateSupply: {}, gate.GateCVE: {}, gate.GateMalware: {},
 	}
 	for k, v := range src {
 		vv := v
@@ -171,7 +171,7 @@ func aggregateFromDaily(d DailyMetric) *aggregate {
 
 // dayKey is the UTC calendar-day bucket for an event. A zero event time falls
 // back to the current time so malformed events still bucket somewhere.
-func dayKey(ev proxy.Event) string {
+func dayKey(ev gate.Event) string {
 	t := ev.Time
 	if t.IsZero() {
 		t = time.Now()

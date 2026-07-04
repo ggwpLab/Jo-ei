@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
@@ -14,7 +14,7 @@ import (
 // valid value here; callers must guard with v != "" before calling.
 func validVerdict(v string) bool {
 	switch v {
-	case proxy.VerdictPass, proxy.VerdictCache, proxy.VerdictBlock, proxy.VerdictError:
+	case gate.VerdictPass, gate.VerdictCache, gate.VerdictBlock, gate.VerdictError:
 		return true
 	default:
 		return false

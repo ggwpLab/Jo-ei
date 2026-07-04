@@ -8,17 +8,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
 type stubScanner struct {
-	result *proxy.AVResult
+	result *gate.AVResult
 	err    error
 	calls  *int
 }
 
-func (s stubScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, error) {
+func (s stubScanner) Scan(_ context.Context, _ string) (*gate.AVResult, error) {
 	if s.calls != nil {
 		*s.calls++
 	}
@@ -26,7 +26,7 @@ func (s stubScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, error) 
 }
 
 func clean(engine string) stubScanner {
-	return stubScanner{result: &proxy.AVResult{Clean: true, Engine: engine}}
+	return stubScanner{result: &gate.AVResult{Clean: true, Engine: engine}}
 }
 
 func TestMultiScanner_AllClean(t *testing.T) {
@@ -37,7 +37,7 @@ func TestMultiScanner_AllClean(t *testing.T) {
 }
 
 func TestMultiScanner_OneDetects(t *testing.T) {
-	infected := stubScanner{result: &proxy.AVResult{Clean: false, Signature: "EICAR", Engine: "icap"}}
+	infected := stubScanner{result: &gate.AVResult{Clean: false, Signature: "EICAR", Engine: "icap"}}
 	m := scanner.NewMultiScanner(clean("clamav"), infected)
 	res, err := m.Scan(context.Background(), "/tmp/x")
 	require.NoError(t, err)
@@ -55,8 +55,8 @@ func TestMultiScanner_ErrorFailsClosed(t *testing.T) {
 
 func TestMultiScanner_ShortCircuitsOnDetection(t *testing.T) {
 	var secondCalls int
-	infected := stubScanner{result: &proxy.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}}
-	second := stubScanner{result: &proxy.AVResult{Clean: true}, calls: &secondCalls}
+	infected := stubScanner{result: &gate.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}}
+	second := stubScanner{result: &gate.AVResult{Clean: true}, calls: &secondCalls}
 	m := scanner.NewMultiScanner(infected, second)
 	_, err := m.Scan(context.Background(), "/tmp/x")
 	require.NoError(t, err)

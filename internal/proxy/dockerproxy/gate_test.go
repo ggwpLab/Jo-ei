@@ -11,14 +11,14 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // --- stubs ---
 
 type stubScanner struct {
-	findings []proxy.CVEFinding
+	findings []gate.CVEFinding
 	err      error
 }
 
@@ -32,27 +32,27 @@ func (s stubScanner) Health() health.Sample { return health.Sample{} }
 
 type stubAV struct{ infected bool }
 
-func (s stubAV) Scan(_ context.Context, _ string) (*proxy.AVResult, error) {
+func (s stubAV) Scan(_ context.Context, _ string) (*gate.AVResult, error) {
 	if s.infected {
-		return &proxy.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}, nil
+		return &gate.AVResult{Clean: false, Signature: "EICAR", Engine: "clamav"}, nil
 	}
-	return &proxy.AVResult{Clean: true}, nil
+	return &gate.AVResult{Clean: true}, nil
 }
 
 // allowFilter and policy that allow everything / block on findings.
 type allowFilter struct{}
 
-func (allowFilter) Check(_ context.Context, _ *proxy.PackageRef, _ *proxy.PackageMetadata) proxy.FilterResult {
-	return proxy.FilterResult{Allowed: true, Reason: "ok"}
+func (allowFilter) Check(_ context.Context, _ *gate.PackageRef, _ *gate.PackageMetadata) gate.FilterResult {
+	return gate.FilterResult{Allowed: true, Reason: "ok"}
 }
 
 type findingPolicy struct{}
 
-func (findingPolicy) Evaluate(_ *proxy.PackageRef, r *proxy.ScanResult) proxy.PolicyDecision {
+func (findingPolicy) Evaluate(_ *gate.PackageRef, r *gate.ScanResult) gate.PolicyDecision {
 	if r != nil && len(r.Findings) > 0 {
-		return proxy.PolicyDecision{Allowed: false, Reason: "cve_found", Findings: r.Findings}
+		return gate.PolicyDecision{Allowed: false, Reason: "cve_found", Findings: r.Findings}
 	}
-	return proxy.PolicyDecision{Allowed: true, Reason: "ok"}
+	return gate.PolicyDecision{Allowed: true, Reason: "ok"}
 }
 
 // newGateTestServer starts an httptest server that serves a minimal schema2
@@ -118,7 +118,7 @@ func TestGateBlocksOnCVE(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t) // serves index-free manifest + config + 1 layer
 	d := gateDeps{
 		adapter: NewAdapter([]string{srvURL}, nil),
-		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		scanner: stubScanner{findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}},
 		av:      stubAV{},
 		filter:  allowFilter{},
 		policy:  findingPolicy{},
@@ -232,7 +232,7 @@ func TestGatePassesThroughIndex(t *testing.T) {
 	d := gateDeps{
 		adapter: NewAdapter([]string{srvURL}, nil),
 		// Both would block if consulted; passthrough must skip them.
-		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		scanner: stubScanner{findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}},
 		av:      stubAV{infected: true},
 		filter:  allowFilter{},
 		policy:  findingPolicy{},
@@ -299,7 +299,7 @@ func TestGatePassesThroughAttestation(t *testing.T) {
 	store := newVerdictStore(newFakeCache())
 	d := gateDeps{
 		adapter: NewAdapter([]string{srvURL}, nil),
-		scanner: stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		scanner: stubScanner{findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}},
 		av:      stubAV{infected: true},
 		filter:  allowFilter{},
 		policy:  findingPolicy{},
@@ -325,8 +325,8 @@ type blockFilter struct {
 	blockUntil time.Time
 }
 
-func (f blockFilter) Check(_ context.Context, _ *proxy.PackageRef, _ *proxy.PackageMetadata) proxy.FilterResult {
-	return proxy.FilterResult{
+func (f blockFilter) Check(_ context.Context, _ *gate.PackageRef, _ *gate.PackageMetadata) gate.FilterResult {
+	return gate.FilterResult{
 		Allowed:     false,
 		Reason:      "package_younger_than_min_age",
 		PublishedAt: f.published,

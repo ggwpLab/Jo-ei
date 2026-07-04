@@ -7,13 +7,13 @@ package dockerproxy
 import (
 	"context"
 
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 // ImageScanResult holds the vulnerability findings for a scanned image.
 type ImageScanResult struct {
-	Findings []proxy.CVEFinding
+	Findings []gate.CVEFinding
 }
 
 // ImageScanner scans a container image for vulnerabilities/secrets. imageRef is

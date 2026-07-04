@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
@@ -18,9 +18,9 @@ func TestBroadcasterDeliversToAllSubscribers(t *testing.T) {
 	defer cancel1()
 	defer cancel2()
 
-	b.Publish(evt("r1", proxy.VerdictPass, proxy.GateSupply, "ok"))
+	b.Publish(evt("r1", gate.VerdictPass, gate.GateSupply, "ok"))
 
-	for _, ch := range []<-chan proxy.Event{ch1, ch2} {
+	for _, ch := range []<-chan gate.Event{ch1, ch2} {
 		select {
 		case got := <-ch:
 			assert.Equal(t, "r1", got.RequestID)
@@ -36,7 +36,7 @@ func TestBroadcasterCancelStopsDelivery(t *testing.T) {
 	cancel()
 	cancel() // idempotent
 
-	b.Publish(evt("r1", proxy.VerdictPass, proxy.GateSupply, "ok"))
+	b.Publish(evt("r1", gate.VerdictPass, gate.GateSupply, "ok"))
 
 	_, open := <-ch
 	assert.False(t, open, "cancelled subscriber channel is closed")
@@ -50,7 +50,7 @@ func TestBroadcasterSlowSubscriberLosesEventsWithoutBlocking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 100; i++ { // far beyond any buffer
-			b.Publish(evt("r", proxy.VerdictPass, proxy.GateSupply, "ok"))
+			b.Publish(evt("r", gate.VerdictPass, gate.GateSupply, "ok"))
 		}
 		close(done)
 	}()
@@ -70,7 +70,7 @@ func TestHubRecordsAndPublishes(t *testing.T) {
 	ch, cancel := b.Subscribe()
 	defer cancel()
 
-	hub.Record(evt("r1", proxy.VerdictCache, proxy.GateCache, "cache_hit"))
+	hub.Record(evt("r1", gate.VerdictCache, gate.GateCache, "cache_hit"))
 
 	require.Len(t, store.Recent(0), 1)
 	select {

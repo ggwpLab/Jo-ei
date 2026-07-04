@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // clamavChunkSize is the size of each INSTREAM data chunk sent to clamd.
 const clamavChunkSize = 8192
 
 // ClamAVScanner is a clamd client that scans files via the INSTREAM command.
-// It implements proxy.AVScanner.
+// It implements gate.AVScanner.
 type ClamAVScanner struct {
 	network string // "unix" or "tcp"
 	addr    string
@@ -50,8 +50,8 @@ func parseScannerAddress(address string) (network, addr string, err error) {
 	}
 }
 
-// Scan implements proxy.AVScanner using the clamd INSTREAM protocol.
-func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*proxy.AVResult, error) {
+// Scan implements gate.AVScanner using the clamd INSTREAM protocol.
+func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening artifact for scan: %w", err)
@@ -112,17 +112,17 @@ func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*proxy.AVRes
 
 // parseClamAVResponse interprets a clamd INSTREAM reply.
 // "stream: OK" → clean; "stream: <sig> FOUND" → infected; anything else → error.
-func parseClamAVResponse(resp string) (*proxy.AVResult, error) {
+func parseClamAVResponse(resp string) (*gate.AVResult, error) {
 	trimmed := strings.TrimRight(resp, "\x00\n ")
 	switch {
 	case strings.HasSuffix(trimmed, "OK"):
-		return &proxy.AVResult{Clean: true, Engine: "clamav"}, nil
+		return &gate.AVResult{Clean: true, Engine: "clamav"}, nil
 	case strings.HasSuffix(trimmed, "FOUND"):
 		sig := strings.TrimSuffix(trimmed, " FOUND")
 		if idx := strings.Index(sig, ": "); idx != -1 {
 			sig = sig[idx+2:]
 		}
-		return &proxy.AVResult{Clean: false, Signature: strings.TrimSpace(sig), Engine: "clamav"}, nil
+		return &gate.AVResult{Clean: false, Signature: strings.TrimSpace(sig), Engine: "clamav"}, nil
 	default:
 		return nil, fmt.Errorf("clamd error response: %q", trimmed)
 	}

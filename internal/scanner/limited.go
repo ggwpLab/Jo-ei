@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // LimitedScanner caps the number of concurrent scans run against the wrapped
@@ -11,15 +11,15 @@ import (
 // bounded worker pool, so firing more concurrent INSTREAM/RESPMOD requests than
 // the engine can serve makes responses queue past the per-scan deadline and
 // surface as "i/o timeout". Bounding in-flight scans keeps each one fast enough
-// to beat its deadline. It implements proxy.AVScanner.
+// to beat its deadline. It implements gate.AVScanner.
 type LimitedScanner struct {
-	inner proxy.AVScanner
+	inner gate.AVScanner
 	sem   chan struct{}
 }
 
 // NewLimitedScanner wraps inner so that at most limit scans run concurrently.
 // A limit <= 0 disables limiting and returns inner unchanged.
-func NewLimitedScanner(inner proxy.AVScanner, limit int) proxy.AVScanner {
+func NewLimitedScanner(inner gate.AVScanner, limit int) gate.AVScanner {
 	if limit <= 0 {
 		return inner
 	}
@@ -28,7 +28,7 @@ func NewLimitedScanner(inner proxy.AVScanner, limit int) proxy.AVScanner {
 
 // Scan acquires a concurrency slot (honouring context cancellation while it
 // waits) then delegates to the wrapped scanner.
-func (l *LimitedScanner) Scan(ctx context.Context, filePath string) (*proxy.AVResult, error) {
+func (l *LimitedScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult, error) {
 	select {
 	case l.sem <- struct{}{}:
 	case <-ctx.Done():

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
@@ -116,7 +116,7 @@ func parseGates(blob string) map[string]GateCounts {
 
 // RecordEvent inserts the event and folds its one-event delta into the
 // cumulative counters and the event's UTC-day row, all in one transaction.
-func (r *sqliteRepo) RecordEvent(ev proxy.Event) error {
+func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
 	delta := newAggregate()
 	delta.record(ev)
 
@@ -253,7 +253,7 @@ func (r *sqliteRepo) Snapshot(started time.Time) (Snapshot, error) {
 	return agg.snapshot(started), nil
 }
 
-func (r *sqliteRepo) Recent(limit int) ([]proxy.Event, error) {
+func (r *sqliteRepo) Recent(limit int) ([]gate.Event, error) {
 	query := `SELECT detail_json FROM events ORDER BY ts DESC, id DESC`
 	var args []any
 	if limit > 0 {
@@ -265,13 +265,13 @@ func (r *sqliteRepo) Recent(limit int) ([]proxy.Event, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []proxy.Event
+	var out []gate.Event
 	for rows.Next() {
 		var blob string
 		if err := rows.Scan(&blob); err != nil {
 			return nil, err
 		}
-		var ev proxy.Event
+		var ev gate.Event
 		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
 			continue
 		}
@@ -280,7 +280,7 @@ func (r *sqliteRepo) Recent(limit int) ([]proxy.Event, error) {
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor, error) {
+func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {
 	var (
 		conds []string
 		args  []any
@@ -313,7 +313,7 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 	defer rows.Close()
 
 	var (
-		out     []proxy.Event
+		out     []gate.Event
 		next    Cursor
 		scanned int
 	)
@@ -335,7 +335,7 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 		// Advance the cursor for every scanned row (even one that fails to
 		// unmarshal) so paging never stalls on a single bad blob.
 		next = Cursor{TS: time.Unix(0, tsNano), ID: id}
-		var ev proxy.Event
+		var ev gate.Event
 		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
 			continue
 		}
@@ -351,23 +351,23 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]proxy.Eve
 	return out, next, nil
 }
 
-func (r *sqliteRepo) Quarantine(now time.Time) ([]proxy.Event, error) {
+func (r *sqliteRepo) Quarantine(now time.Time) ([]gate.Event, error) {
 	rows, err := r.db.Query(`
 		SELECT detail_json FROM events
 		WHERE verdict = ? AND gate = ?
-		ORDER BY ts DESC, id DESC`, proxy.VerdictBlock, proxy.GateSupply)
+		ORDER BY ts DESC, id DESC`, gate.VerdictBlock, gate.GateSupply)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	seen := map[string]bool{}
-	var out []proxy.Event
+	var out []gate.Event
 	for rows.Next() {
 		var blob string
 		if err := rows.Scan(&blob); err != nil {
 			return nil, err
 		}
-		var ev proxy.Event
+		var ev gate.Event
 		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
 			continue
 		}

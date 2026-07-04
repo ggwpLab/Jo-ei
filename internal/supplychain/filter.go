@@ -8,15 +8,15 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // reasonTooNew is returned when a package version is younger than min_age_hours.
 const reasonTooNew = "package_younger_than_min_age"
 
-// FilterResult is an alias for proxy.FilterResult kept here for backward compatibility.
-// New code should use proxy.FilterResult directly.
-type FilterResult = proxy.FilterResult
+// FilterResult is an alias for gate.FilterResult kept here for backward compatibility.
+// New code should use gate.FilterResult directly.
+type FilterResult = gate.FilterResult
 
 // Allowlist holds explicitly approved packages that bypass the age check.
 // Entry format: "ecosystem/name" (all versions) or "ecosystem/name@version" (specific).
@@ -34,7 +34,7 @@ func NewAllowlist(entries []string) *Allowlist {
 }
 
 // Contains reports whether ref is covered by the allowlist.
-func (a *Allowlist) Contains(ref *proxy.PackageRef) bool {
+func (a *Allowlist) Contains(ref *gate.PackageRef) bool {
 	if a == nil {
 		return false
 	}
@@ -70,7 +70,7 @@ func NewFilter(cfg config.SupplyChainConfig, allowlist *Allowlist) *Filter {
 
 // Check applies the supply chain filter. The caller must provide pre-fetched PackageMetadata.
 // No network calls are made inside Check.
-func (f *Filter) Check(_ context.Context, ref *proxy.PackageRef, meta *proxy.PackageMetadata) FilterResult {
+func (f *Filter) Check(_ context.Context, ref *gate.PackageRef, meta *gate.PackageMetadata) FilterResult {
 	if f.cfg.Mode == "off" {
 		return FilterResult{Allowed: true, Reason: "off", PublishedAt: meta.PublishedAt}
 	}

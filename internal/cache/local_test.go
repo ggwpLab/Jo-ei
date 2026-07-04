@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func newTestLocalCache(t *testing.T) cache.Cache {
@@ -38,7 +38,7 @@ func makeTempArtifact(t *testing.T, content string) string {
 func TestLocalCache_PutAndGet(t *testing.T) {
 	c := newTestLocalCache(t)
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.32.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.32.0"}
 	tmpPath := makeTempArtifact(t, "fake-wheel-content")
 
 	err := c.Put(&ref, tmpPath, true, `{"clean":true}`)
@@ -56,7 +56,7 @@ func TestLocalCache_PutAndGet(t *testing.T) {
 
 func TestLocalCache_GetMiss(t *testing.T) {
 	c := newTestLocalCache(t)
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "nonexistent", Version: "1.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "nonexistent", Version: "1.0.0"}
 	_, found := c.Get(&ref)
 	assert.False(t, found)
 }
@@ -64,7 +64,7 @@ func TestLocalCache_GetMiss(t *testing.T) {
 func TestLocalCache_Invalidate(t *testing.T) {
 	c := newTestLocalCache(t)
 
-	ref := proxy.PackageRef{Ecosystem: "pypi", Name: "flask", Version: "3.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "flask", Version: "3.0.0"}
 	tmpPath := makeTempArtifact(t, "content")
 	require.NoError(t, c.Put(&ref, tmpPath, true, ""))
 
@@ -82,8 +82,8 @@ func TestLocalCache_Invalidate(t *testing.T) {
 func TestLocalCache_Stats(t *testing.T) {
 	c := newTestLocalCache(t)
 
-	ref1 := proxy.PackageRef{Ecosystem: "pypi", Name: "a", Version: "1.0"}
-	ref2 := proxy.PackageRef{Ecosystem: "pypi", Name: "b", Version: "1.0"}
+	ref1 := gate.PackageRef{Ecosystem: "pypi", Name: "a", Version: "1.0"}
+	ref2 := gate.PackageRef{Ecosystem: "pypi", Name: "b", Version: "1.0"}
 	require.NoError(t, c.Put(&ref1, makeTempArtifact(t, "aaaa"), true, ""))
 	require.NoError(t, c.Put(&ref2, makeTempArtifact(t, "bbbbbbbb"), true, ""))
 

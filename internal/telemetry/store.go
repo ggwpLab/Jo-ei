@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
@@ -90,7 +90,7 @@ func Open(db *storage.DB, eventRetentionDays, dailyRetentionDays int, logger zer
 // Record durably persists ev (insert + counter/daily increments) synchronously.
 // Telemetry must never fail a proxy request: on error it logs and returns,
 // losing at most this one event (not a flush window).
-func (s *Store) Record(ev proxy.Event) {
+func (s *Store) Record(ev gate.Event) {
 	if err := s.repo.RecordEvent(ev); err != nil {
 		s.logger.Warn().Err(err).Msg("telemetry: recording event")
 	}
@@ -109,7 +109,7 @@ func (s *Store) Snapshot() Snapshot {
 
 // Recent returns up to limit events, newest first (limit ≤ 0 → all). A read
 // error logs and yields nil.
-func (s *Store) Recent(limit int) []proxy.Event {
+func (s *Store) Recent(limit int) []gate.Event {
 	evs, err := s.repo.Recent(limit)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("telemetry: reading recent events")
@@ -122,7 +122,7 @@ func (s *Store) Recent(limit int) []proxy.Event {
 // older than cursor (zero cursor = newest), plus the cursor for the next call
 // (zero when there are no more pages). A read error logs and yields nil with a
 // zero cursor, so the console degrades to an empty page rather than failing.
-func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, Cursor) {
+func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
 	evs, next, err := s.repo.Page(verdict, cursor, limit)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("telemetry: paging events")
@@ -133,7 +133,7 @@ func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]proxy.Event, C
 
 // Quarantine returns the active supply-chain holds. A read error logs and
 // yields nil.
-func (s *Store) Quarantine(now time.Time) []proxy.Event {
+func (s *Store) Quarantine(now time.Time) []gate.Event {
 	evs, err := s.repo.Quarantine(now)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("telemetry: reading quarantine")

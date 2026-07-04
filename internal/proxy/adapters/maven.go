@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // mavenArtifactExts are the binary artifact extensions we intercept and scan.
 var mavenArtifactExts = []string{".jar", ".war", ".aar"}
 
-// MavenAdapter implements proxy.RegistryAdapter for a Maven repository.
+// MavenAdapter implements gate.RegistryAdapter for a Maven repository.
 type MavenAdapter struct {
 	upstreams  []string
 	httpClient *http.Client
@@ -34,7 +34,7 @@ func (a *MavenAdapter) Name() string { return "maven" }
 
 // NormalizeRequest intercepts binary artifact downloads (.jar/.war/.aar).
 // Sidecar files (.pom, .sha1, .md5, .asc) are proxied transparently.
-func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool) {
+func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
 	if !hasMavenArtifactExt(r.URL.Path) {
 		return nil, false
 	}
@@ -42,7 +42,7 @@ func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, boo
 	if !ok {
 		return nil, false
 	}
-	return &proxy.PackageRef{
+	return &gate.PackageRef{
 		Ecosystem:  "maven",
 		Name:       name,
 		Version:    version,
@@ -102,10 +102,10 @@ func mavenClassifier(file, artifact, version string) string {
 // The publish-date proxy (the artifact's Last-Modified) is read from the
 // download response instead — see MetadataFromHeader — so a pull costs one GET
 // rather than an extra HEAD on the .pom. MavenAdapter implements
-// proxy.DownloadMetadataExtractor, so the handler never calls this; it exists to
+// gate.DownloadMetadataExtractor, so the handler never calls this; it exists to
 // satisfy the RegistryAdapter contract.
-func (a *MavenAdapter) FetchMetadata(_ context.Context, _ *proxy.PackageRef) (*proxy.PackageMetadata, error) {
-	return &proxy.PackageMetadata{}, nil
+func (a *MavenAdapter) FetchMetadata(_ context.Context, _ *gate.PackageRef) (*gate.PackageMetadata, error) {
+	return &gate.PackageMetadata{}, nil
 }
 
 // MetadataFromHeader derives package metadata from an artifact download
@@ -113,8 +113,8 @@ func (a *MavenAdapter) FetchMetadata(_ context.Context, _ *proxy.PackageRef) (*p
 // Last-Modified is a sound proxy for the publish date used by the supply-chain
 // age check. A missing/unparseable header yields a zero PublishedAt (treated as
 // old), matching the previous behavior when the .pom carried no Last-Modified.
-func (a *MavenAdapter) MetadataFromHeader(h http.Header) *proxy.PackageMetadata {
-	meta := &proxy.PackageMetadata{}
+func (a *MavenAdapter) MetadataFromHeader(h http.Header) *gate.PackageMetadata {
+	meta := &gate.PackageMetadata{}
 	if lm := h.Get("Last-Modified"); lm != "" {
 		if t, err := http.ParseTime(lm); err == nil {
 			meta.PublishedAt = t.UTC()

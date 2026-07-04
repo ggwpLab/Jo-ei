@@ -11,7 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func TestNewAssemblesHandler(t *testing.T) {
@@ -35,20 +35,20 @@ func TestNewAssemblesHandler(t *testing.T) {
 	}
 }
 
-type recspy struct{ events []proxy.Event }
+type recspy struct{ events []gate.Event }
 
-func (r *recspy) Record(e proxy.Event) { r.events = append(r.events, e) }
+func (r *recspy) Record(e gate.Event) { r.events = append(r.events, e) }
 
-func newTestHandler(t *testing.T, sc ImageScanner, av proxy.AVScanner, rec proxy.Recorder) (*Handler, string, string) {
+func newTestHandler(t *testing.T, sc ImageScanner, av gate.AVScanner, rec gate.Recorder) (*Handler, string, string) {
 	srvURL, repo, ref := newGateTestServer(t)
 	adapter := NewAdapter([]string{srvURL}, nil)
 	store := newVerdictStore(newFakeCache())
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: sc, av: av,
 		filter: allowFilter{}, policy: findingPolicy{},
 		store: store, logger: zerolog.Nop(),
 	})
-	h := NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
 	return h, repo, ref
 }
 
@@ -74,7 +74,7 @@ func TestHandlerManifestCleanServes(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("manifest status = %d, body=%s", w.Code, w.Body.String())
 	}
-	if len(rec.events) != 1 || rec.events[0].Verdict != proxy.VerdictPass {
+	if len(rec.events) != 1 || rec.events[0].Verdict != gate.VerdictPass {
 		t.Errorf("events = %+v", rec.events)
 	}
 }
@@ -97,10 +97,10 @@ func TestHandlerManifestCacheHitRecordsCacheVerdict(t *testing.T) {
 	if len(rec.events) != 2 {
 		t.Fatalf("want 2 events, got %d: %+v", len(rec.events), rec.events)
 	}
-	if rec.events[0].Verdict != proxy.VerdictPass {
+	if rec.events[0].Verdict != gate.VerdictPass {
 		t.Errorf("first pull verdict = %q, want PASS", rec.events[0].Verdict)
 	}
-	if rec.events[1].Verdict != proxy.VerdictCache || rec.events[1].Gate != proxy.GateCache {
+	if rec.events[1].Verdict != gate.VerdictCache || rec.events[1].Gate != gate.GateCache {
 		t.Errorf("second pull verdict/gate = %q/%q, want CACHE/cache",
 			rec.events[1].Verdict, rec.events[1].Gate)
 	}
@@ -109,7 +109,7 @@ func TestHandlerManifestCacheHitRecordsCacheVerdict(t *testing.T) {
 func TestHandlerManifestCVEBlocked403(t *testing.T) {
 	rec := &recspy{}
 	h, repo, ref := newTestHandler(t,
-		stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		stubScanner{findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}},
 		stubAV{}, rec)
 	req := httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil)
 	w := httptest.NewRecorder()
@@ -120,7 +120,7 @@ func TestHandlerManifestCVEBlocked403(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "DENIED") {
 		t.Errorf("body = %s", w.Body.String())
 	}
-	if len(rec.events) != 1 || rec.events[0].Verdict != proxy.VerdictBlock {
+	if len(rec.events) != 1 || rec.events[0].Verdict != gate.VerdictBlock {
 		t.Errorf("events = %+v", rec.events)
 	}
 }
@@ -221,7 +221,7 @@ func TestHandlerIndexPassthroughNoTelemetry(t *testing.T) {
 	h := New(HandlerDeps{
 		Upstreams: []string{srvURL},
 		// Both would block a concrete manifest; the index must not be gated.
-		Scanner:  stubScanner{findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}},
+		Scanner:  stubScanner{findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}},
 		AV:       stubAV{infected: true},
 		Filter:   allowFilter{},
 		Policy:   findingPolicy{},
@@ -244,14 +244,14 @@ func TestHandlerSupplyChainBlockRecordsBlockUntil(t *testing.T) {
 	srvURL, repo, ref := newGateTestServer(t)
 	adapter := NewAdapter([]string{srvURL}, nil)
 	store := newVerdictStore(newFakeCache())
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
 		filter: blockFilter{published: time.Now().Add(-time.Hour), blockUntil: time.Now().Add(23 * time.Hour)},
 		policy: findingPolicy{},
 		store:  store, logger: zerolog.Nop(),
 	})
 	rec := &recspy{}
-	h := NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
 
 	pull := func() {
 		w := httptest.NewRecorder()
@@ -268,7 +268,7 @@ func TestHandlerSupplyChainBlockRecordsBlockUntil(t *testing.T) {
 		t.Fatalf("want 2 block events, got %d: %+v", len(rec.events), rec.events)
 	}
 	for i, ev := range rec.events {
-		if ev.Verdict != proxy.VerdictBlock || ev.Gate != proxy.GateSupply {
+		if ev.Verdict != gate.VerdictBlock || ev.Gate != gate.GateSupply {
 			t.Errorf("event %d: verdict=%q gate=%q, want block/supply", i, ev.Verdict, ev.Gate)
 		}
 		if ev.BlockUntil.IsZero() {

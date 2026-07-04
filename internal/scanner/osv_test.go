@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 )
 
@@ -49,7 +49,7 @@ func TestOSVScanner_CleanPackage(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	result, err := sc.Scan(context.Background(), &proxy.PackageRef{
+	result, err := sc.Scan(context.Background(), &gate.PackageRef{
 		Ecosystem: "pypi", Name: "requests", Version: "2.31.0",
 	})
 	require.NoError(t, err)
@@ -71,14 +71,14 @@ func TestOSVScanner_CriticalCVE(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	result, err := sc.Scan(context.Background(), &proxy.PackageRef{
+	result, err := sc.Scan(context.Background(), &gate.PackageRef{
 		Ecosystem: "pypi", Name: "requests", Version: "2.28.0",
 	})
 	require.NoError(t, err)
 	assert.False(t, result.Clean)
 	require.Len(t, result.Findings, 1)
 	assert.Equal(t, "CVE-2024-35195", result.Findings[0].ID)
-	assert.Equal(t, proxy.SeverityCritical, result.Findings[0].Severity)
+	assert.Equal(t, gate.SeverityCritical, result.Findings[0].Severity)
 	assert.Equal(t, "RCE in requests", result.Findings[0].Summary)
 	assert.NotEmpty(t, result.ScanJSON)
 }
@@ -97,12 +97,12 @@ func TestOSVScanner_ModerateIsMedium(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	result, err := sc.Scan(context.Background(), &proxy.PackageRef{
+	result, err := sc.Scan(context.Background(), &gate.PackageRef{
 		Ecosystem: "pypi", Name: "flask", Version: "2.0.0",
 	})
 	require.NoError(t, err)
 	assert.False(t, result.Clean)
-	assert.Equal(t, proxy.SeverityMedium, result.Findings[0].Severity)
+	assert.Equal(t, gate.SeverityMedium, result.Findings[0].Severity)
 	// When no CVE alias, should use the PYSEC id
 	assert.Equal(t, "PYSEC-2024-001", result.Findings[0].ID)
 }
@@ -116,7 +116,7 @@ func TestOSVScanner_CachesResults(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "django", Version: "4.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "django", Version: "4.0.0"}
 
 	_, err := sc.Scan(context.Background(), ref)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestOSVScanner_CacheExpires(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, 10*time.Millisecond) // very short TTL
-	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "pillow", Version: "9.0.0"}
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "pillow", Version: "9.0.0"}
 
 	_, err := sc.Scan(context.Background(), ref)
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestOSVScanner_APIError(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	_, err := sc.Scan(context.Background(), &proxy.PackageRef{
+	_, err := sc.Scan(context.Background(), &gate.PackageRef{
 		Ecosystem: "pypi", Name: "broken", Version: "1.0.0",
 	})
 	require.Error(t, err)
@@ -175,7 +175,7 @@ func TestOSVScanner_RubyGemsStripsPlatformSuffix(t *testing.T) {
 	defer srv.Close()
 
 	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	result, err := sc.Scan(context.Background(), &proxy.PackageRef{
+	result, err := sc.Scan(context.Background(), &gate.PackageRef{
 		Ecosystem: "rubygems", Name: "nokogiri", Version: "1.15.0-x86_64-linux",
 	})
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestOSVScanner_EcosystemMapping(t *testing.T) {
 		{"rubygems", "RubyGems"},
 	}
 	for _, c := range cases {
-		sc.Scan(context.Background(), &proxy.PackageRef{Ecosystem: c.ecosystem, Name: "x", Version: "1.0.0"})
+		sc.Scan(context.Background(), &gate.PackageRef{Ecosystem: c.ecosystem, Name: "x", Version: "1.0.0"})
 		assert.Equal(t, c.want, capturedEcosystem, "ecosystem %q", c.ecosystem)
 	}
 }
@@ -227,7 +227,7 @@ func TestOSVHealth_AfterSuccess(t *testing.T) {
 	defer srv.Close()
 	s := scanner.NewOSVScanner(srv.URL, time.Hour)
 	defer s.Close()
-	_, err := s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	_, err := s.Scan(context.Background(), &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
 	require.NoError(t, err)
 	h := s.Health()
 	assert.True(t, h.HasData)
@@ -241,7 +241,7 @@ func TestOSVHealth_AfterError(t *testing.T) {
 	defer srv.Close()
 	s := scanner.NewOSVScanner(srv.URL, time.Hour)
 	defer s.Close()
-	_, _ = s.Scan(context.Background(), &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	_, _ = s.Scan(context.Background(), &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
 	h := s.Health()
 	assert.True(t, h.HasData)
 	assert.False(t, h.OK)
@@ -257,7 +257,7 @@ func TestOSVHealth_CacheHitDoesNotUpdate(t *testing.T) {
 	s := scanner.NewOSVScanner(srv.URL, time.Hour)
 	defer s.Close()
 
-	ref := &proxy.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"}
 	_, err := s.Scan(context.Background(), ref)
 	require.NoError(t, err)
 	first := s.Health()

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func TestOSVScanner_JanitorEvictsExpired(t *testing.T) {
@@ -16,7 +16,7 @@ func TestOSVScanner_JanitorEvictsExpired(t *testing.T) {
 
 	s.mu.Lock()
 	s.cache["pypi/x@1.0"] = &cveEntry{
-		result:    &proxy.ScanResult{Clean: true},
+		result:    &gate.ScanResult{Clean: true},
 		expiresAt: time.Now().Add(-time.Hour), // already expired
 	}
 	s.mu.Unlock()

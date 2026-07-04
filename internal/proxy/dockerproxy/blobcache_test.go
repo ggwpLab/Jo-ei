@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // fakeCache is a minimal in-memory cache.Cache for tests.
@@ -16,11 +16,11 @@ type fakeCache struct {
 
 func newFakeCache() *fakeCache { return &fakeCache{entries: map[string]*cache.CacheEntry{}} }
 
-func (f *fakeCache) Get(ref *proxy.PackageRef) (*cache.CacheEntry, bool) {
+func (f *fakeCache) Get(ref *gate.PackageRef) (*cache.CacheEntry, bool) {
 	e, ok := f.entries[ref.Key()]
 	return e, ok
 }
-func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
+func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJSON string) error {
 	// Copy the file so the entry survives the caller's defer os.Remove.
 	data, err := os.ReadFile(tmpPath)
 	if err != nil {
@@ -40,9 +40,9 @@ func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJ
 	f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: dst.Name(), ScanClean: clean, ScanJSON: scanJSON}
 	return nil
 }
-func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error { delete(f.entries, ref.Key()); return nil }
-func (f *fakeCache) Stats() (cache.CacheStats, error)       { return cache.CacheStats{}, nil }
-func (f *fakeCache) Close() error                           { return nil }
+func (f *fakeCache) Invalidate(ref *gate.PackageRef) error { delete(f.entries, ref.Key()); return nil }
+func (f *fakeCache) Stats() (cache.CacheStats, error)      { return cache.CacheStats{}, nil }
+func (f *fakeCache) Close() error                          { return nil }
 
 func TestVerdictStoreBlobRoundTrip(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "layer")

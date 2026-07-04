@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // rubygemsVersion is one entry in the /api/v1/versions/<gem>.json array.
@@ -20,7 +20,7 @@ type rubygemsVersion struct {
 	SHA       string   `json:"sha"`
 }
 
-// RubyGemsAdapter implements proxy.RegistryAdapter for a RubyGems repository.
+// RubyGemsAdapter implements gate.RegistryAdapter for a RubyGems repository.
 type RubyGemsAdapter struct {
 	upstreams  []string
 	httpClient *http.Client
@@ -43,7 +43,7 @@ func (a *RubyGemsAdapter) Name() string { return "rubygems" }
 
 // NormalizeRequest intercepts gem downloads: /gems/<name>-<version>[-<platform>].gem.
 // API/index paths (/api/, /info/, /versions, /quick/, /specs*) are proxied transparently.
-func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, bool) {
+func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
 	path := r.URL.Path
 	if !strings.HasSuffix(path, ".gem") {
 		return nil, false
@@ -60,7 +60,7 @@ func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*proxy.PackageRef, 
 	if !ok {
 		return nil, false
 	}
-	return &proxy.PackageRef{Ecosystem: "rubygems", Name: name, Version: version}, true
+	return &gate.PackageRef{Ecosystem: "rubygems", Name: name, Version: version}, true
 }
 
 // parseGemFilename parses "<name>-<version>[-<platform>].gem". The version is the
@@ -104,7 +104,7 @@ func (a *RubyGemsAdapter) UpstreamURLs(r *http.Request) []string {
 
 // FetchMetadata walks the configured upstreams in order, returning the first
 // success. If all upstreams fail, the last error is returned.
-func (a *RubyGemsAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *RubyGemsAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	lastErr := fmt.Errorf("no upstreams configured for rubygems")
 	for _, base := range a.upstreams {
 		meta, err := a.fetchMetadataFrom(ctx, base, ref)
@@ -116,7 +116,7 @@ func (a *RubyGemsAdapter) FetchMetadata(ctx context.Context, ref *proxy.PackageR
 	return nil, lastErr
 }
 
-func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *proxy.PackageRef) (*proxy.PackageMetadata, error) {
+func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	number, platform := splitGemVersion(ref.Version)
 	apiURL := fmt.Sprintf("%s/api/v1/versions/%s.json", base, ref.Name)
 
@@ -144,7 +144,7 @@ func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, re
 			if err != nil {
 				return nil, fmt.Errorf("parsing rubygems created_at %q: %w", v.CreatedAt, err)
 			}
-			return &proxy.PackageMetadata{
+			return &gate.PackageMetadata{
 				PublishedAt: publishedAt.UTC(),
 				License:     strings.Join(v.Licenses, ", "),
 				Checksum:    v.SHA,

@@ -81,12 +81,12 @@ func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 	)
 	adapter := NewAdapter([]string{srvURL}, nil)
 	vstore := newVerdictStore(newFakeCache())
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
 		filter: filter, policy: findingPolicy{},
 		store: vstore, logger: zerolog.Nop(),
 	})
-	h := NewHandler(Config{Adapter: adapter, Gate: gate, Store: vstore, Recorder: store, Logger: zerolog.Nop()})
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: vstore, Recorder: store, Logger: zerolog.Nop()})
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+tag, nil))
@@ -131,12 +131,12 @@ func TestStaleCachedSupplyBlockIsReEvaluated(t *testing.T) {
 	vstore := newVerdictStore(newFakeCache())
 	seedStaleSupplyBlock(t, adapter, vstore, repo, tag)
 
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
 		filter: supplychain.NewFilter(config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24}, supplychain.NewAllowlist(nil)),
 		policy: findingPolicy{}, store: vstore, logger: zerolog.Nop(),
 	})
-	_, v, err := gate.Evaluate(t.Context(), repo, tag)
+	_, v, err := mgate.Evaluate(t.Context(), repo, tag)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -157,12 +157,12 @@ func TestStaleCachedSupplyBlockClearsAfterMaturity(t *testing.T) {
 	vstore := newVerdictStore(newFakeCache())
 	seedStaleSupplyBlock(t, adapter, vstore, repo, tag)
 
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
 		filter: supplychain.NewFilter(config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24}, supplychain.NewAllowlist(nil)),
 		policy: findingPolicy{}, store: vstore, logger: zerolog.Nop(),
 	})
-	_, v, err := gate.Evaluate(t.Context(), repo, tag)
+	_, v, err := mgate.Evaluate(t.Context(), repo, tag)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -247,12 +247,12 @@ func TestDockerMultiArchSupplyBlockReachesQuarantine(t *testing.T) {
 	adapter := NewAdapter([]string{srvURL}, nil)
 	vstore := newVerdictStore(newFakeCache())
 	tags := newTagIndex(0)
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
 		filter: filter, policy: findingPolicy{}, tags: tags,
 		store: vstore, logger: zerolog.Nop(),
 	})
-	h := NewHandler(Config{Adapter: adapter, Gate: gate, Store: vstore, Tags: tags, Recorder: store, Logger: zerolog.Nop()})
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: vstore, Tags: tags, Recorder: store, Logger: zerolog.Nop()})
 
 	// 1. Pull index by tag → passthrough (not recorded), populates digest→tag.
 	wIdx := httptest.NewRecorder()

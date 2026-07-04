@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // Config groups the Docker proxy handler dependencies.
@@ -20,7 +20,7 @@ type Config struct {
 	Gate     *manifestGate
 	Store    *verdictStore
 	Tags     *tagIndex
-	Recorder proxy.Recorder
+	Recorder gate.Recorder
 	Logger   zerolog.Logger
 }
 
@@ -55,7 +55,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
 	if err != nil {
 		log.Error().Err(err).Msg("docker gate error")
-		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
+		h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
 		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream or scan failure")
 		return
 	}
@@ -66,7 +66,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 
 	if !v.Allowed {
 		log.Warn().Str("reason", v.Reason).Str("blocked_by", v.BlockedBy).Msg("docker image blocked")
-		h.record(requestID, pp, proxy.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *proxy.Event) {
+		h.record(requestID, pp, gate.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *gate.Event) {
 			ev.BlockedBy = []string{v.BlockedBy}
 			ev.CVEs = v.Findings
 			ev.Version = displayVer
@@ -93,14 +93,14 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	}
 	// A repeat pull served from the cached gate decision is a CACHE event, not a
 	// fresh PASS, so the feed distinguishes re-pulls from first-time evaluations.
-	passVerdict, passGate, passReason := proxy.VerdictPass, proxy.GateImageScan, v.Reason
+	passVerdict, passGate, passReason := gate.VerdictPass, gate.GateImageScan, v.Reason
 	if v.FromCache {
-		passVerdict, passGate, passReason = proxy.VerdictCache, proxy.GateCache, "cache_hit"
+		passVerdict, passGate, passReason = gate.VerdictCache, gate.GateCache, "cache_hit"
 	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		if recordPass {
-			h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
+			h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
 		}
 		return
 	}
@@ -109,7 +109,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	f, err := os.Open(v.ManifestPath)
 	if err != nil {
 		log.Error().Err(err).Msg("opening cached manifest")
-		h.record(requestID, pp, proxy.VerdictError, proxy.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *proxy.Event) { ev.Version = displayVer })
+		h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *gate.Event) { ev.Version = displayVer })
 		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
 		return
 	}
@@ -121,7 +121,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		return
 	}
 	if recordPass {
-		h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *proxy.Event) { ev.Version = displayVer })
+		h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
 	}
 }
 
@@ -174,14 +174,14 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, code, msg string
 	})
 }
 
-func (h *Handler) record(requestID string, pp ParsedPath, verdict, gate, reason string, status int, start time.Time, mod func(*proxy.Event)) {
+func (h *Handler) record(requestID string, pp ParsedPath, verdict, gateName, reason string, status int, start time.Time, mod func(*gate.Event)) {
 	if h.cfg.Recorder == nil {
 		return
 	}
-	ev := proxy.Event{
+	ev := gate.Event{
 		RequestID: requestID, Time: time.Now(),
 		Ecosystem: "docker", Package: pp.Repo, Version: pp.Reference,
-		Verdict: verdict, Gate: gate, Reason: reason,
+		Verdict: verdict, Gate: gateName, Reason: reason,
 		HTTPStatus: status, LatencyMS: time.Since(start).Milliseconds(),
 	}
 	if mod != nil {
@@ -193,11 +193,11 @@ func (h *Handler) record(requestID string, pp ParsedPath, verdict, gate, reason 
 func gateForBlockedBy(by string) string {
 	switch by {
 	case "malware":
-		return proxy.GateMalware
+		return gate.GateMalware
 	case "supply_chain":
-		return proxy.GateSupply
+		return gate.GateSupply
 	default:
-		return proxy.GateImageScan
+		return gate.GateImageScan
 	}
 }
 
@@ -205,12 +205,12 @@ func gateForBlockedBy(by string) string {
 type HandlerDeps struct {
 	Upstreams     []string
 	Scanner       ImageScanner
-	AV            proxy.AVScanner
-	Filter        proxy.SCFilter
-	Policy        proxy.PolicyDecider
+	AV            gate.AVScanner
+	Filter        gate.SCFilter
+	Policy        gate.PolicyDecider
 	Cache         cache.Cache
 	MaxLayerBytes int64
-	Recorder      proxy.Recorder
+	Recorder      gate.Recorder
 	Logger        zerolog.Logger
 	// HTTPClient talks to the upstream registry. Optional; nil uses a private
 	// client with a 120s timeout. Pass a client whose transport caps per-host
@@ -223,10 +223,10 @@ func New(d HandlerDeps) http.Handler {
 	adapter := NewAdapter(d.Upstreams, d.HTTPClient)
 	store := newVerdictStore(d.Cache)
 	tags := newTagIndex(0)
-	gate := newManifestGate(gateDeps{
+	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: gate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger})
+	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger})
 }

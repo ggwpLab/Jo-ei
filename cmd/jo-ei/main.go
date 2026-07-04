@@ -18,6 +18,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
@@ -70,13 +71,13 @@ func main() {
 
 // sharedDeps groups dependencies shared across every per-registry handler.
 type sharedDeps struct {
-	filter     proxy.SCFilter
-	cache      proxy.ArtifactCache
+	filter     gate.SCFilter
+	cache      gate.ArtifactCache
 	logger     zerolog.Logger
-	cveScanner proxy.CVEScanner
-	policy     proxy.PolicyDecider
-	avScanner  proxy.AVScanner
-	recorder   proxy.Recorder
+	cveScanner gate.CVEScanner
+	policy     gate.PolicyDecider
+	avScanner  gate.AVScanner
+	recorder   gate.Recorder
 	// adapterClient fetches upstream metadata; downloadClient downloads artifacts
 	// and serves transparent proxy requests. Both share one per-host
 	// concurrency-limiting transport so all traffic to a registry counts against
@@ -226,10 +227,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
-	var avScanners []proxy.AVScanner
+	var avScanners []gate.AVScanner
 	engineCount := 0
 	if profile.MalwareBlock && len(cfg.Malware.Scanners) > 0 {
-		avScanners = make([]proxy.AVScanner, 0, len(cfg.Malware.Scanners))
+		avScanners = make([]gate.AVScanner, 0, len(cfg.Malware.Scanners))
 		for _, sc := range cfg.Malware.Scanners {
 			av, err := scanner.New(sc)
 			if err != nil {
@@ -446,7 +447,7 @@ func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Hand
 
 // buildHandler constructs a proxy.Handler for one registry adapter with the
 // shared dependency set.
-func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handler {
+func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapter,
 		Filter:     shared.filter,
@@ -460,27 +461,27 @@ func buildHandler(adapter proxy.RegistryAdapter, shared sharedDeps) *proxy.Handl
 	})
 }
 
-// cacheAdapter bridges cache.Cache to the proxy.ArtifactCache interface.
+// cacheAdapter bridges cache.Cache to the gate.ArtifactCache interface.
 type cacheAdapter struct {
 	c cache.Cache
 }
 
-func (a *cacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
+func (a *cacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	entry, found := a.c.Get(ref)
 	if !found {
 		return nil, false
 	}
-	return &proxy.ArtifactEntry{
+	return &gate.ArtifactEntry{
 		ArtifactPath: entry.ArtifactPath,
 		ScanClean:    entry.ScanClean,
 	}, true
 }
 
-func (a *cacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
+func (a *cacheAdapter) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
 	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
 }
 
-func (a *cacheAdapter) Invalidate(ref *proxy.PackageRef) error {
+func (a *cacheAdapter) Invalidate(ref *gate.PackageRef) error {
 	return a.c.Invalidate(ref)
 }
 

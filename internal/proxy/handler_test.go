@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
@@ -158,19 +159,19 @@ func TestHandler_MavenSupplyChainFromDownloadNoHead(t *testing.T) {
 // Put copies the artifact to its own temp file so the entry survives
 // the handler's defer os.Remove(tmpPath) after the first request.
 type fakeCache struct {
-	entries map[string]*proxy.ArtifactEntry
+	entries map[string]*gate.ArtifactEntry
 }
 
 func newFakeCache() *fakeCache {
-	return &fakeCache{entries: map[string]*proxy.ArtifactEntry{}}
+	return &fakeCache{entries: map[string]*gate.ArtifactEntry{}}
 }
 
-func (f *fakeCache) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
+func (f *fakeCache) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	e, ok := f.entries[ref.Key()]
 	return e, ok
 }
 
-func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
+func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJSON string) error {
 	// Copy the artifact to a new temp file so the entry persists independently
 	// of the handler's defer os.Remove(tmpPath).
 	src, err := os.Open(tmpPath)
@@ -190,11 +191,11 @@ func (f *fakeCache) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJ
 		return err
 	}
 
-	f.entries[ref.Key()] = &proxy.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean}
+	f.entries[ref.Key()] = &gate.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean}
 	return nil
 }
 
-func (f *fakeCache) Invalidate(ref *proxy.PackageRef) error {
+func (f *fakeCache) Invalidate(ref *gate.PackageRef) error {
 	if e, ok := f.entries[ref.Key()]; ok {
 		os.Remove(e.ArtifactPath)
 	}
@@ -379,24 +380,24 @@ func TestHandler_MetadataFailureReturns502(t *testing.T) {
 // ─── mock CVE scanner / policy decider ────────────────────────────────────
 
 type mockScanner struct {
-	result *proxy.ScanResult
+	result *gate.ScanResult
 	err    error
 }
 
-func (m *mockScanner) Scan(_ context.Context, _ *proxy.PackageRef) (*proxy.ScanResult, error) {
+func (m *mockScanner) Scan(_ context.Context, _ *gate.PackageRef) (*gate.ScanResult, error) {
 	return m.result, m.err
 }
 
 type mockPolicy struct {
-	decision proxy.PolicyDecision
+	decision gate.PolicyDecision
 }
 
-func (m *mockPolicy) Evaluate(_ *proxy.PackageRef, _ *proxy.ScanResult) proxy.PolicyDecision {
+func (m *mockPolicy) Evaluate(_ *gate.PackageRef, _ *gate.ScanResult) gate.PolicyDecision {
 	return m.decision
 }
 
 // setupTestProxyCVE creates a proxy handler with CVE scanner and policy decider wired in.
-func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc proxy.CVEScanner, pol proxy.PolicyDecider) *httptest.Server {
+func setupTestProxyCVE(t *testing.T, upstream *httptest.Server, sc gate.CVEScanner, pol gate.PolicyDecider) *httptest.Server {
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
@@ -414,14 +415,14 @@ func TestHandler_CVEFoundReturns403(t *testing.T) {
 	upstream := makeUpstream(t, "requests", "2.28.0", 48)
 	defer upstream.Close()
 
-	sc := &mockScanner{result: &proxy.ScanResult{
+	sc := &mockScanner{result: &gate.ScanResult{
 		Clean:    false,
-		Findings: []proxy.CVEFinding{{ID: "CVE-2024-001", Severity: proxy.SeverityHigh, Summary: "RCE"}},
+		Findings: []gate.CVEFinding{{ID: "CVE-2024-001", Severity: gate.SeverityHigh, Summary: "RCE"}},
 	}}
-	pol := &mockPolicy{decision: proxy.PolicyDecision{
+	pol := &mockPolicy{decision: gate.PolicyDecision{
 		Allowed:  false,
 		Reason:   "cve_found",
-		Findings: []proxy.CVEFinding{{ID: "CVE-2024-001", Severity: proxy.SeverityHigh, Summary: "RCE"}},
+		Findings: []gate.CVEFinding{{ID: "CVE-2024-001", Severity: gate.SeverityHigh, Summary: "RCE"}},
 	}}
 
 	srv := setupTestProxyCVE(t, upstream, sc, pol)
@@ -472,16 +473,16 @@ func TestHandler_CVEScannerErrorFailsClosed(t *testing.T) {
 // ─── mock AV scanner ──────────────────────────────────────────────────────
 
 type mockAVScanner struct {
-	result *proxy.AVResult
+	result *gate.AVResult
 	err    error
 }
 
-func (m *mockAVScanner) Scan(_ context.Context, _ string) (*proxy.AVResult, error) {
+func (m *mockAVScanner) Scan(_ context.Context, _ string) (*gate.AVResult, error) {
 	return m.result, m.err
 }
 
 // setupTestProxyAV wires an AV scanner into the handler (no CVE scanner).
-func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av proxy.AVScanner) *httptest.Server {
+func setupTestProxyAV(t *testing.T, upstream *httptest.Server, av gate.AVScanner) *httptest.Server {
 	t.Helper()
 	filter := supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil)
 	handler := proxy.NewHandler(proxy.HandlerConfig{
@@ -498,7 +499,7 @@ func TestHandler_MalwareReturns403(t *testing.T) {
 	upstream := makeUpstream(t, "evil-pkg", "1.0.0", 48)
 	defer upstream.Close()
 
-	av := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "clamav"}}
+	av := &mockAVScanner{result: &gate.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "clamav"}}
 	srv := setupTestProxyAV(t, upstream, av)
 	defer srv.Close()
 
@@ -533,7 +534,7 @@ func TestHandler_CleanArtifactPassesAV(t *testing.T) {
 	upstream := makeUpstream(t, "safe-pkg", "1.0.0", 48)
 	defer upstream.Close()
 
-	av := &mockAVScanner{result: &proxy.AVResult{Clean: true}}
+	av := &mockAVScanner{result: &gate.AVResult{Clean: true}}
 	srv := setupTestProxyAV(t, upstream, av)
 	defer srv.Close()
 
@@ -549,8 +550,8 @@ func TestHandler_MultiScannerReportsDetectingEngine(t *testing.T) {
 
 	// First engine clean, second detects — verify the handler surfaces the
 	// detecting engine end-to-end through a real MultiScanner.
-	cleanEngine := &mockAVScanner{result: &proxy.AVResult{Clean: true, Engine: "clamav"}}
-	infectedEngine := &mockAVScanner{result: &proxy.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "icap"}}
+	cleanEngine := &mockAVScanner{result: &gate.AVResult{Clean: true, Engine: "clamav"}}
+	infectedEngine := &mockAVScanner{result: &gate.AVResult{Clean: false, Signature: "Win.Test.EICAR", Engine: "icap"}}
 	multi := scanner.NewMultiScanner(cleanEngine, infectedEngine)
 
 	srv := setupTestProxyAV(t, upstream, multi)

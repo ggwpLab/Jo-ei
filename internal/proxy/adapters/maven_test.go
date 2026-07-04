@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 )
 
@@ -105,7 +105,7 @@ func TestMavenAdapter_MetadataFromHeader_NoLastModifiedYieldsZeroTime(t *testing
 // never make a network call.
 func TestMavenAdapter_FetchMetadata_IsNoOp(t *testing.T) {
 	a := adapters.NewMavenAdapter([]string{"http://127.0.0.1:0"}) // unreachable: proves no call
-	ref := &proxy.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
+	ref := &gate.PackageRef{Ecosystem: "maven", Name: "com.google.guava:guava", Version: "31.0.1-jre"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.True(t, meta.PublishedAt.IsZero())

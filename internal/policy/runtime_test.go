@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
 func newRuntime(t *testing.T, fileAllow []string) *policy.Runtime {
@@ -24,18 +24,18 @@ func newRuntime(t *testing.T, fileAllow []string) *policy.Runtime {
 	)
 }
 
-func freshMeta() *proxy.PackageMetadata {
-	return &proxy.PackageMetadata{PublishedAt: time.Now().Add(-1 * time.Hour)}
+func freshMeta() *gate.PackageMetadata {
+	return &gate.PackageMetadata{PublishedAt: time.Now().Add(-1 * time.Hour)}
 }
 
 // rtRef reuses the ref(eco, name, ver) helper already defined in
 // engine_test.go (same package policy_test) — do not redeclare ref here.
-func rtRef() *proxy.PackageRef {
+func rtRef() *gate.PackageRef {
 	return ref("pypi", "requests", "2.31.0")
 }
 
-func highFinding() *proxy.ScanResult {
-	return &proxy.ScanResult{Findings: []proxy.CVEFinding{{ID: "CVE-1", Severity: proxy.SeverityHigh}}}
+func highFinding() *gate.ScanResult {
+	return &gate.ScanResult{Findings: []gate.CVEFinding{{ID: "CVE-1", Severity: gate.SeverityHigh}}}
 }
 
 func TestRuntimeBootFromConfig(t *testing.T) {
@@ -86,7 +86,7 @@ func TestRuntimeApplyDenylist(t *testing.T) {
 	p.Denylist = []string{"pypi/requests"}
 	require.NoError(t, r.Apply(p))
 
-	d := r.Evaluate(rtRef(), &proxy.ScanResult{Clean: true})
+	d := r.Evaluate(rtRef(), &gate.ScanResult{Clean: true})
 	assert.False(t, d.Allowed)
 	assert.Equal(t, "denylisted", d.Reason)
 }

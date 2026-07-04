@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 )
 
@@ -73,7 +73,7 @@ func TestRubyGemsAdapter_FetchMetadata_RubyPlatform(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewRubyGemsAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
+	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
@@ -92,7 +92,7 @@ func TestRubyGemsAdapter_FetchMetadata_MatchesPlatform(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewRubyGemsAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "nokogiri", Version: "1.15.0-x86_64-linux"}
+	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "nokogiri", Version: "1.15.0-x86_64-linux"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "linuxsha", meta.Checksum)
@@ -111,7 +111,7 @@ func TestRubyGemsAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	defer up.Close()
 
 	a := adapters.NewRubyGemsAdapter([]string{down.URL, up.URL})
-	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
+	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "abc123", meta.Checksum)
@@ -124,7 +124,7 @@ func TestRubyGemsAdapter_FetchMetadata_VersionNotFound(t *testing.T) {
 	defer srv.Close()
 
 	a := adapters.NewRubyGemsAdapter([]string{srv.URL})
-	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
+	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	_, err := a.FetchMetadata(context.Background(), ref)
 	require.Error(t, err)
 }
@@ -143,7 +143,7 @@ func TestRubyGemsAdapter_FetchMetadata_FallsBackWhenVersionAbsent(t *testing.T) 
 	defer second.Close()
 
 	a := adapters.NewRubyGemsAdapter([]string{first.URL, second.URL})
-	ref := &proxy.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
+	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "newsha", meta.Checksum)

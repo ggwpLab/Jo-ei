@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
@@ -27,8 +27,8 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 		require.NoError(t, err)
 		s, err := telemetry.Open(db, 30, 365, zerolog.Nop())
 		require.NoError(t, err)
-		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictCache, Gate: proxy.GateCache})
-		s.Record(proxy.Event{Time: now, Verdict: proxy.VerdictBlock, Gate: proxy.GateSupply,
+		s.Record(gate.Event{Time: now, Verdict: gate.VerdictCache, Gate: gate.GateCache})
+		s.Record(gate.Event{Time: now, Verdict: gate.VerdictBlock, Gate: gate.GateSupply,
 			Reason: "package_younger_than_min_age", Ecosystem: "npm", Package: "p", Version: "1",
 			BlockUntil: now.Add(time.Hour)})
 		require.NoError(t, s.Close())

@@ -15,27 +15,28 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 )
 
-// localCacheAdapter bridges cache.LocalCache to proxy.ArtifactCache for tests.
+// localCacheAdapter bridges cache.LocalCache to gate.ArtifactCache for tests.
 type localCacheAdapter struct {
 	lc *cache.LocalCache
 }
 
-func (a *localCacheAdapter) Get(ref *proxy.PackageRef) (*proxy.ArtifactEntry, bool) {
+func (a *localCacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	entry, found := a.lc.Get(ref)
 	if !found {
 		return nil, false
 	}
-	return &proxy.ArtifactEntry{ArtifactPath: entry.ArtifactPath, ScanClean: entry.ScanClean}, true
+	return &gate.ArtifactEntry{ArtifactPath: entry.ArtifactPath, ScanClean: entry.ScanClean}, true
 }
-func (a *localCacheAdapter) Put(ref *proxy.PackageRef, tmpPath string, clean bool, scanJSON string) error {
+func (a *localCacheAdapter) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJSON string) error {
 	return a.lc.Put(ref, tmpPath, clean, scanJSON)
 }
-func (a *localCacheAdapter) Invalidate(ref *proxy.PackageRef) error {
+func (a *localCacheAdapter) Invalidate(ref *gate.PackageRef) error {
 	return a.lc.Invalidate(ref)
 }
 

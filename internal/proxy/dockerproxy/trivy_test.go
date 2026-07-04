@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 const trivyJSONFixture = `{
@@ -36,7 +36,7 @@ func TestTrivyScannerParsesFindings(t *testing.T) {
 	if len(res.Findings) != 2 {
 		t.Fatalf("findings = %d, want 2", len(res.Findings))
 	}
-	if res.Findings[0].ID != "CVE-2021-1" || res.Findings[0].Severity != proxy.SeverityHigh {
+	if res.Findings[0].ID != "CVE-2021-1" || res.Findings[0].Severity != gate.SeverityHigh {
 		t.Errorf("finding[0] = %+v", res.Findings[0])
 	}
 	if !s.Health().OK || !s.Health().HasData {

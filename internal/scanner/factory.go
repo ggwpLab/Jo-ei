@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
-	"github.com/ggwpLab/Jo-ei/internal/proxy"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // New builds an AV scanner from its config. Unknown types are an error.
-func New(cfg config.ScannerConfig) (proxy.AVScanner, error) {
+func New(cfg config.ScannerConfig) (gate.AVScanner, error) {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	switch cfg.Type {
 	case "clamav":
