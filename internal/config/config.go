@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -250,11 +251,15 @@ type LoggingConfig struct {
 }
 
 // Load reads a YAML config file and returns a Config.
-// Environment variables prefixed with JOEI_ override file values.
+// Environment variables prefixed with JOEI_ override file values: the variable
+// name is the config key path with dots replaced by underscores, e.g.
+// JOEI_LOGGING_LEVEL overrides logging.level and JOEI_CVE_BLOCK_ON overrides
+// cve.block_on. Only keys present in the file can be overridden.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetEnvPrefix("JOEI")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {

@@ -441,3 +441,33 @@ func TestValidate_RejectsNegativeRevalidation(t *testing.T) {
 	c2.Cache.Revalidation.BatchSize = -5
 	require.Error(t, c2.Validate())
 }
+
+func TestLoad_EnvOverridesFileValues(t *testing.T) {
+	yaml := `
+server:
+  listen: ":8080"
+supply_chain:
+  min_age_hours: 24
+  mode: "enforce"
+cve:
+  enabled: true
+  block_on: "HIGH"
+logging:
+  level: "info"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`
+	f := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(f, []byte(yaml), 0o644))
+
+	// Env var name = key path, dots replaced by underscores, JOEI_ prefix.
+	t.Setenv("JOEI_LOGGING_LEVEL", "debug")
+	t.Setenv("JOEI_CVE_BLOCK_ON", "CRITICAL")
+	t.Setenv("JOEI_SUPPLY_CHAIN_MIN_AGE_HOURS", "48")
+
+	cfg, err := config.Load(f)
+	require.NoError(t, err)
+	assert.Equal(t, "debug", cfg.Logging.Level)
+	assert.Equal(t, "CRITICAL", cfg.CVE.BlockOn)
+	assert.Equal(t, 48, cfg.SupplyChain.MinAgeHours)
+}
