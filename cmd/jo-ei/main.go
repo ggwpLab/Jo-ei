@@ -222,7 +222,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	if !cfg.CVE.Enabled {
-		logger.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on and denylist have no effect (supply-chain mode/min-age/allowlist still apply)")
+		logger.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on, allowlist_cve and denylist have no effect (supply-chain mode/min-age/allowlist_supply still apply)")
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
@@ -493,15 +493,15 @@ func (p policySettingsStore) LoadPolicy() (policy.RuntimeParams, bool, error) {
 	if err != nil || !ok {
 		return policy.RuntimeParams{}, ok, err
 	}
-	var rp policy.RuntimeParams
-	if err := json.Unmarshal(b, &rp); err != nil {
+	rp, err := policy.DecodeStored(b)
+	if err != nil {
 		return policy.RuntimeParams{}, false, fmt.Errorf("decoding stored policy: %w", err)
 	}
 	return rp, true, nil
 }
 
 func (p policySettingsStore) SavePolicy(rp policy.RuntimeParams) error {
-	b, err := json.Marshal(rp)
+	b, err := policy.EncodeStored(rp)
 	if err != nil {
 		return err
 	}

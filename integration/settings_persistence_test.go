@@ -25,13 +25,12 @@ func (p policyStore) LoadPolicy() (policy.RuntimeParams, bool, error) {
 	if err != nil || !ok {
 		return policy.RuntimeParams{}, ok, err
 	}
-	var rp policy.RuntimeParams
-	uerr := json.Unmarshal(b, &rp)
-	return rp, true, uerr
+	rp, derr := policy.DecodeStored(b)
+	return rp, true, derr
 }
 
 func (p policyStore) SavePolicy(rp policy.RuntimeParams) error {
-	b, err := json.Marshal(rp)
+	b, err := policy.EncodeStored(rp)
 	if err != nil {
 		return err
 	}
@@ -59,6 +58,9 @@ func TestPolicyPersistsAcrossRestart(t *testing.T) {
 		p.Mode = "dry_run"
 		p.MinAgeHours = 0
 		require.NoError(t, r.Apply(p))
+
+		// Simulate a pre-split row: single "allowlist" key.
+		require.NoError(t, st.Put("policy", []byte(`{"mode":"dry_run","min_age_hours":0,"cve_block_on":"CRITICAL","allowlist":["pypi/requests@2.31.0"],"denylist":[]}`)))
 		require.NoError(t, db.Close())
 	}
 
@@ -73,6 +75,8 @@ func TestPolicyPersistsAcrossRestart(t *testing.T) {
 
 	assert.Equal(t, "dry_run", r.Current().Mode, "edited mode restored from DB, not YAML")
 	assert.Equal(t, 0, r.Current().MinAgeHours)
+	assert.Equal(t, []string{"pypi/requests@2.31.0"}, r.Current().AllowlistSupply, "legacy allowlist migrated to supply list")
+	assert.Equal(t, []string{"pypi/requests@2.31.0"}, r.Current().AllowlistCVE, "legacy allowlist migrated to cve list")
 }
 
 func TestRegistriesPersistAcrossRestart(t *testing.T) {
