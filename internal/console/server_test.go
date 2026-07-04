@@ -226,14 +226,14 @@ func TestPolicyGetAndPut(t *testing.T) {
 	defer roundTrip.Body.Close()
 	require.Equal(t, http.StatusOK, roundTrip.StatusCode, "GET→PUT round-trip must succeed when persistence field is present")
 
-	resp := put(`{"mode":"dry_run","min_age_hours":48,"cve_block_on":"CRITICAL","allowlist_supply":["pypi/requests"],"allowlist_cve":[],"denylist":[]}`)
+	resp := put(`{"mode":"dry_run","min_age_hours":48,"cve_block_on":"CRITICAL","allowlist_supply":["pypi/requests"],"allowlist_cve":["npm/left-pad"],"denylist":[]}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pol))
 	assert.Equal(t, "dry_run", pol.Mode)
 	assert.Equal(t, 48, pol.MinAgeHours)
 	assert.Equal(t, []string{"pypi/requests"}, pol.AllowlistSupply)
-	assert.Equal(t, []string{}, pol.AllowlistCVE)
+	assert.Equal(t, []string{"npm/left-pad"}, pol.AllowlistCVE)
 	assert.Equal(t, "dry_run", f.runtime.Current().Mode, "runtime actually swapped")
 
 	resp = put(`{"mode":"yolo","min_age_hours":1,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`)
