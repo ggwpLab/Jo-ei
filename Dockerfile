@@ -1,5 +1,5 @@
 # Trivy CLI for the Docker registry image scanner (client/server mode).
-FROM aquasec/trivy:0.71.2 AS trivy
+FROM aquasec/trivy:0.72.0 AS trivy
 
 # Build stage
 FROM golang:1.26-alpine AS builder
