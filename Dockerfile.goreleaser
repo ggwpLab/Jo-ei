@@ -2,11 +2,11 @@
 # in the build context. Mirrors the from-source Dockerfile's runtime stage.
 
 # Trivy CLI for the Docker registry image scanner (client/server mode).
-FROM aquasec/trivy:0.71.2 AS trivy
+FROM aquasec/trivy:0.72.0 AS trivy
 
 # Stage the cache and database dirs so their runtime mount points are owned by
 # the nonroot user (UID 65532); distroless has no shell to create them.
-FROM busybox:1.37 AS dirs
+FROM busybox:1.38 AS dirs
 RUN mkdir -p /cache /db && chown 65532:65532 /cache /db
 
 FROM gcr.io/distroless/static:nonroot
