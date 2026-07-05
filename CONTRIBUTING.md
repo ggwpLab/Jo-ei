@@ -92,6 +92,23 @@ unused, ineffassign, errcheck, misspell, goimports).
 - [ ] `go generate ./...` produces no diff (if you touched the console)
 - [ ] Commits follow Conventional Commits
 
+## Release Process (maintainers)
+
+GitHub release notes are taken verbatim from `CHANGELOG.md`. The release
+workflow fails — before anything is built or published — if the tagged
+version has no non-empty section there.
+
+1. Move the content of `## [Unreleased]` into a new
+   `## [X.Y.Z] - YYYY-MM-DD` section. Keep `[Unreleased]` in place, empty.
+2. Update the link references at the bottom of `CHANGELOG.md`: point
+   `[Unreleased]` at `compare/vX.Y.Z...HEAD` and add the `[X.Y.Z]` link.
+3. Optional dry run: `sh scripts/release-notes.sh X.Y.Z` prints exactly
+   what the GitHub release body will be.
+4. Land the changelog update on `main` through the normal PR flow.
+5. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The Release
+   workflow builds the binaries, publishes the Docker images, and creates
+   the GitHub release with the extracted notes.
+
 ## Reporting Issues
 
 - **Bugs / feature requests** — use the issue templates.
