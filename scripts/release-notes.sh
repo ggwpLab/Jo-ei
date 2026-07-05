@@ -10,6 +10,8 @@ set -eu
 version="${1:?usage: release-notes.sh VERSION [CHANGELOG_PATH]}"
 changelog="${2:-CHANGELOG.md}"
 
+[ -f "$changelog" ] || { echo "release-notes.sh: $changelog not found" >&2; exit 1; }
+
 # index() (not a regex) so dots in the version are literal.
 # A section ends at the next "## " heading or the link-reference block.
 status=0

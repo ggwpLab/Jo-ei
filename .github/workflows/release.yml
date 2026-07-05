@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # goreleaser needs tags and history for the changelog
+          fetch-depth: 0 # full history and tags for goreleaser version detection
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
