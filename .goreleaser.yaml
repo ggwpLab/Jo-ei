@@ -37,23 +37,10 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Release notes come from CHANGELOG.md, extracted by scripts/release-notes.sh
+# and passed with --release-notes in the release workflow.
 changelog:
-  sort: asc
-  groups:
-    - title: Features
-      regexp: '^feat(\(.*\))?!?:'
-      order: 0
-    - title: Bug fixes
-      regexp: '^fix(\(.*\))?!?:'
-      order: 1
-    - title: Other
-      order: 999
-  filters:
-    exclude:
-      - '^docs'
-      - '^test'
-      - '^chore'
-      - '^ci'
+  disable: true
 
 dockers:
   - id: amd64
@@ -101,6 +88,3 @@ docker_manifests:
       - ghcr.io/ggwplab/jo-ei:{{ .Version }}-amd64
       - ghcr.io/ggwplab/jo-ei:{{ .Version }}-arm64
 
-release:
-  footer: |
-    **Docker image:** `docker pull ghcr.io/ggwplab/jo-ei:{{ .Version }}`
