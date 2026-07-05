@@ -20,6 +20,8 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-ed:"; echo "$unformatted"; exit 1
           fi
+      - name: Release-notes script tests
+        run: sh scripts/release-notes_test.sh
       - name: Verify console bundle is up to date
         run: |
           go generate ./...
