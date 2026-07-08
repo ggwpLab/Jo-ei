@@ -88,12 +88,49 @@ index-url = http://localhost:8080/pypi/simple/
 trusted-host = localhost
 ```
 
-npm:
+**Maven**:
+Add Jōei mirror for your repositories, configured on either project `pom.xml`:
+```xml
+<project>
+  ...
+  <repositories>
+    <repository>
+      <id>central</id>
+      <url>http://localhost:8080/maven/</url>
+    </repository>
+  </repositories>
+
+  <pluginRepositories>
+    <pluginRepository>
+      <id>central</id>
+      <url>http://localhost:8080/maven/</url>
+    </pluginRepository>
+  </pluginRepositories>
+</project>
+```
+or global level (`~/.m2/settings.xml`):
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0
+                              https://maven.apache.org/xsd/settings-1.2.0.xsd">
+   <mirrors>
+      <mirror>
+         <id>jo-ei</id>
+         <name>Jōei supply-chain proxy</name>
+         <url>http://localhost:8080/maven/</url>
+         <mirrorOf>central</mirrorOf>
+      </mirror>
+   </mirrors>
+</settings>
+```
+
+**npm**:
 ```bash
 npm install lodash --registry http://localhost:8080/npm/
 ```
 
-Or persist it:
+Or persist it globally:
 ```bash
 npm config set registry http://localhost:8080/npm/
 ```
