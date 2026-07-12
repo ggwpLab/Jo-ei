@@ -257,6 +257,15 @@ func (idx *Index) TotalSizeBytes() (int64, error) {
 	return total, err
 }
 
+// ExpiredSizeBytes returns the sum of size_bytes for entries past their TTL.
+// Expired entries are dropped on access, so this is the reclaimable portion.
+func (idx *Index) ExpiredSizeBytes() (int64, error) {
+	var total int64
+	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE expires_at < ?`,
+		time.Now().Unix()).Scan(&total)
+	return total, err
+}
+
 // Count returns the total number of entries in the index.
 func (idx *Index) Count() (int64, error) {
 	var n int64

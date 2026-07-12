@@ -63,6 +63,10 @@ function Registries({ notify }) {
   useJoeiData();
   const c = JOEI.cache;
   const usedPct = c.max_gb > 0 ? Math.min(100, (c.used_gb / c.max_gb) * 100) : 0;
+  // Expired entries are part of used space; hatch that slice — it is what
+  // would actually be reclaimed (expired entries drop on access).
+  const expiredPct = c.max_gb > 0 ? Math.min(usedPct, (c.expired_gb / c.max_gb) * 100) : 0;
+  const livePct = usedPct - expiredPct;
 
   // Per-day request-level hit rate, same series the Overview uses. Spark
   // breaks on <2 points, so pass undefined and render number-only below.
@@ -156,14 +160,18 @@ function Registries({ notify }) {
           )}
         </div>
         <div className="cache-meter">
-          <i className="used" style={{ width: usedPct + "%" }}></i>
-          {c.max_gb > 0 && <i className="evict" style={{ width: (100 - usedPct) + "%" }}></i>}
+          <i className="used" style={{ width: livePct + "%" }}></i>
+          {expiredPct > 0 && <i className="evict" style={{ width: expiredPct + "%" }}></i>}
         </div>
         <div className="row" style={{ marginTop: 12, gap: 28, fontSize: 12.5 }}>
           <span className="muted">Objects <b className="mono" style={{ color: "var(--washi)" }}>{c.objects}</b></span>
           <span className="muted">Hit rate · total <b className="mono" style={{ color: "var(--jade-l)" }}>{(c.hit_rate * 100).toFixed(1)}%</b></span>
           <span className="muted">LRU evictions · since restart <b className="mono" style={{ color: "var(--gold-l)" }}>{fmtNum(c.evictions)}</b></span>
-          {c.max_gb > 0 && <span className="muted right" style={{ fontSize: 11 }}>⟍ eviction headroom</span>}
+          {expiredPct > 0 && (
+            <span className="muted right" style={{ fontSize: 11 }}>
+              <i className="legend-chip"></i>reclaimable · expired <b className="mono">{c.expired_gb} GB</b>
+            </span>
+          )}
         </div>
       </div>
 

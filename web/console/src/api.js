@@ -39,7 +39,7 @@
     },
     registries: [],
     registriesPending: false, registriesWarnings: [],
-    cache: { used_gb: 0, max_gb: 0, objects: "0", hit_rate: 0, evictions: 0 },
+    cache: { used_gb: 0, max_gb: 0, expired_gb: 0, objects: "0", hit_rate: 0, evictions: 0 },
     kpis: {
       requests_total: 0, cache_hits: 0, hit_rate: 0, blocked_total: 0, errors: 0,
       supply_blocked: 0, cve_blocked: 0, malware_blocked: 0, denylisted: 0,
@@ -101,6 +101,7 @@
     J.cache = {
       used_gb: +(o.cache.size_bytes / GB).toFixed(2),
       max_gb: Math.round(o.cache.max_bytes / GB),
+      expired_gb: +((o.cache.expired_bytes || 0) / GB).toFixed(2),
       objects: Number(o.cache.objects).toLocaleString("en-US"),
       hit_rate: o.cache.hit_rate,
       evictions: o.cache.evictions,

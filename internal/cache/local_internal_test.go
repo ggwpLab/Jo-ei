@@ -108,6 +108,28 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	require.Less(t, after, before)
 }
 
+func TestLocalCache_StatsReportsExpiredBytes(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	fresh := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(fresh, writeTemp(t, "fresh-data"), true, ""))
+
+	// Insert an already-expired entry directly; Put always applies cfg.TTL.
+	expired := &gate.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
+	require.NoError(t, lc.index.Insert(expired, &CacheEntry{
+		ArtifactPath: filepath.Join(lc.cfg.RootPath, "gone.bin"),
+		StoredAt:     time.Now().UTC().Add(-2 * time.Hour),
+		ExpiresAt:    time.Now().UTC().Add(-time.Hour),
+		SizeBytes:    123,
+	}))
+
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(123), stats.ExpiredBytes, "only the expired entry's bytes are reclaimable")
+}
+
 func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
 	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
 	require.NoError(t, err)

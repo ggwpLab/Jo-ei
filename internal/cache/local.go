@@ -145,7 +145,11 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	if err != nil {
 		return CacheStats{}, err
 	}
-	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load()}, nil
+	expired, err := lc.index.ExpiredSizeBytes()
+	if err != nil {
+		return CacheStats{}, err
+	}
+	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load(), ExpiredBytes: expired}, nil
 }
 
 // evictWorker drains eviction triggers until the channel is closed.

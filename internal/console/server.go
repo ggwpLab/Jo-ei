@@ -164,11 +164,12 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 		// LocalCache.Stats does not track per-object hits; the request-level
 		// rate (cache_hits/requests) is the meaningful cache hit rate here.
 		"cache": map[string]any{
-			"objects":    cs.Entries,
-			"size_bytes": cs.SizeBytes,
-			"max_bytes":  s.cfg.CacheMaxBytes,
-			"hit_rate":   hitRate,
-			"evictions":  cs.Evictions,
+			"objects":       cs.Entries,
+			"size_bytes":    cs.SizeBytes,
+			"max_bytes":     s.cfg.CacheMaxBytes,
+			"hit_rate":      hitRate,
+			"evictions":     cs.Evictions,
+			"expired_bytes": cs.ExpiredBytes,
 		},
 		"scanners": scanners,
 	})

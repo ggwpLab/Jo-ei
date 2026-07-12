@@ -64,10 +64,20 @@
   - Guard: render the sparkline only when the series has ≥ 2 points (`Spark`
     breaks on fewer — same guard the Overview uses). With < 2 points the card
     header renders as it does today.
-- **Eviction headroom**: style the unused remainder of `.cache-meter` as a
-  hatched segment (CSS `repeating-linear-gradient`, no new color tokens) and
-  add a small `⟍ eviction headroom` caption on the meter row's right edge,
-  matching the mock. Pure CSS + one caption element; no behavior.
+- **Reclaimable (expired) segment** *(amended 2026-07-12 after review of the
+  first iteration — the original "headroom = all free space" hatch was
+  misleading, and the bare `⟍` glyph read as a stray backslash)*: the hatched
+  segment shows the **expired slice of used space** — entries past their TTL,
+  which are dropped on access, i.e. the bytes that would actually be
+  reclaimed. Meter: solid jade = live bytes, hatch = expired bytes, dark =
+  free. The caption becomes a legend entry: a small `.legend-chip` square
+  filled with the same hatch pattern, followed by
+  `reclaimable · expired {n} GB`. Segment and caption render only when
+  expired bytes > 0.
+  - Backend: `Index.ExpiredSizeBytes()` (`SUM(size_bytes) WHERE expires_at <
+    now`), `CacheStats.ExpiredBytes`, and an `expired_bytes` field in the
+    `/api/overview` cache envelope (additive only). `api.js` maps it to
+    `JOEI.cache.expired_gb`.
 
 ### D. Build & workflow
 
@@ -103,5 +113,6 @@
 - `web/console/app.bundle.js` — regenerated
 - `CHANGELOG.md` — Unreleased entries
 
-Backend API shape is unchanged (the `evictions` field finally carries a real
-value). No schema migrations, no new endpoints.
+Backend API shape: one additive field (`cache.expired_bytes` in
+`/api/overview`); the `evictions` field finally carries a real value. No
+schema migrations, no new endpoints.

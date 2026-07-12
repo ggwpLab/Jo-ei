@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Console: lifetime counters are labeled "total" instead of "since start" —
   they persist in SQLite and survive restarts.
-- Console: the local-cache card shows a 30-day hit-rate sparkline and an
-  eviction-headroom treatment on the usage meter.
+- Console: the local-cache card shows a 30-day hit-rate sparkline, and the
+  usage meter marks the reclaimable (TTL-expired) slice of used space with a
+  hatched segment and legend.
 
 ### Fixed
 

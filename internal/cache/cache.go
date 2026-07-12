@@ -32,6 +32,9 @@ type CacheStats struct {
 	SizeBytes int64
 	HitRatio  float64
 	Evictions int64
+	// ExpiredBytes is the total size of entries past their TTL — reclaimable
+	// space, since expired entries are dropped on access.
+	ExpiredBytes int64
 }
 
 // Cache is the storage interface for package artifacts and scan results.
