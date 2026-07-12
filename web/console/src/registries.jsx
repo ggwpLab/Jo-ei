@@ -64,6 +64,12 @@ function Registries({ notify }) {
   const c = JOEI.cache;
   const usedPct = c.max_gb > 0 ? Math.min(100, (c.used_gb / c.max_gb) * 100) : 0;
 
+  // Per-day request-level hit rate, same series the Overview uses. Spark
+  // breaks on <2 points, so pass undefined and render number-only below.
+  const hitSpark = JOEI.daily.length >= 2
+    ? JOEI.daily.map((r) => (r.requests ? r.cache_hits / r.requests : 0))
+    : undefined;
+
   // Normalize to all five ecosystems in canonical order for editing.
   const initial = () => REG_ECOS.map((eco) => {
     const found = JOEI.registries.find((r) => r.eco === eco);
@@ -142,14 +148,22 @@ function Registries({ notify }) {
               <span className="muted mono">/ {c.max_gb} GB used</span>
             </div>
           </div>
+          {hitSpark && (
+            <div className="right" style={{ width: 200 }}>
+              <div className="muted" style={{ fontSize: 11, textAlign: "right", marginBottom: 4 }}>hit rate · 30d</div>
+              <Spark data={hitSpark} color="var(--jade)" h={36} w={200} />
+            </div>
+          )}
         </div>
         <div className="cache-meter">
           <i className="used" style={{ width: usedPct + "%" }}></i>
+          <i className="evict" style={{ width: (100 - usedPct) + "%" }}></i>
         </div>
         <div className="row" style={{ marginTop: 12, gap: 28, fontSize: 12.5 }}>
           <span className="muted">Objects <b className="mono" style={{ color: "var(--washi)" }}>{c.objects}</b></span>
-          <span className="muted">Hit rate · since start <b className="mono" style={{ color: "var(--jade-l)" }}>{(c.hit_rate * 100).toFixed(1)}%</b></span>
-          <span className="muted">LRU evictions · since start <b className="mono" style={{ color: "var(--gold-l)" }}>{fmtNum(c.evictions)}</b></span>
+          <span className="muted">Hit rate · total <b className="mono" style={{ color: "var(--jade-l)" }}>{(c.hit_rate * 100).toFixed(1)}%</b></span>
+          <span className="muted">LRU evictions · since restart <b className="mono" style={{ color: "var(--gold-l)" }}>{fmtNum(c.evictions)}</b></span>
+          <span className="muted right" style={{ fontSize: 11 }}>⟍ eviction headroom</span>
         </div>
       </div>
 
