@@ -157,13 +157,13 @@ function Registries({ notify }) {
         </div>
         <div className="cache-meter">
           <i className="used" style={{ width: usedPct + "%" }}></i>
-          <i className="evict" style={{ width: (100 - usedPct) + "%" }}></i>
+          {c.max_gb > 0 && <i className="evict" style={{ width: (100 - usedPct) + "%" }}></i>}
         </div>
         <div className="row" style={{ marginTop: 12, gap: 28, fontSize: 12.5 }}>
           <span className="muted">Objects <b className="mono" style={{ color: "var(--washi)" }}>{c.objects}</b></span>
           <span className="muted">Hit rate · total <b className="mono" style={{ color: "var(--jade-l)" }}>{(c.hit_rate * 100).toFixed(1)}%</b></span>
           <span className="muted">LRU evictions · since restart <b className="mono" style={{ color: "var(--gold-l)" }}>{fmtNum(c.evictions)}</b></span>
-          <span className="muted right" style={{ fontSize: 11 }}>⟍ eviction headroom</span>
+          {c.max_gb > 0 && <span className="muted right" style={{ fontSize: 11 }}>⟍ eviction headroom</span>}
         </div>
       </div>
 
