@@ -141,3 +141,27 @@ func TestLocalCache_CloseIsIdempotent(t *testing.T) {
 	require.NoError(t, lc.Close())
 	require.NoError(t, lc.Close())
 }
+
+func TestLocalCache_EvictionsAreCounted(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	for _, n := range []string{"a", "b", "c"} {
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
+	}
+	before, err := lc.index.Count()
+	require.NoError(t, err)
+
+	lc.evictToSize(1)
+
+	after, err := lc.index.Count()
+	require.NoError(t, err)
+	evicted := before - after
+	require.Positive(t, evicted, "eviction must have removed entries")
+
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, evicted, stats.Evictions)
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
@@ -24,6 +25,7 @@ type LocalCache struct {
 	cfg       LocalCacheConfig
 	index     *Index
 	evictCh   chan struct{}
+	evictions atomic.Int64 // entries evicted by evictToSize since process start
 	workerWG  sync.WaitGroup
 	closeOnce sync.Once
 }
@@ -143,7 +145,7 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	if err != nil {
 		return CacheStats{}, err
 	}
-	return CacheStats{Entries: count, SizeBytes: size}, nil
+	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load()}, nil
 }
 
 // evictWorker drains eviction triggers until the channel is closed.
@@ -176,7 +178,9 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 		}
 		for _, ref := range candidates {
 			r := ref
-			_ = lc.Invalidate(&r)
+			if lc.Invalidate(&r) == nil {
+				lc.evictions.Add(1)
+			}
 		}
 		total, _ = lc.index.TotalSizeBytes()
 	}
