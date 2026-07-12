@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   privacy-leak fix (GO-2026-5856); `govulncheck` reports no vulnerabilities
   reachable from this codebase.
 
+### Changed
+
+- Console: lifetime counters are labeled "total" instead of "since start" —
+  they persist in SQLite and survive restarts.
+- Console: the local-cache card shows a 30-day hit-rate sparkline and an
+  eviction-headroom treatment on the usage meter.
+
+### Fixed
+
+- Cache: LRU evictions are now counted and reported; the console previously
+  always showed 0 evictions.
+
 ## [0.1.0] - 2026-07-04
 
 First public release.
