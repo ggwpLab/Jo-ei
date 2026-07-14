@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -76,11 +77,11 @@ func newFixture(t *testing.T) *fixture {
 		nil,
 	)
 	h := console.NewHandler(console.Config{
-		Store:         store,
-		Broadcaster:   bcast,
-		Policy:        runtime,
-		Cache:         &fakeStats{stats: cache.CacheStats{Entries: 42, SizeBytes: 1 << 30, HitRatio: 0.5, Evictions: 3, StaleBytes: 7 << 20}},
-		CacheMaxBytes: 64 << 30,
+		Store:               store,
+		Broadcaster:         bcast,
+		Policy:              runtime,
+		Cache:               &fakeStats{stats: cache.CacheStats{Entries: 42, SizeBytes: 1 << 30, HitRatio: 0.5, Evictions: 3, StaleBytes: 7 << 20}},
+		CacheMaxBytes:       64 << 30,
 		CacheStaleAfterDays: 30,
 		Purger:              &fakePurger{removed: 12, freed: 5 << 20},
 		Registries: []console.RegistryInfo{
@@ -549,4 +550,20 @@ func TestCacheCleanup_NoPurger(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestCacheCleanup_PurgeError(t *testing.T) {
+	h := console.NewHandler(console.Config{
+		Store:       newTelemetryStore(t),
+		Broadcaster: telemetry.NewBroadcaster(),
+		Purger:      &fakePurger{err: errors.New("db locked")},
+		Logger:      zerolog.Nop(),
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/cache/cleanup", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
