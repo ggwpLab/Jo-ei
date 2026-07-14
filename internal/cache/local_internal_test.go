@@ -68,7 +68,6 @@ func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
 		ArtifactPath: "/cache/a-1.0-sources.jar",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 		SizeBytes:    456,
 	}))
 	gotSrc, found := idx.Get(&sources)
@@ -80,6 +79,24 @@ func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestIndex_GetIgnoresLegacyExpiry(t *testing.T) {
+	idx, err := NewIndex(filepath.Join(t.TempDir(), "i.db"))
+	require.NoError(t, err)
+	defer idx.Close()
+
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "legacy", Version: "1.0"}
+	require.NoError(t, idx.Insert(&ref, &CacheEntry{
+		ArtifactPath: "/c/legacy", StoredAt: time.Now().UTC().Add(-48 * time.Hour), SizeBytes: 1,
+	}))
+	// Simulate a row written by a pre-stale binary whose TTL has lapsed.
+	_, err = idx.db.Exec(`UPDATE artifacts SET expires_at = ? WHERE name = 'legacy'`,
+		time.Now().Add(-time.Hour).Unix())
+	require.NoError(t, err)
+
+	_, found := idx.Get(&ref)
+	assert.True(t, found, "expiry is gone; old expires_at values must not hide entries")
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "art.bin")
@@ -88,7 +105,7 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 
@@ -108,30 +125,29 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	require.Less(t, after, before)
 }
 
-func TestLocalCache_StatsReportsExpiredBytes(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+func TestLocalCache_StatsReportsStaleBytes(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 
 	fresh := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
 	require.NoError(t, lc.Put(fresh, writeTemp(t, "fresh-data"), true, ""))
 
-	// Insert an already-expired entry directly; Put always applies cfg.TTL.
-	expired := &gate.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
-	require.NoError(t, lc.index.Insert(expired, &CacheEntry{
+	// Insert an already-idle entry directly; Insert seeds last_hit from StoredAt.
+	stale := &gate.PackageRef{Ecosystem: "pypi", Name: "stale", Version: "1.0"}
+	require.NoError(t, lc.index.Insert(stale, &CacheEntry{
 		ArtifactPath: filepath.Join(lc.cfg.RootPath, "gone.bin"),
 		StoredAt:     time.Now().UTC().Add(-2 * time.Hour),
-		ExpiresAt:    time.Now().UTC().Add(-time.Hour),
 		SizeBytes:    123,
 	}))
 
 	stats, err := lc.Stats()
 	require.NoError(t, err)
-	assert.Equal(t, int64(123), stats.ExpiredBytes, "only the expired entry's bytes are reclaimable")
+	assert.Equal(t, int64(123), stats.StaleBytes, "only the idle entry's bytes are reclaimable")
 }
 
 func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 
@@ -158,14 +174,14 @@ func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
 }
 
 func TestLocalCache_CloseIsIdempotent(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	require.NoError(t, lc.Close())
 	require.NoError(t, lc.Close())
 }
 
 func TestLocalCache_EvictionsAreCounted(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 

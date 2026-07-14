@@ -30,7 +30,6 @@ func TestIndex_InsertAndGet(t *testing.T) {
 		ScanClean:    true,
 		ScanJSON:     `{"clean":true}`,
 		StoredAt:     time.Now().UTC().Truncate(time.Second),
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second),
 		SizeBytes:    4096,
 	}
 
@@ -55,14 +54,12 @@ func TestIndex_ClassifierIsDistinctEntry(t *testing.T) {
 		ArtifactPath: "/cache/a-1.0.jar",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
 		SizeBytes:    100,
 	}
 	srcEntry := cache.CacheEntry{
 		ArtifactPath: "/cache/a-1.0-sources.jar",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
 		SizeBytes:    200,
 	}
 
@@ -105,7 +102,6 @@ func TestIndex_IncrementHitCount(t *testing.T) {
 		ArtifactPath: "/cache/flask.whl",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
 		SizeBytes:    1024,
 	}
 	require.NoError(t, idx.Insert(&ref, &entry))
@@ -127,7 +123,6 @@ func TestIndex_Delete(t *testing.T) {
 		ArtifactPath: "/cache/boto3.whl",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(24 * time.Hour),
 		SizeBytes:    512,
 	}
 	require.NoError(t, idx.Insert(&ref, &entry))
@@ -146,36 +141,60 @@ func TestIndex_DueForRevalidationAndMarkValidated(t *testing.T) {
 	// stored_at drives initial last_validated (set by Insert).
 	old := gate.PackageRef{Ecosystem: "pypi", Name: "old", Version: "1.0"}
 	fresh := gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
-	expired := gate.PackageRef{Ecosystem: "pypi", Name: "expired", Version: "1.0"}
+	older := gate.PackageRef{Ecosystem: "pypi", Name: "older", Version: "1.0"}
 
 	require.NoError(t, idx.Insert(&old, &cache.CacheEntry{
 		ArtifactPath: "/c/old", ScanClean: true, ScanJSON: `{"clean":true}`,
-		StoredAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(24 * time.Hour), SizeBytes: 1,
+		StoredAt: now.Add(-48 * time.Hour), SizeBytes: 1,
 	}))
 	require.NoError(t, idx.Insert(&fresh, &cache.CacheEntry{
 		ArtifactPath: "/c/fresh", ScanClean: true,
-		StoredAt: now, ExpiresAt: now.Add(24 * time.Hour), SizeBytes: 1,
+		StoredAt: now, SizeBytes: 1,
 	}))
-	require.NoError(t, idx.Insert(&expired, &cache.CacheEntry{
-		ArtifactPath: "/c/expired", ScanClean: true,
-		StoredAt: now.Add(-48 * time.Hour), ExpiresAt: now.Add(-1 * time.Hour), SizeBytes: 1,
+	require.NoError(t, idx.Insert(&older, &cache.CacheEntry{
+		ArtifactPath: "/c/older", ScanClean: true,
+		StoredAt: now.Add(-72 * time.Hour), SizeBytes: 1,
 	}))
 
-	// Due = last_validated older than 24h ago AND not expired → only "old".
+	// Due = last_validated older than 24h ago, oldest first. There is no TTL:
+	// every idle entry stays revalidation-eligible until evicted or purged.
 	cutoff := now.Add(-24 * time.Hour).Unix()
 	due, err := idx.DueForRevalidation(cutoff, 10)
 	require.NoError(t, err)
-	require.Len(t, due, 1)
-	assert.Equal(t, "old", due[0].Ref.Name)
-	assert.Equal(t, "/c/old", due[0].FilePath)
-	assert.True(t, due[0].ScanClean)
-	assert.Equal(t, `{"clean":true}`, due[0].ScanJSON)
+	require.Len(t, due, 2)
+	assert.Equal(t, "older", due[0].Ref.Name)
+	assert.Equal(t, "old", due[1].Ref.Name)
+	assert.Equal(t, "/c/old", due[1].FilePath)
+	assert.True(t, due[1].ScanClean)
+	assert.Equal(t, `{"clean":true}`, due[1].ScanJSON)
 
-	// After marking validated now, it is no longer due.
+	// After marking validated now, neither is due.
 	require.NoError(t, idx.MarkValidated(&old, now.Unix()))
+	require.NoError(t, idx.MarkValidated(&older, now.Unix()))
 	due, err = idx.DueForRevalidation(cutoff, 10)
 	require.NoError(t, err)
 	assert.Empty(t, due)
+}
+
+func TestIndex_StaleSizeBytes(t *testing.T) {
+	idx, cleanup := newTestIndex(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	// Insert seeds last_hit from StoredAt, so backdating StoredAt makes an
+	// entry stale without touching SQL directly.
+	stale := gate.PackageRef{Ecosystem: "pypi", Name: "stale", Version: "1.0"}
+	fresh := gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, idx.Insert(&stale, &cache.CacheEntry{
+		ArtifactPath: "/c/stale", StoredAt: now.Add(-40 * 24 * time.Hour), SizeBytes: 100,
+	}))
+	require.NoError(t, idx.Insert(&fresh, &cache.CacheEntry{
+		ArtifactPath: "/c/fresh", StoredAt: now, SizeBytes: 11,
+	}))
+
+	got, err := idx.StaleSizeBytes(now.Add(-30 * 24 * time.Hour).Unix())
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), got, "only the idle entry counts")
 }
 
 func TestIndex_LRUCandidates(t *testing.T) {
@@ -194,7 +213,6 @@ func TestIndex_LRUCandidates(t *testing.T) {
 			ArtifactPath: "/cache/" + ref.Name + ".whl",
 			ScanClean:    true,
 			StoredAt:     base.Add(time.Duration(i) * time.Minute),
-			ExpiresAt:    base.Add(24 * time.Hour),
 			SizeBytes:    1024,
 		}
 		require.NoError(t, idx.Insert(&r, &entry))

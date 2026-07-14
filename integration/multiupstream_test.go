@@ -41,7 +41,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	defer up.Close()
 
 	dir := t.TempDir()
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })
 

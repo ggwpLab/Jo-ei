@@ -16,9 +16,9 @@ func newTestLocalCache(t *testing.T) cache.Cache {
 	t.Helper()
 	dir := t.TempDir()
 	c, err := cache.NewLocalCache(cache.LocalCacheConfig{
-		RootPath:  dir,
-		MaxSizeGB: 1,
-		TTL:       24 * time.Hour,
+		RootPath:   dir,
+		MaxSizeGB:  1,
+		StaleAfter: 24 * time.Hour,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })

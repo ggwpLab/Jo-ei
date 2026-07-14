@@ -167,46 +167,38 @@ func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 			last_validated = excluded.last_validated`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 		entry.ArtifactPath, boolToInt(entry.ScanClean), entry.ScanJSON,
-		entry.StoredAt.Unix(), entry.ExpiresAt.Unix(),
+		// expires_at is legacy: entries no longer expire (freshness is the
+		// re-validation sweep's job); the column stays for schema compatibility.
+		entry.StoredAt.Unix(), 0,
 		entry.StoredAt.Unix(), 0, entry.SizeBytes, entry.StoredAt.Unix(),
 	)
 	return err
 }
 
-// Get retrieves a cache entry. Returns (nil, false) if not found or expired.
+// Get retrieves a cache entry. Returns (nil, false) if not found.
 func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	row := idx.db.QueryRow(`
-		SELECT file_path, scan_clean, scan_json, stored_at, expires_at, hit_count, size_bytes
+		SELECT file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes
 		FROM artifacts
 		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 
 	var (
-		entry         CacheEntry
-		scanCleanInt  int
-		storedAtUnix  int64
-		expiresAtUnix int64
+		entry        CacheEntry
+		scanCleanInt int
+		storedAtUnix int64
 	)
 	err := row.Scan(
 		&entry.ArtifactPath, &scanCleanInt, &entry.ScanJSON,
-		&storedAtUnix, &expiresAtUnix,
-		&entry.HitCount, &entry.SizeBytes,
+		&storedAtUnix, &entry.HitCount, &entry.SizeBytes,
 	)
-	if err == sql.ErrNoRows {
-		return nil, false
-	}
 	if err != nil {
 		return nil, false
 	}
 
 	entry.ScanClean = scanCleanInt == 1
 	entry.StoredAt = time.Unix(storedAtUnix, 0).UTC()
-	entry.ExpiresAt = time.Unix(expiresAtUnix, 0).UTC()
-
-	if entry.IsExpired() {
-		return nil, false
-	}
 	return &entry, true
 }
 
@@ -257,12 +249,12 @@ func (idx *Index) TotalSizeBytes() (int64, error) {
 	return total, err
 }
 
-// ExpiredSizeBytes returns the sum of size_bytes for entries past their TTL.
-// Expired entries are dropped on access, so this is the reclaimable portion.
-func (idx *Index) ExpiredSizeBytes() (int64, error) {
+// StaleSizeBytes returns the sum of size_bytes for entries whose last_hit is
+// older than cutoff — the reclaimable portion surfaced in the console.
+func (idx *Index) StaleSizeBytes(cutoff int64) (int64, error) {
 	var total int64
-	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE expires_at < ?`,
-		time.Now().Unix()).Scan(&total)
+	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
+		cutoff).Scan(&total)
 	return total, err
 }
 
@@ -273,17 +265,15 @@ func (idx *Index) Count() (int64, error) {
 	return n, err
 }
 
-// DueForRevalidation returns up to limit non-expired entries whose last_validated
-// is older than `before` (a unix timestamp), oldest-first. Expired entries are
-// excluded — they are dropped on access anyway.
+// DueForRevalidation returns up to limit entries whose last_validated is older
+// than `before` (a unix timestamp), oldest-first.
 func (idx *Index) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
-	now := time.Now().Unix()
 	rows, err := idx.db.Query(`
 		SELECT ecosystem, name, version, classifier, file_path, scan_clean, scan_json
 		FROM artifacts
-		WHERE last_validated < ? AND expires_at > ?
+		WHERE last_validated < ?
 		ORDER BY last_validated ASC
-		LIMIT ?`, before, now, limit,
+		LIMIT ?`, before, limit,
 	)
 	if err != nil {
 		return nil, err

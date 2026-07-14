@@ -32,7 +32,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 	t.Helper()
 
 	dir := t.TempDir()
-	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: 24 * time.Hour})
+	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: 24 * time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = localCache.Close() })
 

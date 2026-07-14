@@ -17,7 +17,9 @@ import (
 type LocalCacheConfig struct {
 	RootPath  string
 	MaxSizeGB int
-	TTL       time.Duration
+	// StaleAfter is the idle threshold: entries not hit for this long count
+	// as stale (reclaimable via PurgeStale / the console Clean up button).
+	StaleAfter time.Duration
 }
 
 // LocalCache implements Cache using the local filesystem with a SQLite index.
@@ -56,7 +58,7 @@ func (lc *LocalCache) artifactPath(ref *gate.PackageRef) string {
 	return filepath.Join(lc.cfg.RootPath, "artifacts", hex[:2], hex)
 }
 
-// Get returns a cached entry, or (nil, false) on miss or expiry.
+// Get returns a cached entry, or (nil, false) on miss.
 func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	entry, found := lc.index.Get(ref)
 	if !found {
@@ -98,17 +100,11 @@ func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, 
 		return fmt.Errorf("copying artifact to cache: %w", err)
 	}
 
-	ttl := lc.cfg.TTL
-	if ttl == 0 {
-		ttl = 24 * time.Hour
-	}
-
 	entry := &CacheEntry{
 		ArtifactPath: destPath,
 		ScanClean:    scanClean,
 		ScanJSON:     scanJSON,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(ttl),
 		SizeBytes:    written,
 	}
 
@@ -135,6 +131,11 @@ func (lc *LocalCache) Invalidate(ref *gate.PackageRef) error {
 	return lc.index.Delete(ref)
 }
 
+// staleCutoff is the last_hit unix timestamp below which an entry is stale.
+func (lc *LocalCache) staleCutoff() int64 {
+	return time.Now().Add(-lc.cfg.StaleAfter).Unix()
+}
+
 // Stats returns aggregate cache statistics.
 func (lc *LocalCache) Stats() (CacheStats, error) {
 	size, err := lc.index.TotalSizeBytes()
@@ -145,11 +146,11 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	if err != nil {
 		return CacheStats{}, err
 	}
-	expired, err := lc.index.ExpiredSizeBytes()
+	stale, err := lc.index.StaleSizeBytes(lc.staleCutoff())
 	if err != nil {
 		return CacheStats{}, err
 	}
-	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load(), ExpiredBytes: expired}, nil
+	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load(), StaleBytes: stale}, nil
 }
 
 // evictWorker drains eviction triggers until the channel is closed.

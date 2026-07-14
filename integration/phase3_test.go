@@ -86,7 +86,7 @@ func newNPMRegistry(t *testing.T, name, version string, ageHours int) *httptest.
 func newPhase3NPMProxy(t *testing.T, upstream *httptest.Server, clamdAddr string) *httptest.Server {
 	t.Helper()
 	dir := t.TempDir()
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })
 
@@ -152,7 +152,7 @@ func TestPhase3_MavenOldArtifactAllowed(t *testing.T) {
 	clamd := mockClamd(t, "stream: OK\x00")
 
 	dir := t.TempDir()
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })
 	av, err := scanner.NewClamAVScanner(clamd, 5*time.Second)

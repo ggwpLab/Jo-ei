@@ -50,7 +50,7 @@ func newMockOSVServer(t *testing.T, vulnMap map[string]string) *httptest.Server 
 func newPhase2Proxy(t *testing.T, upstream, osvServer *httptest.Server, prof config.PolicyProfile) *httptest.Server {
 	t.Helper()
 	dir := t.TempDir()
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: 24 * time.Hour})
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: 24 * time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })
 
