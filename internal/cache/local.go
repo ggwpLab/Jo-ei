@@ -67,7 +67,7 @@ func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 
 	// Verify the artifact file still exists on disk.
 	if _, err := os.Stat(entry.ArtifactPath); err != nil {
-		_ = lc.index.Delete(ref)
+		_, _ = lc.index.Delete(ref)
 		return nil, false
 	}
 
@@ -124,11 +124,20 @@ func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, 
 
 // Invalidate removes an entry from both the index and disk.
 func (lc *LocalCache) Invalidate(ref *gate.PackageRef) error {
+	_, err := lc.invalidate(ref)
+	return err
+}
+
+// invalidate removes ref's entry, reporting whether a row was actually
+// deleted — false when the entry was already gone (e.g. a concurrent
+// eviction), so callers don't count no-op deletions.
+func (lc *LocalCache) invalidate(ref *gate.PackageRef) (bool, error) {
 	entry, found := lc.index.Get(ref)
 	if found {
 		_ = os.Remove(entry.ArtifactPath)
 	}
-	return lc.index.Delete(ref)
+	n, err := lc.index.Delete(ref)
+	return n > 0, err
 }
 
 // staleCutoff is the last_hit unix timestamp below which an entry is stale.
@@ -173,10 +182,14 @@ func (lc *LocalCache) PurgeStale() (removed, freedBytes int64, err error) {
 		progress := false
 		for _, cand := range candidates {
 			c := cand
-			if lc.Invalidate(&c.Ref) == nil {
+			ok, err := lc.invalidate(&c.Ref)
+			if err != nil {
+				continue
+			}
+			progress = true
+			if ok {
 				removed++
 				freedBytes += c.SizeBytes
-				progress = true
 			}
 		}
 		if !progress {
@@ -215,7 +228,7 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 		}
 		for _, ref := range candidates {
 			r := ref
-			if lc.Invalidate(&r) == nil {
+			if ok, err := lc.invalidate(&r); err == nil && ok {
 				lc.evictions.Add(1)
 			}
 		}

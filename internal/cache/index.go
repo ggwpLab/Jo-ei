@@ -212,13 +212,18 @@ func (idx *Index) IncrementHit(ref *gate.PackageRef) error {
 	return err
 }
 
-// Delete removes an entry from the index.
-func (idx *Index) Delete(ref *gate.PackageRef) error {
-	_, err := idx.db.Exec(
+// Delete removes an entry from the index, reporting how many rows matched
+// (0 when the entry was already gone — callers use this to avoid counting
+// no-op deletions).
+func (idx *Index) Delete(ref *gate.PackageRef) (int64, error) {
+	res, err := idx.db.Exec(
 		`DELETE FROM artifacts WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // LRUCandidates returns up to n entries sorted by last_hit ascending (LRU first).

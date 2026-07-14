@@ -77,7 +77,8 @@ func TestIndex_ClassifierIsDistinctEntry(t *testing.T) {
 	assert.Equal(t, "/cache/a-1.0-sources.jar", gotSrc.ArtifactPath)
 
 	// Deleting the sources entry must leave the main entry intact.
-	require.NoError(t, idx.Delete(&sources))
+	_, err := idx.Delete(&sources)
+	require.NoError(t, err)
 	_, found = idx.Get(&sources)
 	assert.False(t, found)
 	_, found = idx.Get(&main)
@@ -127,7 +128,9 @@ func TestIndex_Delete(t *testing.T) {
 	}
 	require.NoError(t, idx.Insert(&ref, &entry))
 
-	require.NoError(t, idx.Delete(&ref))
+	n, err := idx.Delete(&ref)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
 
 	_, found := idx.Get(&ref)
 	assert.False(t, found)

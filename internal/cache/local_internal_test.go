@@ -241,4 +241,16 @@ func TestLocalCache_PurgeStale(t *testing.T) {
 	stats, err := lc.Stats()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), stats.StaleBytes)
+	assert.Equal(t, int64(0), stats.Evictions, "manual purge must not count as LRU eviction")
+}
+
+func TestLocalCache_PurgeStaleSkipsAlreadyGoneRows(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "gone", Version: "1.0"}
+	ok, err := lc.invalidate(ref)
+	require.NoError(t, err)
+	assert.False(t, ok, "deleting a nonexistent row must report no deletion")
 }
