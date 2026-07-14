@@ -36,7 +36,10 @@ func (r *Revalidator) Revalidate(ctx context.Context, e cache.RevalEntry) (reval
 		return revalidate.Keep, nil
 	}
 	repo, digest := e.Ref.Name, e.Ref.Version
-	_, v, err := r.gate.Evaluate(ctx, repo, digest)
+	// skipVerdictCache=true: this entry is, by definition, already cached — a
+	// plain Evaluate would short-circuit on that same verdict and never touch
+	// Trivy/ClamAV again, laundering a stale clean verdict as fresh forever.
+	_, v, err := r.gate.evaluate(ctx, repo, digest, true)
 	if err != nil {
 		return revalidate.Retry, nil // upstream/scan infra error → retry next sweep
 	}

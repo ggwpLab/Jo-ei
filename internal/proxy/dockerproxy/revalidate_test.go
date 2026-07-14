@@ -85,6 +85,81 @@ func TestDockerRevalidator_CVEBlockEvictsAndCascades(t *testing.T) {
 	}
 }
 
+// countingScanner wraps stubScanner and counts ScanImage calls, so tests can
+// assert the revalidation path actually re-scanned rather than trusting a
+// cached verdict.
+type countingScanner struct {
+	stubScanner
+	calls *int
+}
+
+func (s countingScanner) ScanImage(ctx context.Context, ref string) (*ImageScanResult, error) {
+	*s.calls++
+	return s.stubScanner.ScanImage(ctx, ref)
+}
+
+// TestDockerRevalidator_IgnoresOwnCachedVerdict is the CRITICAL regression
+// test: the image-verdict entry under revalidation is, by definition, already
+// in the cache as clean. Revalidate must NOT let manifestGate.Evaluate
+// short-circuit on that cached verdict — it must re-run Trivy/ClamAV so a
+// newly-blocking CVE is caught. Before the fix, Evaluate's cached-verdict
+// check returns the stale clean verdict without ever calling the scanner, so
+// this asserts Evict where the unfixed code returns Keep.
+func TestDockerRevalidator_IgnoresOwnCachedVerdict(t *testing.T) {
+	c := newFakeCache()
+	calls := 0
+	scanner := countingScanner{
+		stubScanner: stubScanner{findings: []gate.CVEFinding{{ID: "CVE-9999", Severity: gate.SeverityHigh}}},
+		calls:       &calls,
+	}
+	r, repo := newTestRevalidator(t, scanner, stubAV{}, findingPolicy{}, c)
+
+	// Seed the cache with the clean verdict that a prior pull would have
+	// stored for this exact repo+digest — the state Revalidate always starts
+	// from, since it is only ever invoked on entries already in the cache.
+	store := newVerdictStore(c)
+	if err := store.PutImageVerdict(repo, "sha256:img", writeManifest(t), true, "ok"); err != nil {
+		t.Fatalf("seeding cached verdict: %v", err)
+	}
+
+	e := cache.RevalEntry{Ref: gate.PackageRef{Ecosystem: "docker", Name: repo, Version: "sha256:img"}, FilePath: writeManifest(t)}
+	out, reason := r.Revalidate(context.Background(), e)
+	if out != revalidate.Evict {
+		t.Fatalf("out=%v, want Evict (a fresh scan must find the new CVE despite the stale cached clean verdict)", out)
+	}
+	if reason == nil || reason.BlockedBy != "cve" {
+		t.Fatalf("reason=%+v, want blocked_by cve", reason)
+	}
+	if calls == 0 {
+		t.Error("scanner was never called — Revalidate short-circuited on the cached verdict instead of re-evaluating")
+	}
+}
+
+// TestDockerRevalidator_CachedCleanStillReScans is the inverse of the above:
+// even when the fresh scan agrees the image is still clean, Revalidate must
+// have actually run the scanner rather than trusting the cache — this proves
+// the fresh-evaluation path isn't simply evicting everything unconditionally.
+func TestDockerRevalidator_CachedCleanStillReScans(t *testing.T) {
+	c := newFakeCache()
+	calls := 0
+	scanner := countingScanner{stubScanner: stubScanner{}, calls: &calls}
+	r, repo := newTestRevalidator(t, scanner, stubAV{}, findingPolicy{}, c)
+
+	store := newVerdictStore(c)
+	if err := store.PutImageVerdict(repo, "sha256:img", writeManifest(t), true, "ok"); err != nil {
+		t.Fatalf("seeding cached verdict: %v", err)
+	}
+
+	e := cache.RevalEntry{Ref: gate.PackageRef{Ecosystem: "docker", Name: repo, Version: "sha256:img"}, FilePath: writeManifest(t)}
+	out, reason := r.Revalidate(context.Background(), e)
+	if out != revalidate.Keep || reason != nil {
+		t.Fatalf("out=%v reason=%v, want Keep/nil", out, reason)
+	}
+	if calls == 0 {
+		t.Error("scanner was never called — Revalidate must re-scan even a cached-clean entry, not trust the cache")
+	}
+}
+
 func TestDockerRevalidator_BlobEntryIsNoOp(t *testing.T) {
 	c := newFakeCache()
 	r, _ := newTestRevalidator(t, stubScanner{}, stubAV{}, findingPolicy{}, c)

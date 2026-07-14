@@ -70,6 +70,19 @@ func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{d} }
 // digest, which is gated on its own request). Infrastructure failures (fetch,
 // scan errors) return a non-nil error so the handler fails closed.
 func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, GateVerdict, error) {
+	return g.evaluate(ctx, repo, ref, false)
+}
+
+// evaluate is Evaluate's implementation, parameterized on skipVerdictCache so
+// the revalidation path (Revalidator.Revalidate) can force a fresh
+// Trivy/ClamAV pass instead of trusting the verdict it is revalidating. The
+// entry under revalidation is, by definition, already in the cache — without
+// this the cached-verdict check below would return the stale verdict
+// unconditionally, and a newly-blocking CVE or malware signature could never
+// evict a previously-clean image. skipVerdictCache affects ONLY that check;
+// everything else (manifest fetch, index/attestation passthrough, layer
+// scanning, policy checks, verdict storage) is unchanged.
+func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdictCache bool) (string, GateVerdict, error) {
 	// Fetch the raw manifest for ref (tag or digest); indexes are not resolved
 	// server-side, so the client's own platform choice drives what gets gated.
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
@@ -92,8 +105,9 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// the store persists only clean+reason, not block_until, so restoring it
 	// would block the image with a zero block_until (never shown in the
 	// quarantine view) and would keep blocking it even after it matured. Fall
-	// through to a fresh evaluation instead.
-	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
+	// through to a fresh evaluation instead. skipVerdictCache additionally
+	// forces the fall-through for the revalidation path (see doc comment above).
+	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !skipVerdictCache && !isStaleSupplyBlock(clean, reason) {
 		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
