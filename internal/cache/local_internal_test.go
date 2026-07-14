@@ -244,6 +244,61 @@ func TestLocalCache_PurgeStale(t *testing.T) {
 	assert.Equal(t, int64(0), stats.Evictions, "manual purge must not count as LRU eviction")
 }
 
+func TestLocalCache_EvictToSizeBailsOnZeroProgress(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	for _, n := range []string{"a", "b", "c"} {
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
+	}
+	before, err := lc.index.Count()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), before)
+
+	// Make every DELETE on the artifacts table fail, so invalidate() always
+	// errors even though LRUCandidates keeps returning the same rows. Before
+	// the zero-progress bail this spun evictToSize's loop forever.
+	_, err = lc.index.db.Exec(`
+		CREATE TRIGGER block_delete BEFORE DELETE ON artifacts
+		BEGIN SELECT RAISE(ABORT, 'delete blocked for test'); END;`)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		lc.evictToSize(1) // 1-byte budget: every entry is over budget, forcing eviction attempts.
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("evictToSize did not return — zero-progress bail is missing (infinite spin)")
+	}
+
+	after, err := lc.index.Count()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "no rows should have been removed since every delete failed")
+}
+
+func TestNewLocalCache_DefaultsStaleAfterWhenUnset(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1}) // StaleAfter left zero
+	require.NoError(t, err)
+	defer lc.Close()
+
+	assert.Equal(t, time.Duration(DefaultStaleAfterDays)*24*time.Hour, lc.cfg.StaleAfter,
+		"StaleAfter<=0 must default rather than making staleCutoff() == now (which would mark the whole cache stale)")
+
+	// Defense-in-depth check: an entry stored moments ago must not be
+	// immediately reported as stale.
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(ref, writeTemp(t, "data"), true, ""))
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.StaleBytes)
+}
+
 func TestLocalCache_PurgeStaleSkipsAlreadyGoneRows(t *testing.T) {
 	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)

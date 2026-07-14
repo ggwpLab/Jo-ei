@@ -34,6 +34,9 @@ type LocalCache struct {
 
 // NewLocalCache creates a LocalCache rooted at cfg.RootPath.
 func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
+	if cfg.StaleAfter <= 0 {
+		cfg.StaleAfter = DefaultStaleAfterDays * 24 * time.Hour
+	}
 	if err := os.MkdirAll(cfg.RootPath, 0755); err != nil { // #nosec G301 -- cache of public package artifacts
 		return nil, fmt.Errorf("creating cache dir %q: %w", cfg.RootPath, err)
 	}
@@ -226,11 +229,18 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 		if err != nil || len(candidates) == 0 {
 			return
 		}
+		progress := false
 		for _, ref := range candidates {
 			r := ref
-			if ok, err := lc.invalidate(&r); err == nil && ok {
-				lc.evictions.Add(1)
+			if ok, err := lc.invalidate(&r); err == nil {
+				progress = true
+				if ok {
+					lc.evictions.Add(1)
+				}
 			}
+		}
+		if !progress {
+			return
 		}
 		total, _ = lc.index.TotalSizeBytes()
 	}
