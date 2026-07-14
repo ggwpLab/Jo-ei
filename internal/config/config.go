@@ -86,6 +86,9 @@ func (c *Config) Validate() error {
 	if c.Cache.Revalidation.BatchSize < 0 {
 		return fmt.Errorf("cache.revalidation.batch_size must not be negative")
 	}
+	if c.Cache.Local.StaleAfterDays < 0 {
+		return fmt.Errorf("cache.local.stale_after_days must not be negative")
+	}
 	return nil
 }
 
@@ -160,6 +163,9 @@ type CacheConfig struct {
 type LocalCache struct {
 	Path      string `mapstructure:"path"`
 	MaxSizeGB int    `mapstructure:"max_size_gb"`
+	// StaleAfterDays marks entries idle this long as stale (reclaimable via
+	// console cleanup). ≤0 uses the default (30) applied at wiring.
+	StaleAfterDays int `mapstructure:"stale_after_days"`
 }
 
 type S3Cache struct {
