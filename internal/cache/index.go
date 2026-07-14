@@ -242,6 +242,36 @@ func (idx *Index) LRUCandidates(n int) ([]gate.PackageRef, error) {
 	return refs, rows.Err()
 }
 
+// StaleCandidate is a stale entry surfaced for purging: the ref plus its size
+// so the purge can report freed bytes without a second lookup.
+type StaleCandidate struct {
+	Ref       gate.PackageRef
+	SizeBytes int64
+}
+
+// StaleCandidates returns up to n entries whose last_hit is older than cutoff,
+// oldest first.
+func (idx *Index) StaleCandidates(cutoff int64, n int) ([]StaleCandidate, error) {
+	rows, err := idx.db.Query(`
+		SELECT ecosystem, name, version, classifier, size_bytes
+		FROM artifacts WHERE last_hit < ? ORDER BY last_hit ASC LIMIT ?`, cutoff, n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []StaleCandidate
+	for rows.Next() {
+		var c StaleCandidate
+		if err := rows.Scan(&c.Ref.Ecosystem, &c.Ref.Name, &c.Ref.Version, &c.Ref.Classifier, &c.SizeBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // TotalSizeBytes returns the sum of size_bytes for all entries.
 func (idx *Index) TotalSizeBytes() (int64, error) {
 	var total int64

@@ -153,6 +153,38 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load(), StaleBytes: stale}, nil
 }
 
+// purgeBatch is how many stale candidates PurgeStale fetches per round.
+const purgeBatch = 100
+
+// PurgeStale removes every entry idle longer than cfg.StaleAfter and returns
+// how many entries were removed and their total size. Individual failures are
+// skipped (same policy as evictToSize); a round that makes no progress aborts
+// instead of spinning on undeletable rows.
+func (lc *LocalCache) PurgeStale() (removed, freedBytes int64, err error) {
+	cutoff := lc.staleCutoff()
+	for {
+		candidates, err := lc.index.StaleCandidates(cutoff, purgeBatch)
+		if err != nil {
+			return removed, freedBytes, err
+		}
+		if len(candidates) == 0 {
+			return removed, freedBytes, nil
+		}
+		progress := false
+		for _, cand := range candidates {
+			c := cand
+			if lc.Invalidate(&c.Ref) == nil {
+				removed++
+				freedBytes += c.SizeBytes
+				progress = true
+			}
+		}
+		if !progress {
+			return removed, freedBytes, fmt.Errorf("cache purge: no progress on %d stale entries", len(candidates))
+		}
+	}
+}
+
 // evictWorker drains eviction triggers until the channel is closed.
 func (lc *LocalCache) evictWorker() {
 	defer lc.workerWG.Done()

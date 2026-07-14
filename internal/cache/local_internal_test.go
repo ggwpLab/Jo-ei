@@ -203,3 +203,42 @@ func TestLocalCache_EvictionsAreCounted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, evicted, stats.Evictions)
 }
+
+func TestLocalCache_PurgeStale(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	fresh := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(fresh, writeTemp(t, "fresh-data"), true, ""))
+
+	// Two idle entries with real files on disk; Insert seeds last_hit from StoredAt.
+	var stalePaths []string
+	for i, n := range []string{"s1", "s2"} {
+		p := filepath.Join(lc.cfg.RootPath, n+".bin")
+		require.NoError(t, os.WriteFile(p, []byte("stale-data"), 0644))
+		stalePaths = append(stalePaths, p)
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.index.Insert(ref, &CacheEntry{
+			ArtifactPath: p,
+			StoredAt:     time.Now().UTC().Add(-time.Duration(2+i) * time.Hour),
+			SizeBytes:    50,
+		}))
+	}
+
+	removed, freed, err := lc.PurgeStale()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), removed)
+	assert.Equal(t, int64(100), freed)
+	for _, p := range stalePaths {
+		_, statErr := os.Stat(p)
+		assert.True(t, os.IsNotExist(statErr), "purged artifact %s must be deleted", p)
+	}
+
+	// The fresh entry survives, and nothing is stale anymore.
+	_, found := lc.Get(fresh)
+	assert.True(t, found)
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.StaleBytes)
+}
