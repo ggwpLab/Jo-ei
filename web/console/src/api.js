@@ -39,7 +39,7 @@
     },
     registries: [],
     registriesPending: false, registriesWarnings: [],
-    cache: { used_gb: 0, max_gb: 0, expired_gb: 0, objects: "0", hit_rate: 0, evictions: 0 },
+    cache: { used_gb: 0, max_gb: 0, stale_gb: 0, stale_after_days: 0, objects: "0", hit_rate: 0, evictions: 0 },
     kpis: {
       requests_total: 0, cache_hits: 0, hit_rate: 0, blocked_total: 0, errors: 0,
       supply_blocked: 0, cve_blocked: 0, malware_blocked: 0, denylisted: 0,
@@ -101,7 +101,8 @@
     J.cache = {
       used_gb: +(o.cache.size_bytes / GB).toFixed(2),
       max_gb: Math.round(o.cache.max_bytes / GB),
-      expired_gb: +((o.cache.expired_bytes || 0) / GB).toFixed(2),
+      stale_gb: +((o.cache.stale_bytes || 0) / GB).toFixed(2),
+      stale_after_days: o.cache.stale_after_days || 0,
       objects: Number(o.cache.objects).toLocaleString("en-US"),
       hit_rate: o.cache.hit_rate,
       evictions: o.cache.evictions,
@@ -200,6 +201,17 @@
     return { pending: J.registriesPending, warnings: J.registriesWarnings };
   }
 
+  // Purge stale cache entries (idle past the server-side threshold), then
+  // refresh so the meter reflects the freed space immediately.
+  async function cleanupCache() {
+    const res = await fetch("/api/cache/cleanup", { method: "POST" });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok) throw new Error((data && data.error) || "cache cleanup failed (HTTP " + res.status + ")");
+    await load();
+    return data; // { removed, freed_bytes }
+  }
+
   // An SSE drop alone does not mean the API is down: EventSource reconnects
   // transparently and every panel is refreshed by the 15s polls regardless.
   // Probe the API once per error burst; only a failing probe shows the
@@ -226,6 +238,7 @@
   J.savePolicy = savePolicy;
   J.pageRequests = pageRequests;
   J.saveRegistries = saveRegistries;
+  J.cleanupCache = cleanupCache;
 
   // Initial load; fire joei:data even on failure so the app shell can leave
   // the loader and show the connection banner. J.ready marks the attempt as
