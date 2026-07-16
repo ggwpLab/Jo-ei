@@ -1,6 +1,7 @@
 package revalidate
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -102,6 +103,42 @@ func TestSweeper_UnknownEcosystemSkipped(t *testing.T) {
 	s.sweepOnce(context.Background())
 	assert.Empty(t, store.validated)
 	assert.Empty(t, store.invalidated)
+}
+
+func TestSweeper_LogsSweepSummary(t *testing.T) {
+	store := &fakeStore{due: []cache.RevalEntry{
+		pkgEntry("a"), // pypi → Keep
+		{Ref: gate.PackageRef{Ecosystem: "npm", Name: "bad", Version: "1"}}, // Evict
+		{Ref: gate.PackageRef{Ecosystem: "maven", Name: "x", Version: "1"}}, // Retry
+		{Ref: gate.PackageRef{Ecosystem: "go", Name: "m", Version: "1"}},    // no revalidator → skipped
+	}}
+	var buf bytes.Buffer
+	s := NewSweeper(store, map[string]Revalidator{
+		"pypi":  stubRevalidator{outcome: Keep},
+		"npm":   stubRevalidator{outcome: Evict, reason: &EvictReason{Gate: gate.GateCVE, Reason: "cve_found", BlockedBy: "cve"}},
+		"maven": stubRevalidator{outcome: Retry},
+	}, &recspy{}, Config{BatchSize: 10}, zerolog.New(&buf))
+	s.sweepOnce(context.Background())
+
+	out := buf.String()
+	require.Contains(t, out, "revalidation sweep complete")
+	assert.Contains(t, out, `"due":4`)
+	assert.Contains(t, out, `"kept":1`)
+	assert.Contains(t, out, `"evicted":1`)
+	assert.Contains(t, out, `"retried":1`)
+	assert.Contains(t, out, `"skipped":1`)
+	assert.Contains(t, out, `"level":"info"`)
+}
+
+func TestSweeper_NothingDueLogsDebugOnly(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSweeper(&fakeStore{}, map[string]Revalidator{}, &recspy{}, Config{BatchSize: 10}, zerolog.New(&buf))
+	s.sweepOnce(context.Background())
+
+	out := buf.String()
+	assert.NotContains(t, out, "revalidation sweep complete", "no info summary when nothing was due")
+	assert.Contains(t, out, `"level":"debug"`)
+	assert.Contains(t, out, "nothing due")
 }
 
 func TestSweeper_PassesBatchSizeAndCutoff(t *testing.T) {

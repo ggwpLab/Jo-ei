@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Cache cleanup on demand: `POST /api/cache/cleanup` and a Clean up button on
   the console cache card delete stale entries and report the freed space.
+- Revalidation sweep logs an info summary after each pass with entries due
+  (`due`/`kept`/`evicted`/`retried`/`skipped`); quiet ticks log at debug level.
 
 ### Changed
 
