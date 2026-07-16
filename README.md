@@ -170,8 +170,12 @@ docker pull library/alpine:3.21
 ```
 
 **Caveats:**
-- Only Docker Hub (`registry-1.docker.io`) is supported as an upstream. Private
-  registries and other OCI registries are not proxied.
+- Configure `upstreams` as ordered failover mirrors of *one* registry (e.g.
+  Docker Hub plus a corporate pull-through mirror of it). Mixing different
+  registries in one list is not supported — the Trivy image reference is built
+  from the first upstream's host. Note that the Docker daemon applies
+  `registry-mirrors` only to Docker Hub images; images from another upstream
+  registry must be pulled explicitly as `docker pull <proxy-host>/<repo>:<tag>`.
 - Images are gated by Trivy (vulnerability + secret scanning) and by every
   configured malware engine in `malware.scanners[]` (ClamAV and/or ICAP), which
   scan the image config blob and each layer. The verdict is returned on the

@@ -54,8 +54,13 @@ Client-facing paths: `/pypi/simple/…`, `/npm/…` (alias `/yarn/`),
 as a `registry-mirrors` entry. Yarn uses the npm protocol; the `/yarn/` alias
 exists so both package managers can be pointed at the proxy independently.
 
-Docker caveat: only Docker Hub (`registry-1.docker.io`) is supported as an
-upstream.
+Docker caveats: multiple `upstreams` are supported as ordered failover
+*mirrors of one registry* (e.g. Docker Hub plus a corporate pull-through
+mirror of it) — do not mix different registries in one list, since the image
+reference passed to Trivy is always built from the first upstream's host.
+Also note the Docker daemon applies `registry-mirrors` only to Docker Hub
+images; images from another upstream registry must be pulled explicitly as
+`docker pull <proxy-host>/<repo>:<tag>`.
 
 ## `supply_chain`
 
@@ -92,7 +97,7 @@ artifact download; fails closed on scanner errors (HTTP 503).
 | `enabled` | `false` | Query osv.dev for each package version. |
 | `base_url` | `https://api.osv.dev` | OSV-compatible API endpoint. |
 | `block_on` | — | Minimum severity that blocks: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. The active policy profile's `cve_min_severity` overrides this when set. |
-| `cache_ttl_minutes` | `1440` | How long scan results are reused before re-querying. |
+| `cache_ttl_minutes` | `1440` | How long CVE scan results are cached in memory before re-querying osv.dev. Unrelated to the artifact cache, which has no TTL (see `cache.local.stale_after_days`). |
 
 ## `image_scan`
 

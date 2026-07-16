@@ -76,18 +76,28 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 		s.logger.Error().Err(err).Msg("revalidation: querying due entries")
 		return
 	}
+	if len(entries) == 0 {
+		// Quiet ticks stay out of the default info log; debug level shows the
+		// sweep is alive even when there is nothing to check.
+		s.logger.Debug().Msg("revalidation sweep: nothing due")
+		return
+	}
+	var kept, evicted, retried, skipped int
 	for _, e := range entries {
 		rv, ok := s.revalidators[e.Ref.Ecosystem]
 		if !ok {
+			skipped++
 			continue // no revalidator → skip without bumping last_validated
 		}
 		outcome, reason := rv.Revalidate(ctx, e)
 		switch outcome {
 		case Keep:
+			kept++
 			if err := s.store.MarkValidated(&e.Ref, time.Now().Unix()); err != nil {
 				s.logger.Error().Err(err).Str("package", e.Ref.Key()).Msg("revalidation: marking validated")
 			}
 		case Evict:
+			evicted++
 			if err := s.store.Invalidate(&e.Ref); err != nil {
 				s.logger.Error().Err(err).Str("package", e.Ref.Key()).Msg("revalidation: invalidating")
 			}
@@ -95,8 +105,16 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 			s.logger.Warn().Str("package", e.Ref.Key()).Str("reason", reasonText(reason)).Msg("revalidation evicted artifact")
 		case Retry:
 			// Leave as-is; re-queried next tick.
+			retried++
 		}
 	}
+	s.logger.Info().
+		Int("due", len(entries)).
+		Int("kept", kept).
+		Int("evicted", evicted).
+		Int("retried", retried).
+		Int("skipped", skipped).
+		Msg("revalidation sweep complete")
 }
 
 func reasonText(r *EvictReason) string {
