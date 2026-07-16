@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
@@ -16,7 +17,9 @@ import (
 type LocalCacheConfig struct {
 	RootPath  string
 	MaxSizeGB int
-	TTL       time.Duration
+	// StaleAfter is the idle threshold: entries not hit for this long count
+	// as stale (reclaimable via PurgeStale / the console Clean up button).
+	StaleAfter time.Duration
 }
 
 // LocalCache implements Cache using the local filesystem with a SQLite index.
@@ -24,12 +27,16 @@ type LocalCache struct {
 	cfg       LocalCacheConfig
 	index     *Index
 	evictCh   chan struct{}
+	evictions atomic.Int64 // entries evicted by evictToSize since process start
 	workerWG  sync.WaitGroup
 	closeOnce sync.Once
 }
 
 // NewLocalCache creates a LocalCache rooted at cfg.RootPath.
 func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
+	if cfg.StaleAfter <= 0 {
+		cfg.StaleAfter = DefaultStaleAfterDays * 24 * time.Hour
+	}
 	if err := os.MkdirAll(cfg.RootPath, 0755); err != nil { // #nosec G301 -- cache of public package artifacts
 		return nil, fmt.Errorf("creating cache dir %q: %w", cfg.RootPath, err)
 	}
@@ -54,7 +61,7 @@ func (lc *LocalCache) artifactPath(ref *gate.PackageRef) string {
 	return filepath.Join(lc.cfg.RootPath, "artifacts", hex[:2], hex)
 }
 
-// Get returns a cached entry, or (nil, false) on miss or expiry.
+// Get returns a cached entry, or (nil, false) on miss.
 func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	entry, found := lc.index.Get(ref)
 	if !found {
@@ -63,7 +70,7 @@ func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 
 	// Verify the artifact file still exists on disk.
 	if _, err := os.Stat(entry.ArtifactPath); err != nil {
-		_ = lc.index.Delete(ref)
+		_, _ = lc.index.Delete(ref)
 		return nil, false
 	}
 
@@ -96,17 +103,11 @@ func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, 
 		return fmt.Errorf("copying artifact to cache: %w", err)
 	}
 
-	ttl := lc.cfg.TTL
-	if ttl == 0 {
-		ttl = 24 * time.Hour
-	}
-
 	entry := &CacheEntry{
 		ArtifactPath: destPath,
 		ScanClean:    scanClean,
 		ScanJSON:     scanJSON,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(ttl),
 		SizeBytes:    written,
 	}
 
@@ -126,11 +127,25 @@ func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, 
 
 // Invalidate removes an entry from both the index and disk.
 func (lc *LocalCache) Invalidate(ref *gate.PackageRef) error {
+	_, err := lc.invalidate(ref)
+	return err
+}
+
+// invalidate removes ref's entry, reporting whether a row was actually
+// deleted — false when the entry was already gone (e.g. a concurrent
+// eviction), so callers don't count no-op deletions.
+func (lc *LocalCache) invalidate(ref *gate.PackageRef) (bool, error) {
 	entry, found := lc.index.Get(ref)
 	if found {
 		_ = os.Remove(entry.ArtifactPath)
 	}
-	return lc.index.Delete(ref)
+	n, err := lc.index.Delete(ref)
+	return n > 0, err
+}
+
+// staleCutoff is the last_hit unix timestamp below which an entry is stale.
+func (lc *LocalCache) staleCutoff() int64 {
+	return time.Now().Add(-lc.cfg.StaleAfter).Unix()
 }
 
 // Stats returns aggregate cache statistics.
@@ -143,7 +158,47 @@ func (lc *LocalCache) Stats() (CacheStats, error) {
 	if err != nil {
 		return CacheStats{}, err
 	}
-	return CacheStats{Entries: count, SizeBytes: size}, nil
+	stale, err := lc.index.StaleSizeBytes(lc.staleCutoff())
+	if err != nil {
+		return CacheStats{}, err
+	}
+	return CacheStats{Entries: count, SizeBytes: size, Evictions: lc.evictions.Load(), StaleBytes: stale}, nil
+}
+
+// purgeBatch is how many stale candidates PurgeStale fetches per round.
+const purgeBatch = 100
+
+// PurgeStale removes every entry idle longer than cfg.StaleAfter and returns
+// how many entries were removed and their total size. Individual failures are
+// skipped (same policy as evictToSize); a round that makes no progress aborts
+// instead of spinning on undeletable rows.
+func (lc *LocalCache) PurgeStale() (removed, freedBytes int64, err error) {
+	cutoff := lc.staleCutoff()
+	for {
+		candidates, err := lc.index.StaleCandidates(cutoff, purgeBatch)
+		if err != nil {
+			return removed, freedBytes, err
+		}
+		if len(candidates) == 0 {
+			return removed, freedBytes, nil
+		}
+		progress := false
+		for _, cand := range candidates {
+			c := cand
+			ok, err := lc.invalidate(&c.Ref)
+			if err != nil {
+				continue
+			}
+			progress = true
+			if ok {
+				removed++
+				freedBytes += c.SizeBytes
+			}
+		}
+		if !progress {
+			return removed, freedBytes, fmt.Errorf("cache purge: no progress on %d stale entries", len(candidates))
+		}
+	}
 }
 
 // evictWorker drains eviction triggers until the channel is closed.
@@ -174,9 +229,18 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 		if err != nil || len(candidates) == 0 {
 			return
 		}
+		progress := false
 		for _, ref := range candidates {
 			r := ref
-			_ = lc.Invalidate(&r)
+			if ok, err := lc.invalidate(&r); err == nil {
+				progress = true
+				if ok {
+					lc.evictions.Add(1)
+				}
+			}
+		}
+		if !progress {
+			return
 		}
 		total, _ = lc.index.TotalSizeBytes()
 	}

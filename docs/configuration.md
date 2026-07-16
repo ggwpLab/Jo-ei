@@ -148,6 +148,7 @@ console overview.
 | `backend` | — | `local`. (`s3` is reserved and currently fails fast at startup.) |
 | `local.path` | — | Directory for cached artifacts. |
 | `local.max_size_gb` | — | Size cap; least-recently-used entries are evicted. |
+| `local.stale_after_days` | `30` | Entries idle this long are stale: shown as reclaimable in the console and deleted by its Clean up button (`POST /api/cache/cleanup`). |
 
 ### `cache.revalidation`
 

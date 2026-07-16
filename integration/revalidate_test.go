@@ -33,7 +33,7 @@ func (r *recSpy) Record(e gate.Event) { r.events = append(r.events, e) }
 
 func TestRevalidationEvictsNewlyInfected(t *testing.T) {
 	dir := t.TempDir()
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })
 

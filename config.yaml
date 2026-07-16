@@ -78,6 +78,10 @@ cache:
   local:
     path: "/var/cache/jo-ei"
     max_size_gb: 100
+    # Entries not requested for this long count as stale: the console shows
+    # them as reclaimable and its Clean up button deletes them. There is no
+    # TTL — verdict freshness is the re-validation sweep's job (below).
+    stale_after_days: 30
   # S3 backend is reserved for a future release; setting backend: s3 currently
   # fails fast at startup.
   # s3:

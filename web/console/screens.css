@@ -393,6 +393,12 @@ textarea.input { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; 
 .cache-meter > i { display: block; height: 100%; }
 .cache-meter > i.used { background: linear-gradient(90deg, var(--jade-d), var(--jade)); }
 .cache-meter > i.evict { background: repeating-linear-gradient(45deg, var(--gold-t), var(--gold-t) 4px, transparent 4px, transparent 8px); }
+.legend-chip {
+  display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+  border-radius: 2px; vertical-align: -1px;
+  background: repeating-linear-gradient(45deg, var(--gold-t), var(--gold-t) 3px, transparent 3px, transparent 6px);
+  border: 1px solid var(--line-strong);
+}
 
 /* ===================================================================
    TOASTS

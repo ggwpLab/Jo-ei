@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   privacy-leak fix (GO-2026-5856); `govulncheck` reports no vulnerabilities
   reachable from this codebase.
 
+### Added
+
+- Cache cleanup on demand: `POST /api/cache/cleanup` and a Clean up button on
+  the console cache card delete stale entries and report the freed space.
+
+### Changed
+
+- Cache entries no longer expire on a fixed 24 h TTL — verdict freshness is
+  handled by the re-validation sweep, and TTL-expired entries were never
+  actually deleted from disk anyway. Entries idle longer than
+  `cache.local.stale_after_days` (default 30) are reported as reclaimable.
+- Console: lifetime counters are labeled "total" instead of "since start" —
+  they persist in SQLite and survive restarts.
+- Console: the local-cache card shows a 30-day hit-rate sparkline, and the
+  usage meter marks the reclaimable (stale) slice of used space with a
+  hatched segment and legend.
+
+### Fixed
+
+- Cache: LRU evictions are now counted and reported; the console previously
+  always showed 0 evictions.
+
 ## [0.1.0] - 2026-07-04
 
 First public release.

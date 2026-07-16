@@ -47,7 +47,7 @@ function Overview({ treatment, setTreatment, openThreat }) {
       <div className="section-head" style={{ marginTop: 28 }}>
         <span className="head-kanji kanji">衛</span>
         <div>
-          <div className="eyebrow">Since start · uptime {uptime}</div>
+          <div className="eyebrow">Totals · uptime {uptime}</div>
           <h2>Gate throughput</h2>
         </div>
         <div className="spacer"></div>
@@ -67,13 +67,13 @@ function Overview({ treatment, setTreatment, openThreat }) {
       </div>
 
       <div className="kpi-grid">
-        <KpiCard label="Requests · since start" value={fmtCompact(k.requests_total)}
+        <KpiCard label="Requests · total" value={fmtCompact(k.requests_total)}
           delta={<><b>{fmtNum(k.requests_total)}</b> total · {fmtNum(k.errors)} errors</>} watermark="求"
           spark={reqSpark} sparkColor="var(--washi-mut)" />
         <KpiCard label="Served from cache" value={(k.hit_rate * 100).toFixed(1) + "%"} accent="jade"
-          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits since start</>} watermark="蔵"
+          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits total</>} watermark="蔵"
           spark={hitSpark} sparkColor="var(--jade)" />
-        <KpiCard label="Blocked · since start" value={fmtNum(k.blocked_total)} accent="verm"
+        <KpiCard label="Blocked · total" value={fmtNum(k.blocked_total)} accent="verm"
           delta={<>423 Locked + 403 Forbidden</>} watermark="封"
           spark={blkSpark} sparkColor="var(--vermilion)" />
         <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"

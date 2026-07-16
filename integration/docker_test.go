@@ -86,9 +86,9 @@ func TestDockerPullFlow(t *testing.T) {
 	defer up.Close()
 
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{
-		RootPath:  t.TempDir(),
-		MaxSizeGB: 1,
-		TTL:       time.Hour,
+		RootPath:   t.TempDir(),
+		MaxSizeGB:  1,
+		StaleAfter: time.Hour,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lc.Close() })

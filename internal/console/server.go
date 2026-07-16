@@ -29,6 +29,12 @@ type CacheStatsProvider interface {
 	Stats() (cache.CacheStats, error)
 }
 
+// CachePurger deletes stale cache entries on demand; *cache.LocalCache
+// satisfies it.
+type CachePurger interface {
+	PurgeStale() (removed int64, freedBytes int64, err error)
+}
+
 // RegistryInfo describes one configured registry for GET /api/registries.
 type RegistryInfo struct {
 	Ecosystem string   `json:"eco"`
@@ -58,7 +64,12 @@ type Config struct {
 	Policy        *policy.Runtime
 	Cache         CacheStatsProvider // optional; nil reports zero stats
 	CacheMaxBytes int64
-	Registries    []RegistryInfo
+	// Purger enables POST /api/cache/cleanup; nil returns 404 there.
+	Purger CachePurger
+	// CacheStaleAfterDays is the effective idle threshold, echoed to the UI
+	// for the "unused Nd+" legend.
+	CacheStaleAfterDays int
+	Registries          []RegistryInfo
 	// RegistryStore persists registry edits (PUT /api/registries). Nil keeps the
 	// screen read-only using the static Registries field.
 	RegistryStore RegistryStore
@@ -105,6 +116,7 @@ func NewHandler(cfg Config) http.Handler {
 	mux.HandleFunc("PUT /api/policy", s.putPolicy)
 	mux.HandleFunc("GET /api/registries", s.registries)
 	mux.HandleFunc("PUT /api/registries", s.putRegistries)
+	mux.HandleFunc("POST /api/cache/cleanup", s.cacheCleanup)
 	mux.HandleFunc("GET /api/metrics/daily", s.dailyMetrics)
 	return mux
 }
@@ -164,14 +176,33 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 		// LocalCache.Stats does not track per-object hits; the request-level
 		// rate (cache_hits/requests) is the meaningful cache hit rate here.
 		"cache": map[string]any{
-			"objects":    cs.Entries,
-			"size_bytes": cs.SizeBytes,
-			"max_bytes":  s.cfg.CacheMaxBytes,
-			"hit_rate":   hitRate,
-			"evictions":  cs.Evictions,
+			"objects":          cs.Entries,
+			"size_bytes":       cs.SizeBytes,
+			"max_bytes":        s.cfg.CacheMaxBytes,
+			"hit_rate":         hitRate,
+			"evictions":        cs.Evictions,
+			"stale_bytes":      cs.StaleBytes,
+			"stale_after_days": s.cfg.CacheStaleAfterDays,
 		},
 		"scanners": scanners,
 	})
+}
+
+// cacheCleanup deletes stale cache entries (idle longer than the configured
+// threshold) and reports what was freed.
+func (s *server) cacheCleanup(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Purger == nil {
+		s.writeJSON(w, http.StatusNotFound, map[string]any{"error": "no_cache"})
+		return
+	}
+	removed, freed, err := s.cfg.Purger.PurgeStale()
+	if err != nil {
+		s.cfg.Logger.Error().Err(err).Msg("console: cache cleanup")
+		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "purge_failed"})
+		return
+	}
+	s.cfg.Logger.Info().Int64("removed", removed).Int64("freed_bytes", freed).Msg("console: cache cleanup")
+	s.writeJSON(w, http.StatusOK, map[string]any{"removed": removed, "freed_bytes": freed})
 }
 
 // dailyMetrics serves per-UTC-day telemetry tallies. ?days=N (default 30) limits

@@ -442,6 +442,15 @@ func TestValidate_RejectsNegativeRevalidation(t *testing.T) {
 	require.Error(t, c2.Validate())
 }
 
+func TestValidate_RejectsNegativeStaleAfterDays(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Cache.Local.StaleAfterDays = -1
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stale_after_days")
+}
+
 func TestLoad_EnvOverridesFileValues(t *testing.T) {
 	yaml := `
 server:

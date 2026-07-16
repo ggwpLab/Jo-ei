@@ -16,14 +16,8 @@ type CacheEntry struct {
 	// ScanJSON stores the serialized ScanResult for future inspection.
 	ScanJSON  string
 	StoredAt  time.Time
-	ExpiresAt time.Time
 	HitCount  int64
 	SizeBytes int64
-}
-
-// IsExpired returns true if the entry TTL has elapsed.
-func (e *CacheEntry) IsExpired() bool {
-	return time.Now().After(e.ExpiresAt)
 }
 
 // CacheStats holds aggregate statistics about the cache.
@@ -32,11 +26,14 @@ type CacheStats struct {
 	SizeBytes int64
 	HitRatio  float64
 	Evictions int64
+	// StaleBytes is the total size of entries idle longer than the configured
+	// staleness threshold — reclaimable via PurgeStale / console cleanup.
+	StaleBytes int64
 }
 
 // Cache is the storage interface for package artifacts and scan results.
 type Cache interface {
-	// Get returns the cached entry for ref, or (nil, false) on miss or expiry.
+	// Get returns the cached entry for ref, or (nil, false) on miss.
 	Get(ref *gate.PackageRef) (*CacheEntry, bool)
 	// Put copies the artifact at tmpPath into the cache store and records the scan result.
 	Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error

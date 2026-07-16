@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -47,6 +48,17 @@ type fakeStats struct{ stats cache.CacheStats }
 
 func (f *fakeStats) Stats() (cache.CacheStats, error) { return f.stats, nil }
 
+type fakePurger struct {
+	removed, freed int64
+	err            error
+	calls          int
+}
+
+func (f *fakePurger) PurgeStale() (int64, int64, error) {
+	f.calls++
+	return f.removed, f.freed, f.err
+}
+
 type fixture struct {
 	store   *telemetry.Store
 	hub     *telemetry.Hub
@@ -65,11 +77,13 @@ func newFixture(t *testing.T) *fixture {
 		nil,
 	)
 	h := console.NewHandler(console.Config{
-		Store:         store,
-		Broadcaster:   bcast,
-		Policy:        runtime,
-		Cache:         &fakeStats{stats: cache.CacheStats{Entries: 42, SizeBytes: 1 << 30, HitRatio: 0.5, Evictions: 3}},
-		CacheMaxBytes: 64 << 30,
+		Store:               store,
+		Broadcaster:         bcast,
+		Policy:              runtime,
+		Cache:               &fakeStats{stats: cache.CacheStats{Entries: 42, SizeBytes: 1 << 30, HitRatio: 0.5, Evictions: 3, StaleBytes: 7 << 20}},
+		CacheMaxBytes:       64 << 30,
+		CacheStaleAfterDays: 30,
+		Purger:              &fakePurger{removed: 12, freed: 5 << 20},
 		Registries: []console.RegistryInfo{
 			{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
 		},
@@ -116,9 +130,11 @@ func TestOverview(t *testing.T) {
 		} `json:"kpis"`
 		Gates map[string]telemetry.GateCounts `json:"gates"`
 		Cache struct {
-			Objects  int64   `json:"objects"`
-			MaxBytes int64   `json:"max_bytes"`
-			HitRate  float64 `json:"hit_rate"`
+			Objects        int64   `json:"objects"`
+			MaxBytes       int64   `json:"max_bytes"`
+			HitRate        float64 `json:"hit_rate"`
+			StaleBytes     int64   `json:"stale_bytes"`
+			StaleAfterDays int     `json:"stale_after_days"`
 		} `json:"cache"`
 		Scanners []health.ScannerHealth `json:"scanners"`
 	}
@@ -130,6 +146,8 @@ func TestOverview(t *testing.T) {
 	assert.Equal(t, telemetry.GateCounts{Pass: 1}, body.Gates["cache"])
 	assert.Equal(t, int64(42), body.Cache.Objects)
 	assert.Equal(t, int64(64<<30), body.Cache.MaxBytes)
+	assert.Equal(t, int64(7<<20), body.Cache.StaleBytes)
+	assert.Equal(t, 30, body.Cache.StaleAfterDays)
 	// cache.hit_rate must equal kpis.hit_rate: LocalCache does not track
 	// per-object hits, so the request-level rate is used for both.
 	assert.InDelta(t, body.KPIs.HitRate, body.Cache.HitRate, 0.001)
@@ -500,4 +518,52 @@ func TestRequestsRejectsBadVerdictAndCursor(t *testing.T) {
 
 	badRequest("/api/requests?verdict=BOGUS", "invalid_verdict")
 	badRequest("/api/requests?cursor=not-a-cursor", "invalid_cursor")
+}
+
+func TestCacheCleanup(t *testing.T) {
+	f := newFixture(t)
+
+	resp, err := http.Post(f.srv.URL+"/api/cache/cleanup", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Removed    int64 `json:"removed"`
+		FreedBytes int64 `json:"freed_bytes"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, int64(12), body.Removed)
+	assert.Equal(t, int64(5<<20), body.FreedBytes)
+}
+
+func TestCacheCleanup_NoPurger(t *testing.T) {
+	h := console.NewHandler(console.Config{
+		Store:       newTelemetryStore(t),
+		Broadcaster: telemetry.NewBroadcaster(),
+		Logger:      zerolog.Nop(),
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/cache/cleanup", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestCacheCleanup_PurgeError(t *testing.T) {
+	h := console.NewHandler(console.Config{
+		Store:       newTelemetryStore(t),
+		Broadcaster: telemetry.NewBroadcaster(),
+		Purger:      &fakePurger{err: errors.New("db locked")},
+		Logger:      zerolog.Nop(),
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/cache/cleanup", "application/json", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }

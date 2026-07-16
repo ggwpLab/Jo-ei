@@ -167,46 +167,38 @@ func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 			last_validated = excluded.last_validated`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 		entry.ArtifactPath, boolToInt(entry.ScanClean), entry.ScanJSON,
-		entry.StoredAt.Unix(), entry.ExpiresAt.Unix(),
+		// expires_at is legacy: entries no longer expire (freshness is the
+		// re-validation sweep's job); the column stays for schema compatibility.
+		entry.StoredAt.Unix(), 0,
 		entry.StoredAt.Unix(), 0, entry.SizeBytes, entry.StoredAt.Unix(),
 	)
 	return err
 }
 
-// Get retrieves a cache entry. Returns (nil, false) if not found or expired.
+// Get retrieves a cache entry. Returns (nil, false) if not found.
 func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	row := idx.db.QueryRow(`
-		SELECT file_path, scan_clean, scan_json, stored_at, expires_at, hit_count, size_bytes
+		SELECT file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes
 		FROM artifacts
 		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 
 	var (
-		entry         CacheEntry
-		scanCleanInt  int
-		storedAtUnix  int64
-		expiresAtUnix int64
+		entry        CacheEntry
+		scanCleanInt int
+		storedAtUnix int64
 	)
 	err := row.Scan(
 		&entry.ArtifactPath, &scanCleanInt, &entry.ScanJSON,
-		&storedAtUnix, &expiresAtUnix,
-		&entry.HitCount, &entry.SizeBytes,
+		&storedAtUnix, &entry.HitCount, &entry.SizeBytes,
 	)
-	if err == sql.ErrNoRows {
-		return nil, false
-	}
 	if err != nil {
 		return nil, false
 	}
 
 	entry.ScanClean = scanCleanInt == 1
 	entry.StoredAt = time.Unix(storedAtUnix, 0).UTC()
-	entry.ExpiresAt = time.Unix(expiresAtUnix, 0).UTC()
-
-	if entry.IsExpired() {
-		return nil, false
-	}
 	return &entry, true
 }
 
@@ -220,13 +212,18 @@ func (idx *Index) IncrementHit(ref *gate.PackageRef) error {
 	return err
 }
 
-// Delete removes an entry from the index.
-func (idx *Index) Delete(ref *gate.PackageRef) error {
-	_, err := idx.db.Exec(
+// Delete removes an entry from the index, reporting how many rows matched
+// (0 when the entry was already gone — callers use this to avoid counting
+// no-op deletions).
+func (idx *Index) Delete(ref *gate.PackageRef) (int64, error) {
+	res, err := idx.db.Exec(
 		`DELETE FROM artifacts WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // LRUCandidates returns up to n entries sorted by last_hit ascending (LRU first).
@@ -250,10 +247,49 @@ func (idx *Index) LRUCandidates(n int) ([]gate.PackageRef, error) {
 	return refs, rows.Err()
 }
 
+// StaleCandidate is a stale entry surfaced for purging: the ref plus its size
+// so the purge can report freed bytes without a second lookup.
+type StaleCandidate struct {
+	Ref       gate.PackageRef
+	SizeBytes int64
+}
+
+// StaleCandidates returns up to n entries whose last_hit is older than cutoff,
+// oldest first.
+func (idx *Index) StaleCandidates(cutoff int64, n int) ([]StaleCandidate, error) {
+	rows, err := idx.db.Query(`
+		SELECT ecosystem, name, version, classifier, size_bytes
+		FROM artifacts WHERE last_hit < ? ORDER BY last_hit ASC LIMIT ?`, cutoff, n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []StaleCandidate
+	for rows.Next() {
+		var c StaleCandidate
+		if err := rows.Scan(&c.Ref.Ecosystem, &c.Ref.Name, &c.Ref.Version, &c.Ref.Classifier, &c.SizeBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // TotalSizeBytes returns the sum of size_bytes for all entries.
 func (idx *Index) TotalSizeBytes() (int64, error) {
 	var total int64
 	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts`).Scan(&total)
+	return total, err
+}
+
+// StaleSizeBytes returns the sum of size_bytes for entries whose last_hit is
+// older than cutoff — the reclaimable portion surfaced in the console.
+func (idx *Index) StaleSizeBytes(cutoff int64) (int64, error) {
+	var total int64
+	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
+		cutoff).Scan(&total)
 	return total, err
 }
 
@@ -264,17 +300,15 @@ func (idx *Index) Count() (int64, error) {
 	return n, err
 }
 
-// DueForRevalidation returns up to limit non-expired entries whose last_validated
-// is older than `before` (a unix timestamp), oldest-first. Expired entries are
-// excluded — they are dropped on access anyway.
+// DueForRevalidation returns up to limit entries whose last_validated is older
+// than `before` (a unix timestamp), oldest-first.
 func (idx *Index) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
-	now := time.Now().Unix()
 	rows, err := idx.db.Query(`
 		SELECT ecosystem, name, version, classifier, file_path, scan_clean, scan_json
 		FROM artifacts
-		WHERE last_validated < ? AND expires_at > ?
+		WHERE last_validated < ?
 		ORDER BY last_validated ASC
-		LIMIT ?`, before, now, limit,
+		LIMIT ?`, before, limit,
 	)
 	if err != nil {
 		return nil, err

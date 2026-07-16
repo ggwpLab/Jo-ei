@@ -344,6 +344,8 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		} else {
 			logger.Warn().Msg("cache.revalidation.enabled but cache backend does not support re-validation; skipping")
 		}
+	} else {
+		logger.Warn().Msg("cache.revalidation.enabled is false — cached artifacts are never rescanned (entries have no TTL; they persist until LRU-evicted or purged)")
 	}
 
 	// Build the prefix→handler routing map from config.
@@ -400,18 +402,30 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// serve it before the auth-gated routes and outside the proxy mux.
 	root.Handle("/favicon.ico", web.FaviconHandler())
 	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
+	// The console needs the effective staleness threshold (mirrors the default
+	// cache.New applies) and, when the backend supports it, on-demand purge.
+	staleDays := cfg.Cache.Local.StaleAfterDays
+	if staleDays <= 0 {
+		staleDays = cache.DefaultStaleAfterDays
+	}
+	var cachePurger console.CachePurger
+	if p, ok := artifactCache.(console.CachePurger); ok {
+		cachePurger = p
+	}
 	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
-		Store:             store,
-		Broadcaster:       broadcaster,
-		Policy:            policyRuntime,
-		Cache:             artifactCache,
-		CacheMaxBytes:     int64(cfg.Cache.Local.MaxSizeGB) << 30,
-		Registries:        runningRegistries,
-		RegistryStore:     registrySettingsStore{s: settingsStore},
-		RunningRegistries: runningRegistries,
-		ImageScanEnabled:  cfg.ImageScan.Enabled,
-		Health:            healthMon,
-		Logger:            logger,
+		Store:               store,
+		Broadcaster:         broadcaster,
+		Policy:              policyRuntime,
+		Cache:               artifactCache,
+		CacheMaxBytes:       int64(cfg.Cache.Local.MaxSizeGB) << 30,
+		Purger:              cachePurger,
+		CacheStaleAfterDays: staleDays,
+		Registries:          runningRegistries,
+		RegistryStore:       registrySettingsStore{s: settingsStore},
+		RunningRegistries:   runningRegistries,
+		ImageScanEnabled:    cfg.ImageScan.Enabled,
+		Health:              healthMon,
+		Logger:              logger,
 	})))
 	root.Handle("/", mux)
 

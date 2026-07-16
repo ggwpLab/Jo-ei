@@ -68,7 +68,6 @@ func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
 		ArtifactPath: "/cache/a-1.0-sources.jar",
 		ScanClean:    true,
 		StoredAt:     time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 		SizeBytes:    456,
 	}))
 	gotSrc, found := idx.Get(&sources)
@@ -80,6 +79,24 @@ func TestNewIndex_MigratesLegacyDatabase(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestIndex_GetIgnoresLegacyExpiry(t *testing.T) {
+	idx, err := NewIndex(filepath.Join(t.TempDir(), "i.db"))
+	require.NoError(t, err)
+	defer idx.Close()
+
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "legacy", Version: "1.0"}
+	require.NoError(t, idx.Insert(&ref, &CacheEntry{
+		ArtifactPath: "/c/legacy", StoredAt: time.Now().UTC().Add(-48 * time.Hour), SizeBytes: 1,
+	}))
+	// Simulate a row written by a pre-stale binary whose TTL has lapsed.
+	_, err = idx.db.Exec(`UPDATE artifacts SET expires_at = ? WHERE name = 'legacy'`,
+		time.Now().Add(-time.Hour).Unix())
+	require.NoError(t, err)
+
+	_, found := idx.Get(&ref)
+	assert.True(t, found, "expiry is gone; old expires_at values must not hide entries")
+}
+
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "art.bin")
@@ -88,7 +105,7 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 
@@ -108,8 +125,29 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	require.Less(t, after, before)
 }
 
+func TestLocalCache_StatsReportsStaleBytes(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	fresh := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(fresh, writeTemp(t, "fresh-data"), true, ""))
+
+	// Insert an already-idle entry directly; Insert seeds last_hit from StoredAt.
+	stale := &gate.PackageRef{Ecosystem: "pypi", Name: "stale", Version: "1.0"}
+	require.NoError(t, lc.index.Insert(stale, &CacheEntry{
+		ArtifactPath: filepath.Join(lc.cfg.RootPath, "gone.bin"),
+		StoredAt:     time.Now().UTC().Add(-2 * time.Hour),
+		SizeBytes:    123,
+	}))
+
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(123), stats.StaleBytes, "only the idle entry's bytes are reclaimable")
+}
+
 func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	defer lc.Close()
 
@@ -136,8 +174,138 @@ func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
 }
 
 func TestLocalCache_CloseIsIdempotent(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, TTL: time.Hour})
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
 	require.NoError(t, lc.Close())
 	require.NoError(t, lc.Close())
+}
+
+func TestLocalCache_EvictionsAreCounted(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	for _, n := range []string{"a", "b", "c"} {
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
+	}
+	before, err := lc.index.Count()
+	require.NoError(t, err)
+
+	lc.evictToSize(1)
+
+	after, err := lc.index.Count()
+	require.NoError(t, err)
+	evicted := before - after
+	require.Positive(t, evicted, "eviction must have removed entries")
+
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, evicted, stats.Evictions)
+}
+
+func TestLocalCache_PurgeStale(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	fresh := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(fresh, writeTemp(t, "fresh-data"), true, ""))
+
+	// Two idle entries with real files on disk; Insert seeds last_hit from StoredAt.
+	var stalePaths []string
+	for i, n := range []string{"s1", "s2"} {
+		p := filepath.Join(lc.cfg.RootPath, n+".bin")
+		require.NoError(t, os.WriteFile(p, []byte("stale-data"), 0644))
+		stalePaths = append(stalePaths, p)
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.index.Insert(ref, &CacheEntry{
+			ArtifactPath: p,
+			StoredAt:     time.Now().UTC().Add(-time.Duration(2+i) * time.Hour),
+			SizeBytes:    50,
+		}))
+	}
+
+	removed, freed, err := lc.PurgeStale()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), removed)
+	assert.Equal(t, int64(100), freed)
+	for _, p := range stalePaths {
+		_, statErr := os.Stat(p)
+		assert.True(t, os.IsNotExist(statErr), "purged artifact %s must be deleted", p)
+	}
+
+	// The fresh entry survives, and nothing is stale anymore.
+	_, found := lc.Get(fresh)
+	assert.True(t, found)
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.StaleBytes)
+	assert.Equal(t, int64(0), stats.Evictions, "manual purge must not count as LRU eviction")
+}
+
+func TestLocalCache_EvictToSizeBailsOnZeroProgress(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	for _, n := range []string{"a", "b", "c"} {
+		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
+		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
+	}
+	before, err := lc.index.Count()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), before)
+
+	// Make every DELETE on the artifacts table fail, so invalidate() always
+	// errors even though LRUCandidates keeps returning the same rows. Before
+	// the zero-progress bail this spun evictToSize's loop forever.
+	_, err = lc.index.db.Exec(`
+		CREATE TRIGGER block_delete BEFORE DELETE ON artifacts
+		BEGIN SELECT RAISE(ABORT, 'delete blocked for test'); END;`)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		lc.evictToSize(1) // 1-byte budget: every entry is over budget, forcing eviction attempts.
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("evictToSize did not return — zero-progress bail is missing (infinite spin)")
+	}
+
+	after, err := lc.index.Count()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "no rows should have been removed since every delete failed")
+}
+
+func TestNewLocalCache_DefaultsStaleAfterWhenUnset(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1}) // StaleAfter left zero
+	require.NoError(t, err)
+	defer lc.Close()
+
+	assert.Equal(t, time.Duration(DefaultStaleAfterDays)*24*time.Hour, lc.cfg.StaleAfter,
+		"StaleAfter<=0 must default rather than making staleCutoff() == now (which would mark the whole cache stale)")
+
+	// Defense-in-depth check: an entry stored moments ago must not be
+	// immediately reported as stale.
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
+	require.NoError(t, lc.Put(ref, writeTemp(t, "data"), true, ""))
+	stats, err := lc.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.StaleBytes)
+}
+
+func TestLocalCache_PurgeStaleSkipsAlreadyGoneRows(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "gone", Version: "1.0"}
+	ok, err := lc.invalidate(ref)
+	require.NoError(t, err)
+	assert.False(t, ok, "deleting a nonexistent row must report no deletion")
 }
