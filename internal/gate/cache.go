@@ -16,8 +16,7 @@ type ArtifactEntry struct {
 }
 
 // ArtifactCache is the storage interface used by the proxy handler.
-// The real cache.LocalCache satisfies this interface via the cacheAdapter in
-// cmd/jo-ei.
+// The real cache backends satisfy it via cache.AsArtifactCache.
 type ArtifactCache interface {
 	Get(ref *PackageRef) (*ArtifactEntry, bool)
 	Put(ref *PackageRef, tmpPath string, scanClean bool, scanJSON string) error
