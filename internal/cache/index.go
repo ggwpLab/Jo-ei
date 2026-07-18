@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	last_hit     INTEGER NOT NULL DEFAULT 0,
 	hit_count    INTEGER NOT NULL DEFAULT 0,
 	size_bytes   INTEGER NOT NULL DEFAULT 0,
-	last_validated INTEGER NOT NULL DEFAULT 0,
+	last_cve_check     INTEGER NOT NULL DEFAULT 0,
+	last_malware_check INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(ecosystem, name, version, classifier)
 );
 CREATE INDEX IF NOT EXISTS idx_last_hit ON artifacts(last_hit);
@@ -52,8 +53,8 @@ func NewIndex(path string) (*Index, error) {
 	if err := migrateClassifier(db); err != nil {
 		return nil, fmt.Errorf("migrating schema: %w", err)
 	}
-	if err := migrateLastValidated(db); err != nil {
-		return nil, fmt.Errorf("migrating last_validated: %w", err)
+	if err := migrateCheckTimestamps(db); err != nil {
+		return nil, fmt.Errorf("migrating check timestamps: %w", err)
 	}
 	return &Index{db: db}, nil
 }
@@ -98,25 +99,48 @@ func migrateClassifier(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// migrateLastValidated adds the re-validation timestamp column to a pre-existing
-// database and backfills it from stored_at so old rows are treated as validated
-// at store time rather than all immediately due. No-op once present and backfilled.
-func migrateLastValidated(db *sql.DB) error {
-	has, err := hasColumn(db, "artifacts", "last_validated")
+// migrateCheckTimestamps replaces the sweep-era last_validated column with
+// per-gate check timestamps. Both are backfilled from last_validated when the
+// column exists (stored_at for rows where it is 0 — never a real timestamp),
+// or from stored_at on databases that predate re-validation entirely. The old
+// column is then dropped. No-op once last_cve_check exists.
+func migrateCheckTimestamps(db *sql.DB) error {
+	has, err := hasColumn(db, "artifacts", "last_cve_check")
+	if err != nil || has {
+		return err
+	}
+	hadLV, err := hasColumn(db, "artifacts", "last_validated")
 	if err != nil {
 		return err
 	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE artifacts ADD COLUMN last_validated INTEGER NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-	// Backfill rows that predate the column (last_validated == 0 is never a real
-	// timestamp). Idempotent: a no-op once every row has a real value.
-	if _, err := db.Exec(`UPDATE artifacts SET last_validated = stored_at WHERE last_validated = 0`); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
 		return err
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck // rolled back unless Commit succeeds
+
+	steps := []string{
+		`ALTER TABLE artifacts ADD COLUMN last_cve_check INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE artifacts ADD COLUMN last_malware_check INTEGER NOT NULL DEFAULT 0`,
+	}
+	if hadLV {
+		steps = append(steps,
+			`UPDATE artifacts SET
+				last_cve_check     = CASE WHEN last_validated > 0 THEN last_validated ELSE stored_at END,
+				last_malware_check = CASE WHEN last_validated > 0 THEN last_validated ELSE stored_at END`,
+			`ALTER TABLE artifacts DROP COLUMN last_validated`,
+		)
+	} else {
+		steps = append(steps,
+			`UPDATE artifacts SET last_cve_check = stored_at, last_malware_check = stored_at`,
+		)
+	}
+	for _, stmt := range steps {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("check-timestamp migration step failed: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // hasColumn reports whether table has a column with the given name.
@@ -154,23 +178,25 @@ func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 	_, err := idx.db.Exec(`
 		INSERT INTO artifacts
 			(ecosystem, name, version, classifier, file_path, scan_clean, scan_json,
-			 stored_at, expires_at, last_hit, hit_count, size_bytes, last_validated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 stored_at, expires_at, last_hit, hit_count, size_bytes, last_cve_check, last_malware_check)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(ecosystem, name, version, classifier) DO UPDATE SET
-			file_path      = excluded.file_path,
-			scan_clean     = excluded.scan_clean,
-			scan_json      = excluded.scan_json,
-			stored_at      = excluded.stored_at,
-			expires_at     = excluded.expires_at,
-			last_hit       = excluded.last_hit,
-			size_bytes     = excluded.size_bytes,
-			last_validated = excluded.last_validated`,
+			file_path          = excluded.file_path,
+			scan_clean         = excluded.scan_clean,
+			scan_json          = excluded.scan_json,
+			stored_at          = excluded.stored_at,
+			expires_at         = excluded.expires_at,
+			last_hit           = excluded.last_hit,
+			size_bytes         = excluded.size_bytes,
+			last_cve_check     = excluded.last_cve_check,
+			last_malware_check = excluded.last_malware_check`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 		entry.ArtifactPath, boolToInt(entry.ScanClean), entry.ScanJSON,
 		// expires_at is legacy: entries no longer expire (freshness is the
 		// re-validation sweep's job); the column stays for schema compatibility.
 		entry.StoredAt.Unix(), 0,
-		entry.StoredAt.Unix(), 0, entry.SizeBytes, entry.StoredAt.Unix(),
+		entry.StoredAt.Unix(), 0, entry.SizeBytes,
+		entry.StoredAt.Unix(), entry.StoredAt.Unix(),
 	)
 	return err
 }
@@ -178,7 +204,8 @@ func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 // Get retrieves a cache entry. Returns (nil, false) if not found.
 func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 	row := idx.db.QueryRow(`
-		SELECT file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes
+		SELECT file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes,
+			last_cve_check, last_malware_check
 		FROM artifacts
 		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
@@ -188,10 +215,13 @@ func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 		entry        CacheEntry
 		scanCleanInt int
 		storedAtUnix int64
+		cveUnix      int64
+		avUnix       int64
 	)
 	err := row.Scan(
 		&entry.ArtifactPath, &scanCleanInt, &entry.ScanJSON,
 		&storedAtUnix, &entry.HitCount, &entry.SizeBytes,
+		&cveUnix, &avUnix,
 	)
 	if err != nil {
 		return nil, false
@@ -199,6 +229,8 @@ func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 
 	entry.ScanClean = scanCleanInt == 1
 	entry.StoredAt = time.Unix(storedAtUnix, 0).UTC()
+	entry.LastCVECheck = time.Unix(cveUnix, 0).UTC()
+	entry.LastMalwareCheck = time.Unix(avUnix, 0).UTC()
 	return &entry, true
 }
 
@@ -300,43 +332,19 @@ func (idx *Index) Count() (int64, error) {
 	return n, err
 }
 
-// DueForRevalidation returns up to limit entries whose last_validated is older
-// than `before` (a unix timestamp), oldest-first.
-func (idx *Index) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
-	rows, err := idx.db.Query(`
-		SELECT ecosystem, name, version, classifier, file_path, scan_clean, scan_json
-		FROM artifacts
-		WHERE last_validated < ?
-		ORDER BY last_validated ASC
-		LIMIT ?`, before, limit,
+// MarkCVEChecked sets last_cve_check for ref to ts (unix seconds).
+func (idx *Index) MarkCVEChecked(ref *gate.PackageRef, ts int64) error {
+	_, err := idx.db.Exec(
+		`UPDATE artifacts SET last_cve_check = ? WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		ts, ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []RevalEntry
-	for rows.Next() {
-		var (
-			e            RevalEntry
-			scanCleanInt int
-		)
-		if err := rows.Scan(
-			&e.Ref.Ecosystem, &e.Ref.Name, &e.Ref.Version, &e.Ref.Classifier,
-			&e.FilePath, &scanCleanInt, &e.ScanJSON,
-		); err != nil {
-			return nil, err
-		}
-		e.ScanClean = scanCleanInt == 1
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return err
 }
 
-// MarkValidated sets last_validated for ref to ts (a unix timestamp).
-func (idx *Index) MarkValidated(ref *gate.PackageRef, ts int64) error {
+// MarkMalwareChecked sets last_malware_check for ref to ts (unix seconds).
+func (idx *Index) MarkMalwareChecked(ref *gate.PackageRef, ts int64) error {
 	_, err := idx.db.Exec(
-		`UPDATE artifacts SET last_validated = ? WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
+		`UPDATE artifacts SET last_malware_check = ? WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
 		ts, ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
 	)
 	return err

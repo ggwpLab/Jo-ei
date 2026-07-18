@@ -18,6 +18,10 @@ type CacheEntry struct {
 	StoredAt  time.Time
 	HitCount  int64
 	SizeBytes int64
+	// LastCVECheck / LastMalwareCheck record when each gate last confirmed
+	// this entry clean; lazy re-validation compares them to the configured TTLs.
+	LastCVECheck     time.Time
+	LastMalwareCheck time.Time
 }
 
 // CacheStats holds aggregate statistics about the cache.
@@ -39,6 +43,10 @@ type Cache interface {
 	Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error
 	// Invalidate removes the cached entry and its artifact file for ref.
 	Invalidate(ref *gate.PackageRef) error
+	// MarkCVEChecked records a passed CVE re-check for ref at ts.
+	MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error
+	// MarkMalwareChecked records a passed malware re-check for ref at ts.
+	MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error
 	// Stats returns aggregate cache statistics.
 	Stats() (CacheStats, error)
 	// Close stops background workers and releases the index.

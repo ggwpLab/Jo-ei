@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
@@ -22,10 +23,14 @@ func (f *fakeCache) Get(ref *gate.PackageRef) (*cache.CacheEntry, bool) {
 }
 func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJSON string) error {
 	// Copy the file so the entry survives the caller's defer os.Remove.
+	now := time.Now()
 	data, err := os.ReadFile(tmpPath)
 	if err != nil {
 		// Allow os.DevNull or missing files (e.g. oversized-layer sentinel).
-		f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: tmpPath, ScanClean: clean, ScanJSON: scanJSON}
+		f.entries[ref.Key()] = &cache.CacheEntry{
+			ArtifactPath: tmpPath, ScanClean: clean, ScanJSON: scanJSON,
+			LastCVECheck: now, LastMalwareCheck: now,
+		}
 		return nil
 	}
 	dst, err := os.CreateTemp("", "fakecache-*")
@@ -37,12 +42,30 @@ func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJS
 		return err
 	}
 	dst.Close()
-	f.entries[ref.Key()] = &cache.CacheEntry{ArtifactPath: dst.Name(), ScanClean: clean, ScanJSON: scanJSON}
+	f.entries[ref.Key()] = &cache.CacheEntry{
+		ArtifactPath: dst.Name(), ScanClean: clean, ScanJSON: scanJSON,
+		LastCVECheck: now, LastMalwareCheck: now,
+	}
 	return nil
 }
 func (f *fakeCache) Invalidate(ref *gate.PackageRef) error { delete(f.entries, ref.Key()); return nil }
-func (f *fakeCache) Stats() (cache.CacheStats, error)      { return cache.CacheStats{}, nil }
-func (f *fakeCache) Close() error                          { return nil }
+
+func (f *fakeCache) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
+	if e, ok := f.entries[ref.Key()]; ok {
+		e.LastCVECheck = ts
+	}
+	return nil
+}
+
+func (f *fakeCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
+	if e, ok := f.entries[ref.Key()]; ok {
+		e.LastMalwareCheck = ts
+	}
+	return nil
+}
+
+func (f *fakeCache) Stats() (cache.CacheStats, error) { return cache.CacheStats{}, nil }
+func (f *fakeCache) Close() error                     { return nil }
 
 func TestVerdictStoreBlobRoundTrip(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "layer")
