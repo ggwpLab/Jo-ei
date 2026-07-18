@@ -425,7 +425,8 @@ Expected: PASS.
 
 **Files:**
 - Modify: `internal/gate/cache.go` (ArtifactEntry fields, ArtifactCache Mark*)
-- Modify: `cmd/jo-ei/main.go` (`cacheAdapter`)
+- Create: `internal/cache/artifactcache.go` (exported adapter, replaces main's private `cacheAdapter`)
+- Modify: `cmd/jo-ei/main.go` (delete `cacheAdapter`, use `cache.AsArtifactCache`)
 - Modify: `internal/proxy/handler_test.go` (`fakeCache`)
 
 **Interfaces:**
@@ -463,10 +464,26 @@ type ArtifactCache interface {
 }
 ```
 
-- [ ] **Step 2: Update cacheAdapter (cmd/jo-ei/main.go)**
+- [ ] **Step 2: Exported adapter in internal/cache; delete main's cacheAdapter**
+
+Create `internal/cache/artifactcache.go`:
 
 ```go
-func (a *cacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
+package cache
+
+import (
+	"time"
+
+	"github.com/ggwpLab/Jo-ei/internal/gate"
+)
+
+// AsArtifactCache bridges a Cache to the narrower gate.ArtifactCache the
+// proxy handler consumes (gate cannot import cache — see gate.ArtifactEntry).
+func AsArtifactCache(c Cache) gate.ArtifactCache { return &artifactCacheAdapter{c: c} }
+
+type artifactCacheAdapter struct{ c Cache }
+
+func (a *artifactCacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	entry, found := a.c.Get(ref)
 	if !found {
 		return nil, false
@@ -479,14 +496,24 @@ func (a *cacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	}, true
 }
 
-func (a *cacheAdapter) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
+func (a *artifactCacheAdapter) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
+	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
+}
+
+func (a *artifactCacheAdapter) Invalidate(ref *gate.PackageRef) error {
+	return a.c.Invalidate(ref)
+}
+
+func (a *artifactCacheAdapter) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
 	return a.c.MarkCVEChecked(ref, ts)
 }
 
-func (a *cacheAdapter) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
+func (a *artifactCacheAdapter) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
 	return a.c.MarkMalwareChecked(ref, ts)
 }
 ```
+
+In `cmd/jo-ei/main.go`: delete the whole `cacheAdapter` type and its three methods (~lines 490-512); replace its only use (`cache: &cacheAdapter{c: artifactCache}` in the `sharedDeps` literal) with `cache: cache.AsArtifactCache(artifactCache)`.
 
 - [ ] **Step 3: Update proxy fakeCache (internal/proxy/handler_test.go)**
 
@@ -1294,7 +1321,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Write the package-path integration test**
 
-`integration/lazy_recheck_test.go` (build tag `integration`, package `integration_test`). The handler needs a `gate.ArtifactCache`; wrap the real `LocalCache` with a local copy of main's adapter:
+`integration/lazy_recheck_test.go` (build tag `integration`, package `integration_test`). The handler needs a `gate.ArtifactCache`; wrap the real `LocalCache` with `cache.AsArtifactCache(lc)` (Task 3's exported adapter):
 
 ```go
 //go:build integration
@@ -1327,33 +1354,6 @@ import (
 (`sha256`/`hex`/`dockerproxy` are used by the Docker test in Step 2 of this task — one shared import block for the whole file.)
 
 ```go
-
-// artifactCacheAdapter mirrors cmd/jo-ei's cacheAdapter: bridges cache.Cache
-// to gate.ArtifactCache for handler wiring in tests.
-type artifactCacheAdapter struct{ c cache.Cache }
-
-func (a *artifactCacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
-	e, ok := a.c.Get(ref)
-	if !ok {
-		return nil, false
-	}
-	return &gate.ArtifactEntry{
-		ArtifactPath: e.ArtifactPath, ScanClean: e.ScanClean,
-		LastCVECheck: e.LastCVECheck, LastMalwareCheck: e.LastMalwareCheck,
-	}, true
-}
-
-func (a *artifactCacheAdapter) Put(ref *gate.PackageRef, tmp string, clean bool, sj string) error {
-	return a.c.Put(ref, tmp, clean, sj)
-}
-func (a *artifactCacheAdapter) Invalidate(ref *gate.PackageRef) error { return a.c.Invalidate(ref) }
-func (a *artifactCacheAdapter) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
-	return a.c.MarkCVEChecked(ref, ts)
-}
-func (a *artifactCacheAdapter) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
-	return a.c.MarkMalwareChecked(ref, ts)
-}
-
 // switchableAV reports clean until flipped to infected.
 type switchableAV struct{ infected bool }
 
@@ -1395,7 +1395,7 @@ func TestLazyRecheckEvictsNewlyInfected(t *testing.T) {
 	h := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:           adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:            supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
-		Cache:             &artifactCacheAdapter{c: lc},
+		Cache:             cache.AsArtifactCache(lc),
 		Logger:            zerolog.Nop(),
 		AVScanner:         av,
 		Recorder:          rec,
