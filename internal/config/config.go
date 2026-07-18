@@ -77,14 +77,11 @@ func (c *Config) Validate() error {
 	if c.ImageScan.MaxLayerBytes < 0 {
 		return fmt.Errorf("image_scan.max_layer_bytes must not be negative")
 	}
-	if c.Cache.Revalidation.IntervalMinutes < 0 {
-		return fmt.Errorf("cache.revalidation.interval_minutes must not be negative")
+	if c.Cache.Revalidation.CVETTLMinutes < 0 {
+		return fmt.Errorf("cache.revalidation.cve_ttl_minutes must not be negative")
 	}
-	if c.Cache.Revalidation.RevalidateAfterHours < 0 {
-		return fmt.Errorf("cache.revalidation.revalidate_after_hours must not be negative")
-	}
-	if c.Cache.Revalidation.BatchSize < 0 {
-		return fmt.Errorf("cache.revalidation.batch_size must not be negative")
+	if c.Cache.Revalidation.MalwareTTLMinutes < 0 {
+		return fmt.Errorf("cache.revalidation.malware_ttl_minutes must not be negative")
 	}
 	if c.Cache.Local.StaleAfterDays < 0 {
 		return fmt.Errorf("cache.local.stale_after_days must not be negative")
@@ -174,14 +171,14 @@ type S3Cache struct {
 	Region   string `mapstructure:"region"`
 }
 
-// RevalidationConfig tunes the periodic cache re-validation sweep. Zero values
-// use defaults (60 min interval, 24 h freshness, 50 per batch) applied at wiring
-// time; negative values are rejected. enabled:false disables the sweep.
+// RevalidationConfig sets per-gate TTLs for lazy re-validation of cache hits.
+// A cache hit whose CVE or malware check is older than its TTL re-runs that
+// gate before serving; an entry that now fails is blocked and evicted. 0
+// disables that gate's re-check. Defaults (1440 = 24h) come from viper
+// defaults, so an omitted key gets the default while an explicit 0 disables.
 type RevalidationConfig struct {
-	Enabled              bool `mapstructure:"enabled"`
-	IntervalMinutes      int  `mapstructure:"interval_minutes"`
-	RevalidateAfterHours int  `mapstructure:"revalidate_after_hours"`
-	BatchSize            int  `mapstructure:"batch_size"`
+	CVETTLMinutes     int `mapstructure:"cve_ttl_minutes"`
+	MalwareTTLMinutes int `mapstructure:"malware_ttl_minutes"`
 }
 
 type PolicyConfig struct {
@@ -263,6 +260,8 @@ type LoggingConfig struct {
 // cve.block_on. Only keys present in the file can be overridden.
 func Load(path string) (*Config, error) {
 	v := viper.New()
+	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
+	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
 	v.SetConfigFile(path)
 	v.SetEnvPrefix("JOEI")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

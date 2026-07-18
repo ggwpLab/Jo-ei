@@ -430,16 +430,47 @@ database: { path: "/tmp/x.db" }
 	}
 }
 
-func TestValidate_RejectsNegativeRevalidation(t *testing.T) {
-	c := &config.Config{}
-	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
-	c.Cache.Revalidation.IntervalMinutes = -1
-	require.Error(t, c.Validate())
+// loadTTLConfig writes yaml to a temp file and loads it.
+func loadTTLConfig(t *testing.T, yaml string) (*config.Config, error) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(yaml), 0o600))
+	return config.Load(p)
+}
 
-	c2 := &config.Config{}
-	c2.Database.Path = "/var/lib/jo-ei/jo-ei.db"
-	c2.Cache.Revalidation.BatchSize = -5
-	require.Error(t, c2.Validate())
+// ttlBaseYAML is the smallest config that passes Validate.
+const ttlBaseYAML = `
+database:
+  path: "/tmp/joei.db"
+`
+
+func TestRevalidationTTLDefaults(t *testing.T) {
+	// No revalidation section at all → both TTLs default to 1440.
+	cfg, err := loadTTLConfig(t, ttlBaseYAML)
+	require.NoError(t, err)
+	assert.Equal(t, 1440, cfg.Cache.Revalidation.CVETTLMinutes)
+	assert.Equal(t, 1440, cfg.Cache.Revalidation.MalwareTTLMinutes)
+}
+
+func TestRevalidationTTLExplicitZeroDisables(t *testing.T) {
+	cfg, err := loadTTLConfig(t, ttlBaseYAML+`
+cache:
+  revalidation:
+    cve_ttl_minutes: 0
+    malware_ttl_minutes: 90
+`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cfg.Cache.Revalidation.CVETTLMinutes)
+	assert.Equal(t, 90, cfg.Cache.Revalidation.MalwareTTLMinutes)
+}
+
+func TestRevalidationTTLNegativeRejected(t *testing.T) {
+	_, err := loadTTLConfig(t, ttlBaseYAML+`
+cache:
+  revalidation:
+    cve_ttl_minutes: -1
+`)
+	require.ErrorContains(t, err, "cve_ttl_minutes")
 }
 
 func TestValidate_RejectsNegativeStaleAfterDays(t *testing.T) {
