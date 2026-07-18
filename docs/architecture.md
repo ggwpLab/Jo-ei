@@ -14,11 +14,11 @@ anything but the standard library.
 ```
                  cmd/jo-ei  (composition root — the only place that wires concretes)
                      │
-   ┌─────────┬───────┼────────┬──────────────┐
-   ▼         ▼       ▼        ▼              ▼
- proxy    console  revalidate dockerproxy  … every subsystem
-   │         │       │        │
-   └─────────┴───┬───┴────────┘
+   ┌─────────┬───────────────┬──────────────┐
+   ▼         ▼               ▼              ▼
+ proxy    console       dockerproxy    … every subsystem
+   │         │              │
+   └─────────┴───┬──────────┘
                  ▼
           internal/gate  (domain types + ports; imports stdlib only)
                  ▲
@@ -49,12 +49,11 @@ that is what makes the graph acyclic.
 | `internal/gate` | Domain types and ports (see above). |
 | `internal/proxy` | The package-registry HTTP data path: gate pipeline orchestration (`Handler`), path-prefix routing (`Mux`), transparent proxying of metadata requests. |
 | `internal/proxy/adapters` | One `RegistryAdapter` per ecosystem: PyPI, npm (+ Yarn alias), Maven, RubyGems. Adapters normalize download URLs to a `PackageRef`, fetch publish metadata, and enumerate upstream URLs (multi-upstream failover). |
-| `internal/proxy/dockerproxy` | Docker Registry v2 pull-through proxy: manifest gate (Trivy + malware engines over config blob and layers), blob cache, tag index, quarantine. Verdicts are decided on the manifest request. |
+| `internal/proxy/dockerproxy` | Docker Registry v2 pull-through proxy: manifest gate (Trivy + malware engines over config blob and layers), blob cache, tag index, quarantine. Verdicts are decided on the manifest request. Trivy here is the CVE gate's engine for images (policy shared with package CVE decisions). |
 | `internal/supplychain` | Min-age filter (24h rule) with per-gate allowlist. |
 | `internal/scanner` | `CVEScanner` (osv.dev with TTL cache), `AVScanner`s (ClamAV clamd protocol, ICAP RFC 3507), `MultiScanner` fan-out, `LimitedScanner` concurrency semaphore, health probes. |
 | `internal/policy` | Policy engine (`PolicyDecider`): severity threshold, per-gate allowlists, denylist; `Runtime` holds the mutable snapshot, seeded from YAML on first boot and persisted via the settings store. |
-| `internal/cache` | Artifact cache: SQLite index + files on disk, LRU eviction to `max_size_gb`, revalidation bookkeeping. Satisfies `gate.ArtifactCache`. |
-| `internal/revalidate` | Periodic sweep re-running the gates over cached entries; evicts entries that newly fail (new CVE, new AV signature, new denylist entry). |
+| `internal/cache` | Artifact cache: SQLite index + files on disk, LRU eviction to `max_size_gb`, per-gate check timestamps for lazy re-validation. Satisfies `gate.ArtifactCache`. |
 | `internal/httpx` | Outbound discipline per upstream host: concurrency limiter, token-bucket rate limiter, 429/503 circuit breaker. |
 | `internal/telemetry` | `Recorder` implementation: SQLite-backed event store with retention pruning, daily aggregates, SSE broadcaster for the console's live feed. |
 | `internal/storage` | Shared embedded SQLite (pure Go, no cgo): PRAGMAs, per-component migrations. `storagetest` holds the retrying temp-dir helper for tests. |
@@ -105,7 +104,7 @@ Design invariants:
 Docker images take a parallel path in `dockerproxy`: the whole verdict (Trivy
 vulnerability/secret scan + malware engines over each layer) is computed when
 the client requests the **manifest**, so a rejected image is never partially
-served. Verdicts are cached; repeat pulls record `CACHE`.
+served. Verdicts are cached and trusted until the re-check TTL (`cache.revalidation`) lapses, then re-evaluated on the next pull; repeat pulls inside the TTL record `CACHE`.
 
 ## Persistence
 
@@ -116,7 +115,7 @@ own migration versioning (`internal/storage.ApplyMigrations`):
 |---|---|
 | telemetry | request events (30-day retention), per-day metrics (365-day), lifetime counters |
 | settings | runtime policy params, registry enable/disable overlays |
-| cache index | artifact metadata, last-hit (LRU), last-validated (revalidation) |
+| cache index | artifact metadata, last-hit (LRU), per-gate check timestamps (lazy re-validation) |
 
 Runtime edits from the console (policy, registries) win over YAML after first
 boot; YAML only seeds an empty store.
@@ -129,8 +128,9 @@ boot; YAML only seeds an empty store.
 - Malware scans are capped globally (`malware.max_concurrent_scans`,
   `LimitedScanner`) so download bursts don't overwhelm clamd/ICAP worker
   pools.
-- The cache eviction worker and the revalidation sweeper are single background
-  goroutines with coalescing triggers.
+- The cache eviction worker is a single background goroutine with a coalescing
+  trigger; re-validation is lazy on the serve path, so it adds no background
+  load.
 
 ## Where to start reading
 

@@ -79,8 +79,8 @@ cache:
     path: "/var/cache/jo-ei"
     max_size_gb: 100
     # Entries not requested for this long count as stale: the console shows
-    # them as reclaimable and its Clean up button deletes them. There is no
-    # TTL — verdict freshness is the re-validation sweep's job (below).
+    # them as reclaimable and its Clean up button deletes them. Verdict
+    # freshness is handled separately by lazy re-validation (below).
     stale_after_days: 30
   # S3 backend is reserved for a future release; setting backend: s3 currently
   # fails fast at startup.
@@ -88,16 +88,15 @@ cache:
   #   endpoint: "https://s3.amazonaws.com"
   #   bucket: "joei-cache"
   #   region: "us-east-1"
-  # Periodic re-validation: a background sweep re-runs the gates (CVE, malware,
-  # and for Docker the full image gate) over cached artifacts and evicts any that
-  # now fail — e.g. a newly published CVE, an updated ClamAV signature, or a
-  # newly denylisted package. A scanner that is temporarily unreachable does not
-  # evict; the entry is retried on the next sweep.
+  # Lazy re-validation: a cache hit whose CVE or malware check is older than
+  # its TTL re-runs that gate (CVE by metadata, malware by re-scanning the
+  # cached file; Docker re-runs the full image gate) before serving. An entry
+  # that now fails is blocked and its binary evicted. A temporarily
+  # unreachable scanner serves the previously clean entry and retries on the
+  # next hit. 0 disables that gate's re-check.
   revalidation:
-    enabled: true
-    interval_minutes: 60         # how often the sweep ticks
-    revalidate_after_hours: 24   # re-check an entry when this long since last check
-    batch_size: 50               # max entries processed per tick
+    cve_ttl_minutes: 1440
+    malware_ttl_minutes: 1440
 
 # Persistent state (required). Telemetry — event history, lifetime counters and
 # per-day metrics — is stored in an embedded SQLite database and is the single

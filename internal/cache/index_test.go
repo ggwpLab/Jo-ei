@@ -136,47 +136,30 @@ func TestIndex_Delete(t *testing.T) {
 	assert.False(t, found)
 }
 
-func TestIndex_DueForRevalidationAndMarkValidated(t *testing.T) {
-	idx, cleanup := newTestIndex(t)
-	defer cleanup()
-
-	now := time.Now().UTC()
-	// stored_at drives initial last_validated (set by Insert).
-	old := gate.PackageRef{Ecosystem: "pypi", Name: "old", Version: "1.0"}
-	fresh := gate.PackageRef{Ecosystem: "pypi", Name: "fresh", Version: "1.0"}
-	older := gate.PackageRef{Ecosystem: "pypi", Name: "older", Version: "1.0"}
-
-	require.NoError(t, idx.Insert(&old, &cache.CacheEntry{
-		ArtifactPath: "/c/old", ScanClean: true, ScanJSON: `{"clean":true}`,
-		StoredAt: now.Add(-48 * time.Hour), SizeBytes: 1,
-	}))
-	require.NoError(t, idx.Insert(&fresh, &cache.CacheEntry{
-		ArtifactPath: "/c/fresh", ScanClean: true,
-		StoredAt: now, SizeBytes: 1,
-	}))
-	require.NoError(t, idx.Insert(&older, &cache.CacheEntry{
-		ArtifactPath: "/c/older", ScanClean: true,
-		StoredAt: now.Add(-72 * time.Hour), SizeBytes: 1,
-	}))
-
-	// Due = last_validated older than 24h ago, oldest first. There is no TTL:
-	// every idle entry stays revalidation-eligible until evicted or purged.
-	cutoff := now.Add(-24 * time.Hour).Unix()
-	due, err := idx.DueForRevalidation(cutoff, 10)
+func TestIndexCheckTimestamps(t *testing.T) {
+	idx, err := cache.NewIndex(filepath.Join(t.TempDir(), "index.db"))
 	require.NoError(t, err)
-	require.Len(t, due, 2)
-	assert.Equal(t, "older", due[0].Ref.Name)
-	assert.Equal(t, "old", due[1].Ref.Name)
-	assert.Equal(t, "/c/old", due[1].FilePath)
-	assert.True(t, due[1].ScanClean)
-	assert.Equal(t, `{"clean":true}`, due[1].ScanJSON)
+	t.Cleanup(func() { _ = idx.Close() })
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "pkg", Version: "1.0"}
+	stored := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	require.NoError(t, idx.Insert(ref, &cache.CacheEntry{ArtifactPath: "/x", StoredAt: stored}))
 
-	// After marking validated now, neither is due.
-	require.NoError(t, idx.MarkValidated(&old, now.Unix()))
-	require.NoError(t, idx.MarkValidated(&older, now.Unix()))
-	due, err = idx.DueForRevalidation(cutoff, 10)
-	require.NoError(t, err)
-	assert.Empty(t, due)
+	e, ok := idx.Get(ref)
+	require.True(t, ok)
+	// Fresh insert: both checks stamped at stored_at.
+	require.Equal(t, stored.Unix(), e.LastCVECheck.Unix())
+	require.Equal(t, stored.Unix(), e.LastMalwareCheck.Unix())
+
+	cveTS := time.Now().Add(-10 * time.Minute)
+	require.NoError(t, idx.MarkCVEChecked(ref, cveTS.Unix()))
+	e, _ = idx.Get(ref)
+	require.Equal(t, cveTS.Unix(), e.LastCVECheck.Unix())
+	require.Equal(t, stored.Unix(), e.LastMalwareCheck.Unix(), "malware timestamp must not move")
+
+	avTS := time.Now()
+	require.NoError(t, idx.MarkMalwareChecked(ref, avTS.Unix()))
+	e, _ = idx.Get(ref)
+	require.Equal(t, avTS.Unix(), e.LastMalwareCheck.Unix())
 }
 
 func TestIndex_StaleSizeBytes(t *testing.T) {

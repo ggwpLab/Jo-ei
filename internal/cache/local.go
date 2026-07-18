@@ -246,14 +246,14 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 	}
 }
 
-// DueForRevalidation returns cached entries due for re-validation. See Index.
-func (lc *LocalCache) DueForRevalidation(before int64, limit int) ([]RevalEntry, error) {
-	return lc.index.DueForRevalidation(before, limit)
+// MarkCVEChecked records a passed CVE re-check for ref.
+func (lc *LocalCache) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
+	return lc.index.MarkCVEChecked(ref, ts.Unix())
 }
 
-// MarkValidated records that ref passed re-validation at ts (unix seconds).
-func (lc *LocalCache) MarkValidated(ref *gate.PackageRef, ts int64) error {
-	return lc.index.MarkValidated(ref, ts)
+// MarkMalwareChecked records a passed malware re-check for ref.
+func (lc *LocalCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
+	return lc.index.MarkMalwareChecked(ref, ts.Unix())
 }
 
 // Close stops the eviction worker and closes the index. Safe to call twice.

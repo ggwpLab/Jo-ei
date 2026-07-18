@@ -25,7 +25,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
-	"github.com/ggwpLab/Jo-ei/internal/revalidate"
 	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
@@ -96,6 +95,9 @@ type sharedDeps struct {
 	// the same cap.
 	adapterClient  *http.Client
 	downloadClient *http.Client
+
+	cveRecheckTTL     time.Duration
+	malwareRecheckTTL time.Duration
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
@@ -210,11 +212,21 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	shared := sharedDeps{
 		filter:         policyRuntime,
-		cache:          &cacheAdapter{c: artifactCache},
+		cache:          cache.AsArtifactCache(artifactCache),
 		logger:         logger,
 		recorder:       &telemetry.Hub{Store: store, Broadcaster: broadcaster},
 		adapterClient:  adapterClient,
 		downloadClient: downloadClient,
+
+		cveRecheckTTL:     time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
+		malwareRecheckTTL: time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
+	}
+
+	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
+		logger.Warn().Msg("cache re-validation disabled: cached artifacts are never re-checked")
+	} else {
+		logger.Info().Dur("cve_ttl", shared.cveRecheckTTL).Dur("malware_ttl", shared.malwareRecheckTTL).
+			Msg("lazy cache re-validation configured")
 	}
 
 	// CVE scanner + policy (optional).
@@ -300,54 +312,6 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	healthMon.Start()
 	defer healthMon.Close() //nolint:errcheck
 
-	// Cache re-validation sweep (optional): periodically re-run the gates over
-	// cached artifacts and evict any that now fail.
-	if cfg.Cache.Revalidation.Enabled {
-		if rstore, ok := artifactCache.(revalidate.RevalidationStore); ok {
-			revalidators := map[string]revalidate.Revalidator{}
-			pr := revalidate.NewPackageRevalidator(shared.cveScanner, shared.policy, shared.avScanner)
-			for _, eco := range []string{"pypi", "npm", "maven", "rubygems"} {
-				revalidators[eco] = pr
-			}
-			if cfg.Registries.Docker.Enabled && trivyScanner != nil {
-				revalidators["docker"] = dockerproxy.NewRevalidator(dockerproxy.HandlerDeps{
-					Upstreams:     cfg.Registries.Docker.Upstreams,
-					Scanner:       trivyScanner,
-					AV:            shared.avScanner,
-					Filter:        policyRuntime,
-					Policy:        policyRuntime,
-					Cache:         artifactCache,
-					MaxLayerBytes: cfg.ImageScan.MaxLayerBytes,
-					Logger:        logger,
-					HTTPClient:    dockerClient,
-				})
-			}
-			interval := time.Duration(cfg.Cache.Revalidation.IntervalMinutes) * time.Minute
-			if interval <= 0 {
-				interval = 60 * time.Minute
-			}
-			revalAfter := time.Duration(cfg.Cache.Revalidation.RevalidateAfterHours) * time.Hour
-			if revalAfter <= 0 {
-				revalAfter = 24 * time.Hour
-			}
-			batch := cfg.Cache.Revalidation.BatchSize
-			if batch <= 0 {
-				batch = 50
-			}
-			sweeper := revalidate.NewSweeper(rstore, revalidators, shared.recorder, revalidate.Config{
-				Interval: interval, RevalidateAfter: revalAfter, BatchSize: batch,
-			}, logger)
-			sweeper.Start()
-			defer sweeper.Close()
-			logger.Info().Dur("interval", interval).Dur("revalidate_after", revalAfter).Int("batch", batch).
-				Msg("cache re-validation sweep enabled")
-		} else {
-			logger.Warn().Msg("cache.revalidation.enabled but cache backend does not support re-validation; skipping")
-		}
-	} else {
-		logger.Warn().Msg("cache.revalidation.enabled is false — cached artifacts are never rescanned (entries have no TTL; they persist until LRU-evicted or purged)")
-	}
-
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
 
@@ -364,6 +328,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			Recorder:      shared.recorder,
 			Logger:        logger,
 			HTTPClient:    dockerClient,
+			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 		})
 	}
 
@@ -471,44 +436,38 @@ func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Hand
 	return handlers
 }
 
+// minEnabledTTL returns the smaller of the enabled (positive) TTLs; 0 when
+// both are disabled. Docker's single verdict covers both gates, so it expires
+// by the stricter one.
+func minEnabledTTL(a, b time.Duration) time.Duration {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	case a < b:
+		return a
+	default:
+		return b
+	}
+}
+
 // buildHandler constructs a proxy.Handler for one registry adapter with the
 // shared dependency set.
 func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:    adapter,
-		Filter:     shared.filter,
-		Cache:      shared.cache,
-		Logger:     shared.logger,
-		CVEScanner: shared.cveScanner,
-		Policy:     shared.policy,
-		AVScanner:  shared.avScanner,
-		Recorder:   shared.recorder,
-		HTTPClient: shared.downloadClient,
+		Adapter:           adapter,
+		Filter:            shared.filter,
+		Cache:             shared.cache,
+		Logger:            shared.logger,
+		CVEScanner:        shared.cveScanner,
+		Policy:            shared.policy,
+		AVScanner:         shared.avScanner,
+		Recorder:          shared.recorder,
+		CVERecheckTTL:     shared.cveRecheckTTL,
+		MalwareRecheckTTL: shared.malwareRecheckTTL,
+		HTTPClient:        shared.downloadClient,
 	})
-}
-
-// cacheAdapter bridges cache.Cache to the gate.ArtifactCache interface.
-type cacheAdapter struct {
-	c cache.Cache
-}
-
-func (a *cacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
-	entry, found := a.c.Get(ref)
-	if !found {
-		return nil, false
-	}
-	return &gate.ArtifactEntry{
-		ArtifactPath: entry.ArtifactPath,
-		ScanClean:    entry.ScanClean,
-	}, true
-}
-
-func (a *cacheAdapter) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
-	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
-}
-
-func (a *cacheAdapter) Invalidate(ref *gate.PackageRef) error {
-	return a.c.Invalidate(ref)
 }
 
 // policySettingsStore adapts *settings.Store to policy.SettingsStore, storing

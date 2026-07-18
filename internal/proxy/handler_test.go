@@ -191,7 +191,7 @@ func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJS
 		return err
 	}
 
-	f.entries[ref.Key()] = &gate.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean}
+	f.entries[ref.Key()] = &gate.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean, LastCVECheck: time.Now(), LastMalwareCheck: time.Now()}
 	return nil
 }
 
@@ -200,6 +200,20 @@ func (f *fakeCache) Invalidate(ref *gate.PackageRef) error {
 		os.Remove(e.ArtifactPath)
 	}
 	delete(f.entries, ref.Key())
+	return nil
+}
+
+func (f *fakeCache) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
+	if e, ok := f.entries[ref.Key()]; ok {
+		e.LastCVECheck = ts
+	}
+	return nil
+}
+
+func (f *fakeCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
+	if e, ok := f.entries[ref.Key()]; ok {
+		e.LastMalwareCheck = ts
+	}
 	return nil
 }
 

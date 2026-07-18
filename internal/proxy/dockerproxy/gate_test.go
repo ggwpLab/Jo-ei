@@ -166,7 +166,7 @@ func TestGateAllowsCleanImageAndCachesVerdict(t *testing.T) {
 	if err != nil || !v.Allowed {
 		t.Fatalf("Evaluate clean: v=%+v err=%v", v, err)
 	}
-	if _, _, found := store.GetImageVerdict(repo, digest); !found {
+	if _, _, _, found := store.GetImageVerdict(repo, digest); !found {
 		t.Error("clean verdict should be cached by digest")
 	}
 }
@@ -249,7 +249,7 @@ func TestGatePassesThroughIndex(t *testing.T) {
 	if digest != "sha256:index" {
 		t.Errorf("digest = %q, want sha256:index", digest)
 	}
-	if clean, reason, found := store.GetImageVerdict(repo, digest); !found || !clean || reason != reasonIndexPassthrough {
+	if clean, reason, _, found := store.GetImageVerdict(repo, digest); !found || !clean || reason != reasonIndexPassthrough {
 		t.Errorf("index verdict should be cached clean: found=%v clean=%v reason=%q", found, clean, reason)
 	}
 }
@@ -356,7 +356,7 @@ func TestGateSupplyChainBlockCarriesTimesAndIsNotCached(t *testing.T) {
 	if v.BlockUntil.IsZero() || v.PublishedAt.IsZero() {
 		t.Errorf("supply block must carry BlockUntil/PublishedAt, got %+v", v)
 	}
-	if _, _, found := store.GetImageVerdict(repo, digest); found {
+	if _, _, _, found := store.GetImageVerdict(repo, digest); found {
 		t.Error("time-based supply-chain block must NOT be cached")
 	}
 }

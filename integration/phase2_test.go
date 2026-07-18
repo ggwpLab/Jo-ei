@@ -61,7 +61,7 @@ func newPhase2Proxy(t *testing.T, upstream, osvServer *httptest.Server, prof con
 	h := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:    adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
-		Cache:      &localCacheAdapter{lc: lc},
+		Cache:      cache.AsArtifactCache(lc),
 		Logger:     zerolog.Nop(),
 		CVEScanner: cveScanner,
 		Policy:     policyEngine,

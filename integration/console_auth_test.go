@@ -47,7 +47,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 	handler := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:  adapters.NewPyPIAdapter([]string{upstream.URL}),
 		Filter:   runtime,
-		Cache:    &localCacheAdapter{lc: localCache},
+		Cache:    cache.AsArtifactCache(localCache),
 		Logger:   zerolog.Nop(),
 		Recorder: hub,
 	})

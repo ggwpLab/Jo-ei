@@ -2,6 +2,7 @@ package dockerproxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -57,32 +58,32 @@ type gateDeps struct {
 	store         *verdictStore
 	tags          *tagIndex
 	maxLayerBytes int64
-	logger        zerolog.Logger
+	// recheckTTL: a cached verdict older than this is re-evaluated by the full
+	// gate before being trusted (min of the enabled per-gate TTLs; 0 = never).
+	recheckTTL time.Duration
+	logger     zerolog.Logger
 }
 
 type manifestGate struct{ gateDeps }
 
 func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{d} }
 
-// Evaluate runs the full gate for repo:ref. It returns the canonical manifest
+// Evaluate runs the gate for repo:ref. It returns the canonical manifest
 // digest and the verdict. A multi-arch index is passed through un-gated (it has
 // no image content; the client then requests a concrete child manifest by
-// digest, which is gated on its own request). Infrastructure failures (fetch,
-// scan errors) return a non-nil error so the handler fails closed.
+// digest, which is gated on its own request).
+//
+// A cached verdict is trusted as-is while it is fresher than recheckTTL. Once
+// it expires, the full gate re-runs (manifest fetch, passthrough checks,
+// supply-chain, Trivy, ClamAV) rather than trusting the stale entry outright —
+// this is what lets a newly-blocking CVE or malware signature evict a
+// previously-clean image. If that re-run then hits an infrastructure error
+// (Trivy/ClamAV/verdict-store failure), the expired verdict is kept as
+// staleVerdict and served instead of failing the pull (see staleOr). The one
+// exception is FetchManifest itself: an unreachable upstream registry fails
+// closed immediately, before any cached verdict is consulted, because
+// resolving the manifest is a prerequisite for everything that follows.
 func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, GateVerdict, error) {
-	return g.evaluate(ctx, repo, ref, false)
-}
-
-// evaluate is Evaluate's implementation, parameterized on skipVerdictCache so
-// the revalidation path (Revalidator.Revalidate) can force a fresh
-// Trivy/ClamAV pass instead of trusting the verdict it is revalidating. The
-// entry under revalidation is, by definition, already in the cache — without
-// this the cached-verdict check below would return the stale verdict
-// unconditionally, and a newly-blocking CVE or malware signature could never
-// evict a previously-clean image. skipVerdictCache affects ONLY that check;
-// everything else (manifest fetch, index/attestation passthrough, layer
-// scanning, policy checks, verdict storage) is unchanged.
-func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdictCache bool) (string, GateVerdict, error) {
 	// Fetch the raw manifest for ref (tag or digest); indexes are not resolved
 	// server-side, so the client's own platform choice drives what gets gated.
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
@@ -105,16 +106,25 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 	// the store persists only clean+reason, not block_until, so restoring it
 	// would block the image with a zero block_until (never shown in the
 	// quarantine view) and would keep blocking it even after it matured. Fall
-	// through to a fresh evaluation instead. skipVerdictCache additionally
-	// forces the fall-through for the revalidation path (see doc comment above).
-	if clean, reason, found := g.store.GetImageVerdict(repo, digest); found && !skipVerdictCache && !isStaleSupplyBlock(clean, reason) {
+	// through to a fresh evaluation instead.
+	// staleVerdict holds an expired cached verdict: the gate below re-evaluates
+	// from scratch, but an infrastructure failure (Trivy/ClamAV/verdict-store
+	// down) falls back to serving it — mirroring the package path's serve-stale
+	// rule — instead of failing the pull. nil when there was no cached verdict.
+	var staleVerdict *GateVerdict
+	if clean, reason, checkedAt, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
 		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
 		if !clean {
 			v.BlockedBy = blockedByForReason(reason)
 		} else if path, ok := g.store.GetManifestBody(repo, digest); ok {
 			v.ManifestPath, v.ContentType = path, contentType
 		}
-		return digest, v, nil
+		if g.recheckTTL <= 0 || time.Since(checkedAt) <= g.recheckTTL {
+			return digest, v, nil
+		}
+		staleVerdict = &v
+		g.logger.Debug().Str("repo", repo).Str("digest", digest).
+			Msg("cached verdict expired; re-running the gate")
 	}
 
 	// Multi-arch index: pass through un-gated. It lists per-platform child
@@ -137,7 +147,7 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 	// Parse manifest → config.created + config digest + layer digests.
 	created, configDigest, layers, err := g.adapter.ImageConfig(ctx, repo, manifestBody)
 	if err != nil {
-		return "", GateVerdict{}, err
+		return g.staleOr(digest, staleVerdict, err)
 	}
 
 	// 1. Supply-chain (config.created as the publish proxy).
@@ -159,7 +169,7 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 	// 2. Trivy → policy (severity threshold + denylist).
 	scan, err := g.scanner.ScanImage(ctx, g.imageRef(repo, digest))
 	if err != nil {
-		return "", GateVerdict{}, err
+		return g.staleOr(digest, staleVerdict, err)
 	}
 	if g.policy != nil {
 		decision := g.policy.Evaluate(pkgRef, &gate.ScanResult{
@@ -173,6 +183,9 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 			}
 			v := GateVerdict{Allowed: false, Reason: decision.Reason, BlockedBy: by, Findings: decision.Findings}
 			_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
+			if staleVerdict != nil {
+				g.evictBlobs(manifestBody)
+			}
 			return digest, v, nil
 		}
 	}
@@ -190,11 +203,14 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 		for _, b := range blobs {
 			infected, scanErr := g.scanLayer(ctx, repo, b)
 			if scanErr != nil {
-				return "", GateVerdict{}, scanErr
+				return g.staleOr(digest, staleVerdict, scanErr)
 			}
 			if infected {
 				v := GateVerdict{Allowed: false, Reason: "malware_found", BlockedBy: "malware"}
 				_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
+				if staleVerdict != nil {
+					g.evictBlobs(manifestBody)
+				}
 				return digest, v, nil
 			}
 		}
@@ -203,7 +219,7 @@ func (g *manifestGate) evaluate(ctx context.Context, repo, ref string, skipVerdi
 	// Clean.
 	v := GateVerdict{Allowed: true, Reason: "ok", PublishedAt: created, ContentType: contentType}
 	if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
-		return "", GateVerdict{}, err
+		return g.staleOr(digest, staleVerdict, err)
 	}
 	if path, ok := g.store.GetManifestBody(repo, digest); ok {
 		v.ManifestPath = path
@@ -300,6 +316,50 @@ func (g *manifestGate) cacheVerdict(_ context.Context, repo, digest string, mani
 func (g *manifestGate) imageRef(repo, digest string) string {
 	host := hostFromUpstream(g.adapter.upstreams)
 	return host + "/" + repo + "@" + digest
+}
+
+// staleOr returns the expired cached verdict when a re-evaluation hits an
+// infrastructure error, so a scanner outage serves the last known verdict
+// instead of failing the pull; without one it propagates the error (the
+// handler fails closed with 5xx, unchanged first-pull behavior).
+func (g *manifestGate) staleOr(digest string, stale *GateVerdict, err error) (string, GateVerdict, error) {
+	if stale != nil {
+		g.logger.Warn().Err(err).Str("digest", digest).
+			Msg("gate re-evaluation failed; serving stale cached verdict")
+		return digest, *stale, nil
+	}
+	return "", GateVerdict{}, err
+}
+
+// evictBlobs removes the config/layer blob entries listed in manifestBody so a
+// re-checked image that turned bad does not keep serving its bytes on direct
+// blob requests. Best-effort: parse failures evict nothing.
+func (g *manifestGate) evictBlobs(manifestBody []byte) {
+	var m struct {
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+		Layers []struct {
+			Digest string `json:"digest"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(manifestBody, &m); err != nil {
+		return
+	}
+	digests := make([]string, 0, len(m.Layers)+1)
+	if m.Config.Digest != "" {
+		digests = append(digests, m.Config.Digest)
+	}
+	for _, l := range m.Layers {
+		if l.Digest != "" {
+			digests = append(digests, l.Digest)
+		}
+	}
+	for _, d := range digests {
+		if err := g.store.InvalidateBlob(d); err != nil {
+			g.logger.Warn().Err(err).Str("digest", d).Msg("cascade-evicting blob")
+		}
+	}
 }
 
 // isStaleSupplyBlock reports whether a cached verdict is a supply-chain block.

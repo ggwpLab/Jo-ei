@@ -47,7 +47,7 @@ func TestIntegration_RubyGemsFallsBackToSecondUpstream(t *testing.T) {
 	handler := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter: adapters.NewRubyGemsAdapter([]string{down.URL, up.URL}),
 		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
-		Cache:   &localCacheAdapter{lc: lc},
+		Cache:   cache.AsArtifactCache(lc),
 		Logger:  zerolog.Nop(),
 	})
 	srv := httptest.NewServer(handler)
