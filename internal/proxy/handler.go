@@ -26,6 +26,11 @@ type HandlerConfig struct {
 	Policy     gate.PolicyDecider // optional; nil allows all when CVEScanner is set
 	AVScanner  gate.AVScanner     // optional; nil disables malware scanning
 	Recorder   gate.Recorder      // optional; nil disables telemetry
+	// CVERecheckTTL / MalwareRecheckTTL: a cache hit whose respective check is
+	// older than this re-runs that gate before serving (0 disables). A scanner
+	// failure serves the stale entry and leaves the timestamp untouched.
+	CVERecheckTTL     time.Duration
+	MalwareRecheckTTL time.Duration
 	// HTTPClient downloads artifacts and serves transparent proxy requests.
 	// Optional; nil uses a private client with a 60s timeout. Pass a client whose
 	// transport caps per-host concurrency (shared with the adapters) so artifact
@@ -99,6 +104,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			record(gate.VerdictBlock, gate.GateCache, "scan_failed", http.StatusForbidden, nil)
 			h.writeError(w, requestID, ref, http.StatusForbidden, "scan_failed")
 			return
+		}
+		if h.recheckExpired(r.Context(), w, requestID, ref, entry, record, log) {
+			return // blocked and evicted; response already written
 		}
 		log.Debug().Msg("cache hit")
 		if err := h.serveFromCache(w, entry); err != nil {
@@ -273,6 +281,78 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	record(gate.VerdictPass, lastGate, scResult.Reason, http.StatusOK, func(ev *gate.Event) {
 		ev.PublishedAt = scResult.PublishedAt
 	})
+}
+
+// recheckExpired lazily re-runs each gate whose TTL has lapsed for a cache
+// hit: CVE+policy against current metadata, then malware against the cached
+// bytes (cheap metadata check first). A gate that now blocks evicts the entry
+// (index row + binary) and writes the block response — the return value true
+// tells the caller the request is finished. A scanner failure serves the
+// previously clean entry and leaves its timestamp untouched, so the next hit
+// retries; the timestamp is bumped only on a passed check.
+func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, requestID string, ref *gate.PackageRef, entry *gate.ArtifactEntry, record func(string, string, string, int, func(*gate.Event)), log zerolog.Logger) bool {
+	now := time.Now()
+
+	if h.cfg.CVERecheckTTL > 0 && h.cfg.CVEScanner != nil && h.cfg.Policy != nil &&
+		now.Sub(entry.LastCVECheck) > h.cfg.CVERecheckTTL {
+		res, err := h.cfg.CVEScanner.Scan(ctx, ref)
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Msg("CVE re-check failed; serving cached artifact")
+		default:
+			if decision := h.cfg.Policy.Evaluate(ref, res); !decision.Allowed {
+				h.evictRechecked(ref, log)
+				blockedBy := "cve"
+				if decision.Reason == gate.ReasonDenylisted {
+					blockedBy = "denylist"
+				}
+				log.Warn().Str("reason", decision.Reason).Int("findings", len(decision.Findings)).
+					Msg("re-check: CVE policy blocked cached package")
+				record(gate.VerdictBlock, gate.GateCVE, decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
+					ev.BlockedBy = []string{blockedBy}
+					ev.CVEs = decision.Findings
+				})
+				h.writeCVEBlockedResponse(w, requestID, ref, decision)
+				return true
+			}
+			if err := h.cfg.Cache.MarkCVEChecked(ref, now); err != nil {
+				log.Warn().Err(err).Msg("marking CVE re-check")
+			}
+		}
+	}
+
+	if h.cfg.MalwareRecheckTTL > 0 && h.cfg.AVScanner != nil &&
+		now.Sub(entry.LastMalwareCheck) > h.cfg.MalwareRecheckTTL {
+		res, err := h.cfg.AVScanner.Scan(ctx, entry.ArtifactPath)
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Msg("malware re-check failed; serving cached artifact")
+		case !res.Clean:
+			h.evictRechecked(ref, log)
+			log.Warn().Str("engine", res.Engine).Str("signature", res.Signature).
+				Msg("re-check: malware detected in cached artifact")
+			record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
+				ev.BlockedBy = []string{"malware"}
+				ev.MalwareEngine = res.Engine
+				ev.MalwareSignature = res.Signature
+			})
+			h.writeMalwareBlockedResponse(w, requestID, ref, res.Engine, res.Signature)
+			return true
+		default:
+			if err := h.cfg.Cache.MarkMalwareChecked(ref, now); err != nil {
+				log.Warn().Err(err).Msg("marking malware re-check")
+			}
+		}
+	}
+	return false
+}
+
+// evictRechecked removes a cached entry that failed a lazy re-check. Eviction
+// failure is logged but never blocks the block response.
+func (h *Handler) evictRechecked(ref *gate.PackageRef, log zerolog.Logger) {
+	if err := h.cfg.Cache.Invalidate(ref); err != nil {
+		log.Error().Err(err).Str("package", ref.Key()).Msg("re-check: evicting cached artifact")
+	}
 }
 
 // proxyTransparent forwards a non-intercepted request to each configured
