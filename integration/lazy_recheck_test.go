@@ -290,6 +290,16 @@ func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotEmpty(t, digest)
 
+	// Precondition: the seed pull must have actually cached both blobs, or the
+	// later "cascade-evicted" assertion would pass vacuously (e.g. a regression
+	// that broke scanLayer's PutBlob would leave the blobs uncached from the
+	// start, not evicted).
+	for _, d := range []string{cfgDigest, layerDigest} {
+		blobRef := gate.PackageRef{Ecosystem: "docker", Name: "blobs", Version: d}
+		_, found := lc.Get(&blobRef)
+		require.True(t, found, "blob %s must be cached by the seed pull", d)
+	}
+
 	// Expire the verdict, flip the scanner to a blocking CVE.
 	imgRef := gate.PackageRef{Ecosystem: "docker", Name: "library/app", Version: digest}
 	past := time.Now().Add(-72 * time.Hour)
