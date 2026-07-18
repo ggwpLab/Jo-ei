@@ -209,7 +209,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	shared := sharedDeps{
 		filter:         policyRuntime,
-		cache:          &cacheAdapter{c: artifactCache},
+		cache:          cache.AsArtifactCache(artifactCache),
 		logger:         logger,
 		recorder:       &telemetry.Hub{Store: store, Broadcaster: broadcaster},
 		adapterClient:  adapterClient,
@@ -436,30 +436,6 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		Recorder:   shared.recorder,
 		HTTPClient: shared.downloadClient,
 	})
-}
-
-// cacheAdapter bridges cache.Cache to the gate.ArtifactCache interface.
-type cacheAdapter struct {
-	c cache.Cache
-}
-
-func (a *cacheAdapter) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
-	entry, found := a.c.Get(ref)
-	if !found {
-		return nil, false
-	}
-	return &gate.ArtifactEntry{
-		ArtifactPath: entry.ArtifactPath,
-		ScanClean:    entry.ScanClean,
-	}, true
-}
-
-func (a *cacheAdapter) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, scanJSON string) error {
-	return a.c.Put(ref, tmpPath, scanClean, scanJSON)
-}
-
-func (a *cacheAdapter) Invalidate(ref *gate.PackageRef) error {
-	return a.c.Invalidate(ref)
 }
 
 // policySettingsStore adapts *settings.Store to policy.SettingsStore, storing
