@@ -197,12 +197,56 @@ func TestRecheck_ScannerErrorServesStale(t *testing.T) {
 	hs.rewind(2 * time.Hour)
 	hs.cve.scanErr.Store(true)
 	hs.av.scanErr.Store(true)
-	before := hs.fc.entries[hs.ref.Key()].LastCVECheck
+	beforeCVE := hs.fc.entries[hs.ref.Key()].LastCVECheck
+	beforeMalware := hs.fc.entries[hs.ref.Key()].LastMalwareCheck
 
 	resp := hs.get(t)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "scanner outage must serve the stale clean artifact")
 	e := hs.fc.entries[hs.ref.Key()]
-	assert.Equal(t, before, e.LastCVECheck, "failed re-check must not bump the timestamp")
+	assert.Equal(t, beforeCVE, e.LastCVECheck, "failed re-check must not bump the CVE timestamp")
+	assert.Equal(t, beforeMalware, e.LastMalwareCheck, "failed re-check must not bump the malware timestamp")
+}
+
+func TestRecheck_NilScannersSkipRecheck(t *testing.T) {
+	upstream := makeUpstream(t, "victim", "1.0.0", 72)
+	t.Cleanup(upstream.Close)
+
+	fc := newFakeCache()
+	rec := &eventSpy{}
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:           adapters.NewPyPIAdapter([]string{upstream.URL}),
+		Filter:            supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:             fc,
+		Logger:            zerolog.Nop(),
+		CVEScanner:        nil,
+		Policy:            nil,
+		AVScanner:         nil,
+		Recorder:          rec,
+		CVERecheckTTL:     time.Hour,
+		MalwareRecheckTTL: time.Hour,
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"}
+	path := "/packages/py3/v/victim/victim-1.0.0-py3-none-any.whl"
+
+	resp, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "seed download must pass with nil scanners")
+
+	e := fc.entries[ref.Key()]
+	require.NotNil(t, e, "seed download must cache an entry")
+	e.LastCVECheck = e.LastCVECheck.Add(-1000 * time.Hour)
+	e.LastMalwareCheck = e.LastMalwareCheck.Add(-1000 * time.Hour)
+
+	resp2, err := http.Get(srv.URL + path)
+	require.NoError(t, err)
+	resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode, "nil scanners must skip recheck entirely")
+	_, cached := fc.entries[ref.Key()]
+	assert.True(t, cached, "entry must remain cached")
 }
 
 func TestRecheck_ZeroTTLDisables(t *testing.T) {

@@ -473,6 +473,15 @@ cache:
 	require.ErrorContains(t, err, "cve_ttl_minutes")
 }
 
+func TestRevalidationTTLNegativeMalwareRejected(t *testing.T) {
+	_, err := loadTTLConfig(t, ttlBaseYAML+`
+cache:
+  revalidation:
+    malware_ttl_minutes: -1
+`)
+	require.ErrorContains(t, err, "malware_ttl_minutes")
+}
+
 func TestValidate_RejectsNegativeStaleAfterDays(t *testing.T) {
 	c := &config.Config{}
 	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"

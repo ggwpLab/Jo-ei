@@ -222,6 +222,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		malwareRecheckTTL: time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
 	}
 
+	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
+		logger.Warn().Msg("cache re-validation disabled: cached artifacts are never re-checked")
+	} else {
+		logger.Info().Dur("cve_ttl", shared.cveRecheckTTL).Dur("malware_ttl", shared.malwareRecheckTTL).
+			Msg("lazy cache re-validation configured")
+	}
+
 	// CVE scanner + policy (optional).
 	var osvScanner *scanner.OSVScanner
 	if cfg.CVE.Enabled {
