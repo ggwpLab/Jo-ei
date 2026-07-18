@@ -321,6 +321,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 			Recorder:      shared.recorder,
 			Logger:        logger,
 			HTTPClient:    dockerClient,
+			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 		})
 	}
 
@@ -426,6 +427,22 @@ func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Hand
 		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams, client), shared)
 	}
 	return handlers
+}
+
+// minEnabledTTL returns the smaller of the enabled (positive) TTLs; 0 when
+// both are disabled. Docker's single verdict covers both gates, so it expires
+// by the stricter one.
+func minEnabledTTL(a, b time.Duration) time.Duration {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	case a < b:
+		return a
+	default:
+		return b
+	}
 }
 
 // buildHandler constructs a proxy.Handler for one registry adapter with the

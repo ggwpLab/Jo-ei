@@ -95,7 +95,7 @@ func TestVerdictStoreImageVerdict(t *testing.T) {
 	if err := vs.PutImageVerdict("library/nginx", "sha256:img", tmp, false, "cve_found"); err != nil {
 		t.Fatalf("PutImageVerdict: %v", err)
 	}
-	clean, reason, found := vs.GetImageVerdict("library/nginx", "sha256:img")
+	clean, reason, _, found := vs.GetImageVerdict("library/nginx", "sha256:img")
 	if !found || clean || reason != "cve_found" {
 		t.Errorf("verdict = clean:%v reason:%q found:%v", clean, reason, found)
 	}

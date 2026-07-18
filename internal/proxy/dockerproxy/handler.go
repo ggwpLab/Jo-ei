@@ -212,6 +212,10 @@ type HandlerDeps struct {
 	MaxLayerBytes int64
 	Recorder      gate.Recorder
 	Logger        zerolog.Logger
+	// RecheckTTL: cached image verdicts older than this are re-evaluated by the
+	// full gate on the next pull (0 = never expire). Wire min of the enabled
+	// per-gate TTLs.
+	RecheckTTL time.Duration
 	// HTTPClient talks to the upstream registry. Optional; nil uses a private
 	// client with a 120s timeout. Pass a client whose transport caps per-host
 	// concurrency (shared with the other registries) to avoid 429 throttling.
@@ -226,7 +230,7 @@ func New(d HandlerDeps) http.Handler {
 	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
-		maxLayerBytes: d.MaxLayerBytes, logger: d.Logger,
+		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, logger: d.Logger,
 	})
 	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger})
 }

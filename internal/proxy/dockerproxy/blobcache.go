@@ -1,6 +1,8 @@
 package dockerproxy
 
 import (
+	"time"
+
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
@@ -37,19 +39,30 @@ func (v *verdictStore) PutBlob(digest, tmpPath string, clean bool) error {
 	return v.c.Put(blobRef(digest), tmpPath, clean, "")
 }
 
-// GetImageVerdict returns the cached gate verdict for an image digest. The block
-// reason is stored in the entry's ScanJSON field.
-func (v *verdictStore) GetImageVerdict(repo, digest string) (bool, string, bool) {
+// GetImageVerdict returns the cached gate verdict for an image digest, and
+// when the gates last confirmed it (the older of the two per-gate timestamps —
+// they move together for Docker, where one evaluation covers both gates). The
+// block reason is stored in the entry's ScanJSON field.
+func (v *verdictStore) GetImageVerdict(repo, digest string) (bool, string, time.Time, bool) {
 	e, ok := v.c.Get(imageRefKey(repo, digest))
 	if !ok {
-		return false, "", false
+		return false, "", time.Time{}, false
 	}
-	return e.ScanClean, e.ScanJSON, true
+	checkedAt := e.LastCVECheck
+	if e.LastMalwareCheck.Before(checkedAt) {
+		checkedAt = e.LastMalwareCheck
+	}
+	return e.ScanClean, e.ScanJSON, checkedAt, true
 }
 
 // PutImageVerdict caches the gate verdict together with the manifest body.
 func (v *verdictStore) PutImageVerdict(repo, digest, manifestTmpPath string, clean bool, reason string) error {
 	return v.c.Put(imageRefKey(repo, digest), manifestTmpPath, clean, reason)
+}
+
+// InvalidateBlob removes a cached blob entry (its bytes included).
+func (v *verdictStore) InvalidateBlob(digest string) error {
+	return v.c.Invalidate(blobRef(digest))
 }
 
 // GetManifestBody returns the cached manifest file path for an approved image.
