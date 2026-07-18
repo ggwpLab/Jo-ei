@@ -100,15 +100,50 @@ func migrateClassifier(db *sql.DB) error {
 }
 
 // migrateCheckTimestamps replaces the sweep-era last_validated column with
-// per-gate check timestamps. Both are backfilled from last_validated when the
-// column exists (stored_at for rows where it is 0 — never a real timestamp),
-// or from stored_at on databases that predate re-validation entirely. The old
-// column is then dropped. No-op once last_cve_check exists.
+// per-gate check timestamps.
+//
+// Column creation (and the last_validated backfill/drop) is gated on
+// last_cve_check not yet existing, same as the other migrations. The
+// zero-row backfill from stored_at, however, runs unconditionally on every
+// call — it must NOT be folded into the gated block. migrateClassifier runs
+// immediately before this in NewIndex, and on a pre-classifier database it
+// rebuilds the artifacts table from the canonical schema const, which
+// already declares last_cve_check/last_malware_check with DEFAULT 0. That
+// means a database that is both pre-classifier and pre-check-timestamp can
+// reach this function with the columns already present but never
+// backfilled; gating the backfill on hasColumn would then see "column
+// exists" and skip it forever, leaving every migrated row's check
+// timestamps stuck at zero. Since 0 is never a real timestamp, re-running
+// `WHERE last_cve_check = 0` on every startup is always safe and mirrors
+// the old migrateLastValidated's unconditional `WHERE last_validated = 0`
+// self-heal.
 func migrateCheckTimestamps(db *sql.DB) error {
 	has, err := hasColumn(db, "artifacts", "last_cve_check")
-	if err != nil || has {
+	if err != nil {
 		return err
 	}
+	if !has {
+		if err := addCheckTimestampColumns(db); err != nil {
+			return err
+		}
+	}
+
+	if _, err := db.Exec(`UPDATE artifacts SET last_cve_check = stored_at WHERE last_cve_check = 0`); err != nil {
+		return fmt.Errorf("check-timestamp zero backfill failed: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE artifacts SET last_malware_check = stored_at WHERE last_malware_check = 0`); err != nil {
+		return fmt.Errorf("check-timestamp zero backfill failed: %w", err)
+	}
+	return nil
+}
+
+// addCheckTimestampColumns adds last_cve_check/last_malware_check to a
+// database that doesn't have them yet. When last_validated exists, both new
+// columns are backfilled from it (falling back to stored_at where
+// last_validated is 0) and the old column is dropped. The stored_at backfill
+// for any remaining zero rows — including the case where last_validated
+// never existed — is left to the unconditional pass in the caller.
+func addCheckTimestampColumns(db *sql.DB) error {
 	hadLV, err := hasColumn(db, "artifacts", "last_validated")
 	if err != nil {
 		return err
@@ -129,10 +164,6 @@ func migrateCheckTimestamps(db *sql.DB) error {
 				last_cve_check     = CASE WHEN last_validated > 0 THEN last_validated ELSE stored_at END,
 				last_malware_check = CASE WHEN last_validated > 0 THEN last_validated ELSE stored_at END`,
 			`ALTER TABLE artifacts DROP COLUMN last_validated`,
-		)
-	} else {
-		steps = append(steps,
-			`UPDATE artifacts SET last_cve_check = stored_at, last_malware_check = stored_at`,
 		)
 	}
 	for _, stmt := range steps {

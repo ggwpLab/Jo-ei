@@ -51,3 +51,42 @@ func TestMigrateCheckTimestampsFromLastValidated(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, has)
 }
+
+// TestMigrateCheckTimestampsOnPreClassifierDB is a regression test: on a
+// pre-classifier database (no classifier column, no last_validated column),
+// migrateClassifier runs first and rebuilds artifacts from the canonical
+// schema const — which already declares last_cve_check/last_malware_check
+// with DEFAULT 0. That left migrateCheckTimestamps seeing the columns as
+// already present and skipping its backfill entirely, so every migrated row
+// kept both check timestamps at zero forever. The fix makes the stored_at
+// zero-backfill run unconditionally on every NewIndex call.
+func TestMigrateCheckTimestampsOnPreClassifierDB(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "index.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE artifacts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		ecosystem TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
+		file_path TEXT NOT NULL,
+		scan_clean INTEGER NOT NULL DEFAULT 0, scan_json TEXT NOT NULL DEFAULT '',
+		stored_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+		last_hit INTEGER NOT NULL DEFAULT 0, hit_count INTEGER NOT NULL DEFAULT 0,
+		size_bytes INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(ecosystem, name, version))`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO artifacts
+		(ecosystem, name, version, file_path, stored_at, expires_at)
+		VALUES ('pypi','a','1','/a',100,0)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	idx, err := NewIndex(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = idx.Close() })
+
+	ea, ok := idx.Get(&gate.PackageRef{Ecosystem: "pypi", Name: "a", Version: "1"})
+	require.True(t, ok)
+	require.EqualValues(t, 100, ea.LastCVECheck.Unix())
+	require.EqualValues(t, 100, ea.LastMalwareCheck.Unix())
+}
