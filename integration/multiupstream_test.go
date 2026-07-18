@@ -48,7 +48,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	h := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter: adapters.NewMavenAdapter([]string{down.URL, up.URL}),
 		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
-		Cache:   &localCacheAdapter{lc: lc},
+		Cache:   cache.AsArtifactCache(lc),
 		Logger:  zerolog.Nop(),
 	})
 	mux := proxy.NewMux(map[string]*proxy.Handler{"maven": h}, nil, zerolog.Nop())
