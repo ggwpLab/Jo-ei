@@ -97,13 +97,15 @@ artifact download; fails closed on scanner errors (HTTP 503).
 | `enabled` | `false` | Query osv.dev for each package version. |
 | `base_url` | `https://api.osv.dev` | OSV-compatible API endpoint. |
 | `block_on` | — | Minimum severity that blocks: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`. The active policy profile's `cve_min_severity` overrides this when set. |
-| `cache_ttl_minutes` | `1440` | How long CVE scan results are cached in memory before re-querying osv.dev. Unrelated to the artifact cache, which has no TTL (see `cache.local.stale_after_days`). |
+| `cache_ttl_minutes` | `1440` | How long CVE scan results are cached in memory before re-querying osv.dev. Keep it at or below `cache.revalidation.cve_ttl_minutes` so lazy CVE re-checks see fresh data. |
 
 ## `image_scan`
 
-Trivy gate for Docker images (client/server mode — Jōei talks to a `trivy
-server`). Separate engine from the osv.dev scanner. The verdict is returned on
-the **manifest** request, so a rejected image never reaches the client.
+Trivy is the engine behind the **CVE gate for Docker images** — the same gate
+that osv.dev implements for package ecosystems, applied to a different
+artifact type. The verdict is returned on the **manifest** request, so a
+rejected image never reaches the client. Severity threshold and denylist come
+from the same active policy profile as package CVE decisions.
 
 | Key | Default | Description |
 |---|---|---|
@@ -112,8 +114,6 @@ the **manifest** request, so a rejected image never reaches the client.
 | `timeout_seconds` | `120` | Per-scan timeout. |
 | `scanners` | `vuln,secret` | Passed to Trivy `--scanners`. |
 | `max_layer_bytes` | `0` (no limit) | Layers larger than this fail closed (block the image). The example config uses 2 GiB. |
-
-Severity threshold and denylist come from the active policy profile.
 
 ## `malware`
 
@@ -157,17 +157,22 @@ console overview.
 
 ### `cache.revalidation`
 
-Background sweep that re-runs the gates (CVE, malware, and the full image gate
-for Docker) over cached artifacts and evicts entries that now fail — a newly
-published CVE, an updated ClamAV signature, a new denylist entry. An
-unreachable scanner never evicts; the entry is retried next sweep.
+Lazy per-gate re-validation. A cache hit whose CVE or malware check is older
+than its TTL re-runs **only that gate** before serving — CVE against current
+osv.dev data, malware by re-scanning the cached bytes; Docker re-runs the full
+image gate when its verdict is older than the smaller enabled TTL. An entry
+that now fails is blocked and evicted (index entry and binary). A temporarily
+unreachable scanner serves the previously clean entry and retries on the next
+hit. Load is proportional to traffic, not cache size.
 
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | `false` | Enable the sweep. |
-| `interval_minutes` | `60` | Sweep tick interval. |
-| `revalidate_after_hours` | `24` | Re-check an entry when this long since its last check. |
-| `batch_size` | `50` | Max entries per tick. |
+| `cve_ttl_minutes` | `1440` | Re-run the CVE gate on hits older than this. `0` disables. |
+| `malware_ttl_minutes` | `1440` | Re-scan cached bytes on hits older than this. `0` disables. |
+
+Note: the CVE scanner keeps its own in-memory result cache
+(`cve.cache_ttl_minutes`). A newly published CVE becomes visible only after
+both TTLs lapse, so keep `cve.cache_ttl_minutes` ≤ `cve_ttl_minutes`.
 
 ## `database`
 

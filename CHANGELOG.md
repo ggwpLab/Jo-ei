@@ -17,20 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Cache cleanup on demand: `POST /api/cache/cleanup` and a Clean up button on
   the console cache card delete stale entries and report the freed space.
-- Revalidation sweep logs an info summary after each pass with entries due
-  (`due`/`kept`/`evicted`/`retried`/`skipped`); quiet ticks log at debug level.
 
 ### Changed
 
-- Cache entries no longer expire on a fixed 24 h TTL — verdict freshness is
-  handled by the re-validation sweep, and TTL-expired entries were never
-  actually deleted from disk anyway. Entries idle longer than
-  `cache.local.stale_after_days` (default 30) are reported as reclaimable.
+- Cache re-validation is now lazy: per-gate TTLs (`cache.revalidation.cve_ttl_minutes` / `malware_ttl_minutes`, default 24 h, `0` disables) re-run the expired gate on the next cache hit and evict entries that now fail. The background sweep and its keys (`enabled`, `interval_minutes`, `revalidate_after_hours`, `batch_size`) are removed; old keys in existing configs are ignored. Scanner outages serve the previously clean entry and retry on the next hit.
 - Console: lifetime counters are labeled "total" instead of "since start" —
   they persist in SQLite and survive restarts.
 - Console: the local-cache card shows a 30-day hit-rate sparkline, and the
   usage meter marks the reclaimable (stale) slice of used space with a
   hatched segment and legend.
+
+### Removed
+
+- `internal/revalidate` background sweep — replaced by lazy TTL re-checks; re-validation load now scales with traffic instead of cache size.
 
 ### Fixed
 
