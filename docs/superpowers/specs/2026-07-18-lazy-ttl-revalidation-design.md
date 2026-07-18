@@ -113,10 +113,13 @@ changes are caught by the policy step). TTLs reach the handler via two new
   - **blocked** → before overwriting, cascade-invalidate the old manifest's
     config/layer blobs (`manifestBlobDigests` moves from `revalidate.go` into
     `gate.go`), store the blocked verdict, 403. The binary blobs are gone.
-  - **infra error** (upstream, Trivy, clamd) → serve the stale cached verdict,
-    timestamps untouched — mirrors the package path's serve-stale rule. This
-    is a new fallback branch: on `evaluate` error with a cached clean verdict
-    present, return that verdict instead of failing closed.
+  - **infra error** (Trivy, clamd, verdict store) → serve the stale cached
+    verdict, timestamps untouched — mirrors the package path's serve-stale
+    rule. This is a new fallback branch: on `evaluate` error with a cached
+    clean verdict present, return that verdict instead of failing closed.
+    Exception: `FetchManifest` (the upstream registry) runs before the cached
+    verdict is even consulted, so an unreachable upstream still fails the
+    pull closed.
 - Blobs have no independent TTL: a blob is owned by its image and is
   re-validated transitively when the manifest verdict expires. Direct blob
   hits serve as today.
@@ -172,6 +175,7 @@ quarantine view work unchanged.
 | Malware re-check: infected | 403 + evict (row + file) |
 | Docker re-eval blocks | 403 + blocked verdict + cascade blob invalidation |
 | Scanner unreachable / infra error | serve stale, timestamp untouched, retry next hit |
+| Docker: upstream registry unreachable (`FetchManifest`) | fails the pull closed — runs before the cached verdict is consulted, not covered by stale-serve |
 | Cached file missing at malware re-scan | scan errors → serve-stale path → `serveFromCache` misses → existing `cache_read_error` handling |
 | TTL = 0 (disabled) | that gate is never re-checked on hits |
 | `Mark*Checked` update fails | log warn, serve anyway (best-effort bump) |

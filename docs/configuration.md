@@ -162,8 +162,12 @@ than its TTL re-runs **only that gate** before serving — CVE against current
 osv.dev data, malware by re-scanning the cached bytes; Docker re-runs the full
 image gate when its verdict is older than the smaller enabled TTL. An entry
 that now fails is blocked and evicted (index entry and binary). A temporarily
-unreachable scanner serves the previously clean entry and retries on the next
-hit. Load is proportional to traffic, not cache size.
+unreachable scanner (or scan infrastructure — Trivy, ClamAV, the verdict
+store) serves the previously clean entry and retries on the next hit; for
+Docker this does not cover an unreachable upstream registry, since resolving
+the manifest is required before the cached verdict can even be consulted, so
+that failure still fails the pull closed. Load is proportional to traffic,
+not cache size.
 
 | Key | Default | Description |
 |---|---|---|
