@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
@@ -64,9 +65,15 @@ type gateDeps struct {
 	logger     zerolog.Logger
 }
 
-type manifestGate struct{ gateDeps }
+type manifestGate struct {
+	gateDeps
+	// flights coalesces concurrent scan pipelines for one repo@digest: N
+	// parallel pulls of the same image (first pull or expired verdict) run
+	// the supply-chain/Trivy/ClamAV pipeline once and share the verdict.
+	flights singleflight.Group
+}
 
-func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{d} }
+func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{gateDeps: d} }
 
 // Evaluate runs the gate for repo:ref. It returns the canonical manifest
 // digest and the verdict. A multi-arch index is passed through un-gated (it has
@@ -142,12 +149,39 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonAttestationPassthrough)
 	}
 
+	// Coalesce the scan pipeline per digest. The leader's ref labels the
+	// policy lookups for every waiter (refs for one digest differ only
+	// between a tag and its digest form; docker allow/deny entries are
+	// repo-level in practice). staleVerdict's presence (not its value)
+	// decides the blob cascade, and all concurrent waiters observe the same
+	// cached-entry state, so the leader's flag is shared safely. WithoutCancel:
+	// a disconnecting leader must not cancel the flight for the others.
+	flightCtx := context.WithoutCancel(ctx)
+	cascadeOnBlock := staleVerdict != nil
+	res, err, _ := g.flights.Do(repo+"@"+digest, func() (any, error) {
+		v, perr := g.runPipeline(flightCtx, repo, ref, digest, manifestBody, contentType, cascadeOnBlock)
+		if perr != nil {
+			return nil, perr
+		}
+		return v, nil
+	})
+	if err != nil {
+		return g.staleOr(digest, staleVerdict, err)
+	}
+	return digest, res.(GateVerdict), nil
+}
+
+// runPipeline is the gate's scan pipeline for one concrete image manifest:
+// supply-chain check, Trivy+policy, ClamAV over config+layers, verdict store
+// write. Runs once per coalesced flight. cascadeOnBlock evicts the image's
+// blobs when a previously cached (now expired) verdict turns into a block.
+func (g *manifestGate) runPipeline(ctx context.Context, repo, ref, digest string, manifestBody []byte, contentType string, cascadeOnBlock bool) (GateVerdict, error) {
 	pkgRef := &gate.PackageRef{Ecosystem: "docker", Name: repo, Version: ref}
 
 	// Parse manifest → config.created + config digest + layer digests.
 	created, configDigest, layers, err := g.adapter.ImageConfig(ctx, repo, manifestBody)
 	if err != nil {
-		return g.staleOr(digest, staleVerdict, err)
+		return GateVerdict{}, err
 	}
 
 	// 1. Supply-chain (config.created as the publish proxy).
@@ -157,7 +191,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		// Do NOT cache it — re-evaluate on every pull so the block lifts on its
 		// own, and so each pull records a fresh block event with a current
 		// block_until for the quarantine view.
-		return digest, GateVerdict{
+		return GateVerdict{
 			Allowed:     false,
 			Reason:      fr.Reason,
 			BlockedBy:   "supply_chain",
@@ -169,7 +203,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// 2. Trivy → policy (severity threshold + denylist).
 	scan, err := g.scanner.ScanImage(ctx, g.imageRef(repo, digest))
 	if err != nil {
-		return g.staleOr(digest, staleVerdict, err)
+		return GateVerdict{}, err
 	}
 	if g.policy != nil {
 		decision := g.policy.Evaluate(pkgRef, &gate.ScanResult{
@@ -183,10 +217,10 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 			}
 			v := GateVerdict{Allowed: false, Reason: decision.Reason, BlockedBy: by, Findings: decision.Findings}
 			_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
-			if staleVerdict != nil {
+			if cascadeOnBlock {
 				g.evictBlobs(manifestBody)
 			}
-			return digest, v, nil
+			return v, nil
 		}
 	}
 
@@ -203,15 +237,15 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		for _, b := range blobs {
 			infected, scanErr := g.scanLayer(ctx, repo, b)
 			if scanErr != nil {
-				return g.staleOr(digest, staleVerdict, scanErr)
+				return GateVerdict{}, scanErr
 			}
 			if infected {
 				v := GateVerdict{Allowed: false, Reason: "malware_found", BlockedBy: "malware"}
 				_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
-				if staleVerdict != nil {
+				if cascadeOnBlock {
 					g.evictBlobs(manifestBody)
 				}
-				return digest, v, nil
+				return v, nil
 			}
 		}
 	}
@@ -219,12 +253,12 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// Clean.
 	v := GateVerdict{Allowed: true, Reason: "ok", PublishedAt: created, ContentType: contentType}
 	if err := g.cacheVerdict(ctx, repo, digest, manifestBody, v); err != nil {
-		return g.staleOr(digest, staleVerdict, err)
+		return GateVerdict{}, err
 	}
 	if path, ok := g.store.GetManifestBody(repo, digest); ok {
 		v.ManifestPath = path
 	}
-	return digest, v, nil
+	return v, nil
 }
 
 // passthrough caches and returns an allowed, un-gated verdict for a manifest

@@ -2,10 +2,13 @@ package dockerproxy
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
@@ -163,5 +166,56 @@ func TestGateRecheck_ZeroTTLNeverExpires(t *testing.T) {
 	_, v, err := g.Evaluate(context.Background(), repo, digest)
 	if err != nil || !v.FromCache || calls != before {
 		t.Fatalf("TTL 0: verdict must never expire (v=%+v err=%v calls %d→%d)", v, err, before, calls)
+	}
+}
+
+// gatedImageScanner blocks ScanImage until release is closed. Counts calls.
+type gatedImageScanner struct {
+	stubScanner
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (s *gatedImageScanner) ScanImage(ctx context.Context, ref string) (*ImageScanResult, error) {
+	s.calls.Add(1)
+	<-s.release
+	return s.stubScanner.ScanImage(ctx, ref)
+}
+
+func TestGateCoalesce_ParallelEvaluateSingleScan(t *testing.T) {
+	c := newFakeCache()
+	sc := &gatedImageScanner{release: make(chan struct{})}
+	g, _, repo := newRecheckGate(t, sc, time.Hour, c)
+
+	const n = 6
+	type result struct {
+		v   GateVerdict
+		err error
+	}
+	results := make([]result, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, v, err := g.Evaluate(context.Background(), repo, "latest")
+			results[i] = result{v, err}
+		}(i)
+	}
+	// Wait for the leader to reach the scanner, settle so followers join the
+	// flight, then release.
+	require.Eventually(t, func() bool { return sc.calls.Load() >= 1 },
+		5*time.Second, 5*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	close(sc.release)
+	wg.Wait()
+
+	if got := sc.calls.Load(); got != 1 {
+		t.Fatalf("ScanImage called %d times, want 1 (parallel evaluations must coalesce)", got)
+	}
+	for i, r := range results {
+		if r.err != nil || !r.v.Allowed {
+			t.Fatalf("result %d: v=%+v err=%v, want shared allowed verdict", i, r.v, r.err)
+		}
 	}
 }
