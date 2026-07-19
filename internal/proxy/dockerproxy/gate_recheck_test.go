@@ -2,6 +2,8 @@ package dockerproxy
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -217,5 +219,118 @@ func TestGateCoalesce_ParallelEvaluateSingleScan(t *testing.T) {
 		if r.err != nil || !r.v.Allowed {
 			t.Fatalf("result %d: v=%+v err=%v, want shared allowed verdict", i, r.v, r.err)
 		}
+	}
+}
+
+// writeManifestFile writes a minimal schema2 manifest (with mediaType) to a
+// temp file and returns its path.
+func writeManifestFile(t *testing.T) string {
+	t.Helper()
+	body := `{"schemaVersion":2,"mediaType":"` + mediaTypeSchema2Manifest + `",` +
+		`"config":{"digest":"sha256:cfg"},"layers":[{"digest":"sha256:layer1"}]}`
+	p := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// deadGate builds a manifest gate over the given store whose upstream is
+// unreachable, for offline-serving tests.
+func deadGate(ttl time.Duration, c *fakeCache) (*manifestGate, *verdictStore) {
+	adapter := NewAdapter([]string{"http://127.0.0.1:1"}, nil)
+	store := newVerdictStore(c)
+	g := newManifestGate(gateDeps{
+		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
+		filter: allowFilter{}, policy: findingPolicy{},
+		store: store, tags: newTagIndex(0), recheckTTL: ttl, logger: zerolog.Nop(),
+	})
+	return g, store
+}
+
+func TestFastPath_FreshVerdictServedWithoutUpstream(t *testing.T) {
+	c := newFakeCache()
+	// Seed through a live registry, then re-point at a dead upstream.
+	liveG, _, repo := newRecheckGate(t, stubScanner{}, time.Hour, c)
+	digest, seeded, err := liveG.Evaluate(context.Background(), repo, "latest")
+	if err != nil || !seeded.Allowed {
+		t.Fatalf("seed: v=%+v err=%v", seeded, err)
+	}
+
+	g, _ := deadGate(time.Hour, c)
+	gotDigest, v, err := g.Evaluate(context.Background(), repo, digest)
+	if err != nil {
+		t.Fatalf("fresh by-digest pull must not touch the upstream: %v", err)
+	}
+	if gotDigest != digest || !v.Allowed || !v.FromCache {
+		t.Fatalf("digest=%s v=%+v, want cached allowed verdict for %s", gotDigest, v, digest)
+	}
+	if v.ManifestPath == "" || v.ContentType == "" {
+		t.Fatalf("fast path must carry manifest path and sniffed content type, got %+v", v)
+	}
+}
+
+func TestFastPath_FreshBlockedVerdictServes403WithoutUpstream(t *testing.T) {
+	c := newFakeCache()
+	g, store := deadGate(time.Hour, c)
+	if err := store.PutImageVerdict("library/app", "sha256:bad", writeManifestFile(t), false, "cve_found"); err != nil {
+		t.Fatal(err)
+	}
+	_, v, err := g.Evaluate(context.Background(), "library/app", "sha256:bad")
+	if err != nil {
+		t.Fatalf("blocked fast path must not touch the upstream: %v", err)
+	}
+	if v.Allowed || v.BlockedBy != "cve" || !v.FromCache {
+		t.Fatalf("v=%+v, want cached cve block", v)
+	}
+}
+
+func TestFastPath_ExpiredVerdictDeadUpstreamServesStale(t *testing.T) {
+	c := newFakeCache()
+	liveG, _, repo := newRecheckGate(t, stubScanner{}, time.Hour, c)
+	digest, _, err := liveG.Evaluate(context.Background(), repo, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewindVerdict(c, repo, digest, 2*time.Hour)
+
+	g, _ := deadGate(time.Hour, c)
+	_, v, err := g.Evaluate(context.Background(), repo, digest)
+	if err != nil {
+		t.Fatalf("expired by-digest + dead upstream must serve stale, got err %v", err)
+	}
+	if !v.Allowed || !v.FromCache {
+		t.Fatalf("v=%+v, want stale allowed verdict", v)
+	}
+}
+
+func TestFastPath_NoVerdictDeadUpstreamFailsClosed(t *testing.T) {
+	c := newFakeCache()
+	g, _ := deadGate(time.Hour, c)
+	_, _, err := g.Evaluate(context.Background(), "library/app", "sha256:unknown")
+	if err == nil {
+		t.Fatal("no cached verdict + dead upstream must fail closed")
+	}
+}
+
+func TestFastPath_MissingMediaTypeFallsThroughToFetch(t *testing.T) {
+	c := newFakeCache()
+	liveG, store, repo := newRecheckGate(t, stubScanner{}, time.Hour, c)
+	digest, _, err := liveG.Evaluate(context.Background(), repo, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Overwrite the stored body with one lacking a top-level mediaType.
+	p := filepath.Join(t.TempDir(), "untyped.json")
+	if err := os.WriteFile(p, []byte(`{"schemaVersion":2,"config":{"digest":"sha256:cfg"},"layers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutImageVerdict(repo, digest, p, true, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	// Live upstream: the fall-through fetch succeeds and still serves.
+	_, v, err := liveG.Evaluate(context.Background(), repo, digest)
+	if err != nil || !v.Allowed {
+		t.Fatalf("v=%+v err=%v, want allowed via fetch fall-through", v, err)
 	}
 }

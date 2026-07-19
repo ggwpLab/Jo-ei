@@ -86,15 +86,53 @@ func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{gateDeps: 
 // this is what lets a newly-blocking CVE or malware signature evict a
 // previously-clean image. If that re-run then hits an infrastructure error
 // (Trivy/ClamAV/verdict-store failure), the expired verdict is kept as
-// staleVerdict and served instead of failing the pull (see staleOr). The one
-// exception is FetchManifest itself: an unreachable upstream registry fails
-// closed immediately, before any cached verdict is consulted, because
-// resolving the manifest is a prerequisite for everything that follows.
+// staleVerdict and served instead of failing the pull (see staleOr).
+// FetchManifest failures fail closed for tag refs (resolution needs the
+// upstream) and for digest refs with no cached verdict; a digest ref whose
+// verdict merely expired degrades to that stale verdict instead.
 func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, GateVerdict, error) {
+	// By-digest fast path: a digest ref IS the canonical cache key, so a
+	// cached verdict can be consulted before touching the upstream at all. A
+	// fresh verdict — clean or blocked — is served straight from the cache
+	// (repeat pulls skip the upstream round-trip and survive registry
+	// outages). An expired verdict is remembered so an unreachable upstream
+	// degrades to the stale verdict instead of failing the pull. Tag refs
+	// always resolve against the upstream. Supply-chain blocks are never
+	// cached, so isStaleSupplyBlock entries fall through to a fresh
+	// evaluation exactly as in the post-fetch check below.
+	var offlineStale *GateVerdict
+	if isDigestRef(ref) {
+		if clean, reason, checkedAt, found := g.store.GetImageVerdict(repo, ref); found && !isStaleSupplyBlock(clean, reason) {
+			v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
+			if !clean {
+				v.BlockedBy = blockedByForReason(reason)
+			} else if path, ok := g.store.GetManifestBody(repo, ref); ok {
+				if ct := manifestMediaType(path); ct != "" {
+					v.ManifestPath, v.ContentType = path, ct
+				}
+			}
+			fresh := g.recheckTTL <= 0 || time.Since(checkedAt) <= g.recheckTTL
+			servable := !v.Allowed || v.ManifestPath != "" // blocks need no body; serves do
+			switch {
+			case fresh && servable:
+				return ref, v, nil
+			case !fresh && servable:
+				offlineStale = &v // FetchManifest failure below serves this
+			}
+			// fresh && !servable (body missing or untyped): fall through to
+			// the fetch path — never serve with a guessed content type.
+		}
+	}
+
 	// Fetch the raw manifest for ref (tag or digest); indexes are not resolved
 	// server-side, so the client's own platform choice drives what gets gated.
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
 	if err != nil {
+		if offlineStale != nil {
+			g.logger.Warn().Err(err).Str("repo", repo).Str("digest", ref).
+				Msg("upstream unreachable; serving stale cached verdict for by-digest pull")
+			return ref, *offlineStale, nil
+		}
 		return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w", repo, ref, err)
 	}
 
@@ -394,6 +432,24 @@ func (g *manifestGate) evictBlobs(manifestBody []byte) {
 			g.logger.Warn().Err(err).Str("digest", d).Msg("cascade-evicting blob")
 		}
 	}
+}
+
+// manifestMediaType reads a stored manifest body and returns its top-level
+// mediaType, or "" when the file is unreadable or the field is absent (some
+// OCI manifests omit it). Callers must not serve a manifest with a guessed
+// content type — "" means "fetch instead".
+func manifestMediaType(path string) string {
+	body, err := os.ReadFile(path) // #nosec G304 -- path comes from the verdict store, inside the cache root
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		MediaType string `json:"mediaType"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	return m.MediaType
 }
 
 // isStaleSupplyBlock reports whether a cached verdict is a supply-chain block.
