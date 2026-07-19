@@ -163,10 +163,11 @@ osv.dev data, malware by re-scanning the cached bytes; Docker re-runs the full
 image gate when its verdict is older than the smaller enabled TTL. An entry
 that now fails is blocked and evicted (index entry and binary). A temporarily
 unreachable scanner (or scan infrastructure — Trivy, ClamAV, the verdict
-store) serves the previously clean entry and retries on the next hit; for
-Docker this does not cover an unreachable upstream registry, since resolving
-the manifest is required before the cached verdict can even be consulted, so
-that failure still fails the pull closed. Load is proportional to traffic,
+store) serves the previously clean entry and retries on the next hit. For Docker, scan-infrastructure outages (Trivy, ClamAV) serve the stale
+verdict. An unreachable upstream registry fails **by-tag** pulls (tag
+resolution needs the upstream), but **by-digest** repeat pulls are served
+from the cache: a fresh cached verdict is served without contacting the
+upstream at all, and an expired one degrades to the stale verdict. Load is proportional to traffic,
 not cache size.
 
 | Key | Default | Description |
