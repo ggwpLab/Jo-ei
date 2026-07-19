@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -217,15 +218,12 @@ func manifestDigest(body string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// TestLazyRecheckDockerBlocksExpiredImage: a cached clean image verdict whose
-// TTL has lapsed re-runs the gate on the next manifest pull; a scanner that
-// now reports a blocking CVE turns the pull into 403 and cascades the image's
-// blobs out of the cache.
-func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
-	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = lc.Close() })
-
+// newOfflineTestRegistry builds a fake docker registry serving a single
+// image (tag "latest") with a config blob backdated 72h (older than the 24h
+// supply-chain floor used in these tests) and one layer blob. It returns the
+// registry server and the manifest's canonical digest string.
+func newOfflineTestRegistry(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
 	const (
 		cfgDigest   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 		layerDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -255,6 +253,40 @@ func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
 		}
 	}))
 	t.Cleanup(registry.Close)
+	return registry, digestOfManifest
+}
+
+// stripV2Prefix strips the "/v2" mux prefix before delegating to h.
+// dockerproxy.Handler expects that prefix already stripped (see ParsePath's
+// doc comment); in production that stripping is done by proxy.Mux
+// dispatching to rawHandlers["v2"] (cmd/jo-ei/main.go). Mirror that here
+// instead of serving the handler directly, so a fake registry's real
+// "/v2/..." paths route the same way a live deployment would.
+func stripV2Prefix(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/v2")
+		if r.URL.Path == "" {
+			r.URL.Path = "/"
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// TestLazyRecheckDockerBlocksExpiredImage: a cached clean image verdict whose
+// TTL has lapsed re-runs the gate on the next manifest pull; a scanner that
+// now reports a blocking CVE turns the pull into 403 and cascades the image's
+// blobs out of the cache.
+func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
+
+	registry, _ := newOfflineTestRegistry(t)
+
+	const (
+		cfgDigest   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		layerDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	)
 
 	scanner := &switchableImageScanner{}
 	dh := dockerproxy.New(dockerproxy.HandlerDeps{
@@ -267,19 +299,7 @@ func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
 		Logger:     zerolog.Nop(),
 		RecheckTTL: time.Hour,
 	})
-	// dockerproxy.Handler expects the "/v2" mux prefix already stripped (see
-	// ParsePath's doc comment); in production that stripping is done by
-	// proxy.Mux dispatching to rawHandlers["v2"] (cmd/jo-ei/main.go). Mirror
-	// that here instead of serving dh directly, so the fake registry's real
-	// "/v2/..." paths route the same way a live deployment would.
-	front := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/v2")
-		if r.URL.Path == "" {
-			r.URL.Path = "/"
-		}
-		dh.ServeHTTP(w, r)
-	})
-	srv := httptest.NewServer(front)
+	srv := httptest.NewServer(stripV2Prefix(dh))
 	t.Cleanup(srv.Close)
 
 	// Seed pull: clean, verdict + blobs cached.
@@ -318,4 +338,50 @@ func TestLazyRecheckDockerBlocksExpiredImage(t *testing.T) {
 		_, found := lc.Get(&blobRef)
 		require.False(t, found, "blob %s must be cascade-evicted", d)
 	}
+}
+
+// TestOfflineByDigestPullSurvivesUpstreamOutage: a by-digest repeat pull with
+// a fresh cached verdict is served entirely from the cache — the upstream
+// registry can be down.
+func TestOfflineByDigestPullSurvivesUpstreamOutage(t *testing.T) {
+	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lc.Close() })
+
+	registry, manifestDigestStr := newOfflineTestRegistry(t)
+
+	h := dockerproxy.New(dockerproxy.HandlerDeps{
+		Upstreams:  []string{registry.URL},
+		Scanner:    &switchableImageScanner{},
+		AV:         &switchableAV{},
+		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Policy:     blockFindingsPolicy{},
+		Cache:      lc,
+		Logger:     zerolog.Nop(),
+		RecheckTTL: time.Hour,
+	})
+	srv := httptest.NewServer(stripV2Prefix(h))
+	t.Cleanup(srv.Close)
+
+	// Seed pull by tag — caches the verdict + manifest body under the digest.
+	resp, err := http.Get(srv.URL + "/v2/library/app/manifests/latest")
+	require.NoError(t, err)
+	digest := resp.Header.Get("Docker-Content-Digest")
+	body1, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, manifestDigestStr, digest)
+
+	// Kill the upstream.
+	registry.Close()
+
+	// The by-digest repeat pull must still serve, byte-identical.
+	resp, err = http.Get(srv.URL + "/v2/library/app/manifests/" + digest)
+	require.NoError(t, err)
+	body2, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "fresh cached verdict must serve without upstream")
+	require.Equal(t, body1, body2, "served manifest must be byte-identical")
+	require.Equal(t, digest, resp.Header.Get("Docker-Content-Digest"))
+	require.NotEmpty(t, resp.Header.Get("Content-Type"))
 }
