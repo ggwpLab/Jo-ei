@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-19
+
 ### Security
 
 - Go toolchain bumped to 1.26.5 for the crypto/tls Encrypted Client Hello
@@ -74,5 +76,6 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ggwpLab/Jo-ei/releases/tag/v0.1.0
