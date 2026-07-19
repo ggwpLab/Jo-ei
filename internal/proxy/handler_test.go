@@ -174,11 +174,22 @@ func newFakeCache() *fakeCache {
 	return &fakeCache{entries: map[string]*gate.ArtifactEntry{}}
 }
 
+// Get returns a shallow copy of the stored entry, mirroring the production
+// cache (which builds a fresh *gate.ArtifactEntry per Get). Returning the
+// map's own pointer would let every concurrent caller alias one struct, so a
+// follower's unlocked read of entry.LastMalwareCheck in recheckDue could race
+// the flight leader's locked-but-aliased write in MarkMalwareChecked — the
+// mutex here only serializes map access, not field access through a pointer
+// a caller has already taken out of the lock.
 func (f *fakeCache) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	e, ok := f.entries[ref.Key()]
-	return e, ok
+	if !ok {
+		return nil, false
+	}
+	cp := *e
+	return &cp, true
 }
 
 func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJSON string) error {
