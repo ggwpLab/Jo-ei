@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
@@ -49,6 +50,9 @@ var hopByHopHeaders = []string{
 type Handler struct {
 	cfg        HandlerConfig
 	httpClient *http.Client
+	// recheckGroup coalesces concurrent lazy re-checks of the same cache
+	// entry: one flight scans, every waiter shares the outcome.
+	recheckGroup singleflight.Group
 }
 
 // NewHandler creates a new ProxyHandler.
@@ -283,14 +287,79 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// recheckOutcome is the shared result of one coalesced re-check flight.
+// nil means "serve from cache": every check passed, was skipped, or failed
+// against an unreachable scanner (stale serve).
+type recheckOutcome struct {
+	gate      string              // gate.GateCVE | gate.GateMalware
+	blockedBy string              // "cve" | "denylist" | "malware"
+	decision  gate.PolicyDecision // CVE block details
+	av        *gate.AVResult      // malware block details
+}
+
+// recheckDue reports whether any gate's TTL has lapsed for this entry. Kept
+// outside the singleflight group so fresh hits pay zero coalescing overhead.
+func (h *Handler) recheckDue(entry *gate.ArtifactEntry) bool {
+	now := time.Now()
+	if h.cfg.CVERecheckTTL > 0 && h.cfg.CVEScanner != nil && h.cfg.Policy != nil &&
+		now.Sub(entry.LastCVECheck) > h.cfg.CVERecheckTTL {
+		return true
+	}
+	if h.cfg.MalwareRecheckTTL > 0 && h.cfg.AVScanner != nil &&
+		now.Sub(entry.LastMalwareCheck) > h.cfg.MalwareRecheckTTL {
+		return true
+	}
+	return false
+}
+
 // recheckExpired lazily re-runs each gate whose TTL has lapsed for a cache
-// hit: CVE+policy against current metadata, then malware against the cached
-// bytes (cheap metadata check first). A gate that now blocks evicts the entry
-// (index row + binary) and writes the block response — the return value true
-// tells the caller the request is finished. A scanner failure serves the
-// previously clean entry and leaves its timestamp untouched, so the next hit
-// retries; the timestamp is bumped only on a passed check.
+// hit. Concurrent requests for the same entry coalesce into one flight: the
+// leader scans (and evicts on a block), every waiter maps the shared outcome
+// to its own response and telemetry event. Returns true when the entry was
+// blocked (response already written). A scanner failure inside the flight
+// serves the previously clean entry to every waiter and leaves the check
+// timestamps untouched, so the next hit retries.
 func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, requestID string, ref *gate.PackageRef, entry *gate.ArtifactEntry, record func(string, string, string, int, func(*gate.Event)), log zerolog.Logger) bool {
+	if !h.recheckDue(entry) {
+		return false
+	}
+	// WithoutCancel: the flight's scan serves every waiter — a leader whose
+	// client disconnects must not cancel it for the others.
+	flightCtx := context.WithoutCancel(ctx)
+	v, _, _ := h.recheckGroup.Do(ref.Key(), func() (any, error) {
+		return h.runRechecks(flightCtx, ref, entry, log), nil
+	})
+	out, _ := v.(*recheckOutcome)
+	if out == nil {
+		return false
+	}
+	switch out.gate {
+	case gate.GateCVE:
+		log.Warn().Str("reason", out.decision.Reason).Int("findings", len(out.decision.Findings)).
+			Msg("re-check: CVE policy blocked cached package")
+		record(gate.VerdictBlock, gate.GateCVE, out.decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
+			ev.BlockedBy = []string{out.blockedBy}
+			ev.CVEs = out.decision.Findings
+		})
+		h.writeCVEBlockedResponse(w, requestID, ref, out.decision)
+	case gate.GateMalware:
+		log.Warn().Str("engine", out.av.Engine).Str("signature", out.av.Signature).
+			Msg("re-check: malware detected in cached artifact")
+		record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
+			ev.BlockedBy = []string{"malware"}
+			ev.MalwareEngine = out.av.Engine
+			ev.MalwareSignature = out.av.Signature
+		})
+		h.writeMalwareBlockedResponse(w, requestID, ref, out.av.Engine, out.av.Signature)
+	}
+	return true
+}
+
+// runRechecks executes the expired-gate re-checks once per flight: CVE+policy
+// against current metadata, then malware against the cached bytes (cheap
+// metadata check first). Evicts on a block; bumps a gate's timestamp only on
+// a passed check.
+func (h *Handler) runRechecks(ctx context.Context, ref *gate.PackageRef, entry *gate.ArtifactEntry, log zerolog.Logger) *recheckOutcome {
 	now := time.Now()
 
 	if h.cfg.CVERecheckTTL > 0 && h.cfg.CVEScanner != nil && h.cfg.Policy != nil &&
@@ -306,14 +375,7 @@ func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, req
 				if decision.Reason == gate.ReasonDenylisted {
 					blockedBy = "denylist"
 				}
-				log.Warn().Str("reason", decision.Reason).Int("findings", len(decision.Findings)).
-					Msg("re-check: CVE policy blocked cached package")
-				record(gate.VerdictBlock, gate.GateCVE, decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
-					ev.BlockedBy = []string{blockedBy}
-					ev.CVEs = decision.Findings
-				})
-				h.writeCVEBlockedResponse(w, requestID, ref, decision)
-				return true
+				return &recheckOutcome{gate: gate.GateCVE, blockedBy: blockedBy, decision: decision}
 			}
 			if err := h.cfg.Cache.MarkCVEChecked(ref, now); err != nil {
 				log.Warn().Err(err).Msg("marking CVE re-check")
@@ -329,22 +391,14 @@ func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, req
 			log.Warn().Err(err).Msg("malware re-check failed; serving cached artifact")
 		case !res.Clean:
 			h.evictRechecked(ref, log)
-			log.Warn().Str("engine", res.Engine).Str("signature", res.Signature).
-				Msg("re-check: malware detected in cached artifact")
-			record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
-				ev.BlockedBy = []string{"malware"}
-				ev.MalwareEngine = res.Engine
-				ev.MalwareSignature = res.Signature
-			})
-			h.writeMalwareBlockedResponse(w, requestID, ref, res.Engine, res.Signature)
-			return true
+			return &recheckOutcome{gate: gate.GateMalware, blockedBy: "malware", av: res}
 		default:
 			if err := h.cfg.Cache.MarkMalwareChecked(ref, now); err != nil {
 				log.Warn().Err(err).Msg("marking malware re-check")
 			}
 		}
 	}
-	return false
+	return nil
 }
 
 // evictRechecked removes a cached entry that failed a lazy re-check. Eviction

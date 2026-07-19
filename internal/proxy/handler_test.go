@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,7 +159,14 @@ func TestHandler_MavenSupplyChainFromDownloadNoHead(t *testing.T) {
 // fakeCache is an in-memory ArtifactCache for handler tests.
 // Put copies the artifact to its own temp file so the entry survives
 // the handler's defer os.Remove(tmpPath) after the first request.
+//
+// mu guards entries: the recheck-coalescing tests fire many concurrent
+// requests against one handler/cache pair, so Get/Put/Invalidate/Mark* race
+// against each other unless serialized. Tests that peek at hs.fc.entries
+// directly do so only outside any concurrent fire(), so no lock is needed
+// there.
 type fakeCache struct {
+	mu      sync.Mutex
 	entries map[string]*gate.ArtifactEntry
 }
 
@@ -167,6 +175,8 @@ func newFakeCache() *fakeCache {
 }
 
 func (f *fakeCache) Get(ref *gate.PackageRef) (*gate.ArtifactEntry, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	e, ok := f.entries[ref.Key()]
 	return e, ok
 }
@@ -191,11 +201,15 @@ func (f *fakeCache) Put(ref *gate.PackageRef, tmpPath string, clean bool, scanJS
 		return err
 	}
 
+	f.mu.Lock()
 	f.entries[ref.Key()] = &gate.ArtifactEntry{ArtifactPath: dst.Name(), ScanClean: clean, LastCVECheck: time.Now(), LastMalwareCheck: time.Now()}
+	f.mu.Unlock()
 	return nil
 }
 
 func (f *fakeCache) Invalidate(ref *gate.PackageRef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if e, ok := f.entries[ref.Key()]; ok {
 		os.Remove(e.ArtifactPath)
 	}
@@ -204,6 +218,8 @@ func (f *fakeCache) Invalidate(ref *gate.PackageRef) error {
 }
 
 func (f *fakeCache) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if e, ok := f.entries[ref.Key()]; ok {
 		e.LastCVECheck = ts
 	}
@@ -211,6 +227,8 @@ func (f *fakeCache) MarkCVEChecked(ref *gate.PackageRef, ts time.Time) error {
 }
 
 func (f *fakeCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if e, ok := f.entries[ref.Key()]; ok {
 		e.LastMalwareCheck = ts
 	}

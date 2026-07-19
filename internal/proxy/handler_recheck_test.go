@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,9 +68,18 @@ func (s *flipAV) Scan(context.Context, string) (*gate.AVResult, error) {
 	return &gate.AVResult{Clean: true}, nil
 }
 
-type eventSpy struct{ events []gate.Event }
+// mu guards events: the recheck-coalescing tests have every waiter record its
+// own event concurrently from its own request goroutine.
+type eventSpy struct {
+	mu     sync.Mutex
+	events []gate.Event
+}
 
-func (r *eventSpy) Record(e gate.Event) { r.events = append(r.events, e) }
+func (r *eventSpy) Record(e gate.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+}
 
 // recheckHarness caches one clean artifact through the full pipeline and
 // returns everything a re-check test needs to manipulate.
@@ -260,4 +270,165 @@ func TestRecheck_ZeroTTLDisables(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "TTL 0 disables re-checks entirely")
 	assert.Equal(t, cveCalls, hs.cve.calls.Load())
 	assert.Equal(t, avCalls, hs.av.calls.Load())
+}
+
+// gatedAV blocks every Scan until release is closed, then answers per the
+// infected/scanErr flags. Lets tests hold N concurrent requests inside one
+// re-check flight before letting the leader finish.
+type gatedAV struct {
+	infected bool
+	scanErr  bool
+	release  chan struct{}
+	calls    atomic.Int32
+}
+
+func (s *gatedAV) Scan(context.Context, string) (*gate.AVResult, error) {
+	s.calls.Add(1)
+	<-s.release
+	if s.scanErr {
+		return nil, errors.New("clamd down")
+	}
+	if s.infected {
+		return &gate.AVResult{Clean: false, Engine: "clamav", Signature: "EICAR"}, nil
+	}
+	return &gate.AVResult{Clean: true}, nil
+}
+
+// coalesceHarness is newRecheckHarness with a gated AV scanner and an
+// entered-request counter for barrier synchronization.
+type coalesceHarness struct {
+	srv     *httptest.Server
+	fc      *fakeCache
+	av      *gatedAV
+	rec     *eventSpy
+	entered *atomic.Int32
+	ref     gate.PackageRef
+	path    string
+}
+
+func newCoalesceHarness(t *testing.T, infected bool) *coalesceHarness {
+	t.Helper()
+	upstream := makeUpstream(t, "victim", "1.0.0", 72)
+	t.Cleanup(upstream.Close)
+
+	fc := newFakeCache()
+	av := &gatedAV{infected: false, release: make(chan struct{})}
+	rec := &eventSpy{}
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:           adapters.NewPyPIAdapter([]string{upstream.URL}),
+		Filter:            supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:             fc,
+		Logger:            zerolog.Nop(),
+		AVScanner:         av,
+		Recorder:          rec,
+		MalwareRecheckTTL: time.Hour,
+	})
+	var entered atomic.Int32
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered.Add(1)
+		h.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(wrapped)
+	t.Cleanup(srv.Close)
+
+	hs := &coalesceHarness{
+		srv: srv, fc: fc, av: av, rec: rec, entered: &entered,
+		ref:  gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"},
+		path: "/packages/py3/v/victim/victim-1.0.0-py3-none-any.whl",
+	}
+	// Seed pull passes with the gate open (no re-check on a fresh insert; the
+	// live-path AV scan still runs, so hold the gate open just for it).
+	close(av.release)
+	resp, err := http.Get(srv.URL + hs.path)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "seed download must pass")
+
+	// Re-arm the gate and set the verdict for the re-check phase.
+	av.release = make(chan struct{})
+	av.infected = infected
+	av.calls.Store(0)
+	entered.Store(0)
+
+	// Expire the malware check.
+	e := fc.entries[hs.ref.Key()]
+	e.LastMalwareCheck = e.LastMalwareCheck.Add(-2 * time.Hour)
+	return hs
+}
+
+// fire launches n concurrent GETs, waits until all have entered the handler
+// (plus a settle so followers reach the flight), releases the scanner, and
+// returns the status codes.
+func (hs *coalesceHarness) fire(t *testing.T, n int) []int {
+	t.Helper()
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp, err := http.Get(hs.srv.URL + hs.path)
+			if err != nil {
+				codes[i] = -1
+				return
+			}
+			resp.Body.Close()
+			codes[i] = resp.StatusCode
+		}(i)
+	}
+	require.Eventually(t, func() bool { return hs.entered.Load() == int32(n) },
+		5*time.Second, 5*time.Millisecond, "all requests must enter the handler")
+	time.Sleep(100 * time.Millisecond) // let followers reach the flight
+	close(hs.av.release)
+	wg.Wait()
+	return codes
+}
+
+func TestRecheckCoalesce_CleanSingleScan(t *testing.T) {
+	hs := newCoalesceHarness(t, false)
+	codes := hs.fire(t, 8)
+	for i, c := range codes {
+		assert.Equal(t, http.StatusOK, c, "request %d", i)
+	}
+	assert.Equal(t, int32(1), hs.av.calls.Load(), "one flight, one scan")
+	_, cached := hs.fc.entries[hs.ref.Key()]
+	assert.True(t, cached, "clean re-check must keep the entry")
+}
+
+func TestRecheckCoalesce_BlockSharedByAllWaiters(t *testing.T) {
+	hs := newCoalesceHarness(t, true)
+	codes := hs.fire(t, 8)
+	for i, c := range codes {
+		assert.Equal(t, http.StatusForbidden, c, "request %d", i)
+	}
+	assert.Equal(t, int32(1), hs.av.calls.Load(), "one flight, one scan")
+	_, cached := hs.fc.entries[hs.ref.Key()]
+	assert.False(t, cached, "blocked entry must be evicted")
+
+	// Every waiter records its own BLOCK event with a distinct request_id.
+	var blocks []gate.Event
+	for _, ev := range hs.rec.events {
+		if ev.Verdict == gate.VerdictBlock && ev.Gate == gate.GateMalware {
+			blocks = append(blocks, ev)
+		}
+	}
+	assert.Len(t, blocks, 8, "one BLOCK event per waiter")
+	ids := map[string]bool{}
+	for _, ev := range blocks {
+		ids[ev.RequestID] = true
+	}
+	assert.Len(t, ids, 8, "request_ids must be distinct")
+}
+
+func TestRecheckCoalesce_ScannerErrorAllServeStale(t *testing.T) {
+	hs := newCoalesceHarness(t, false)
+	hs.av.scanErr = true
+	before := hs.fc.entries[hs.ref.Key()].LastMalwareCheck
+	codes := hs.fire(t, 8)
+	for i, c := range codes {
+		assert.Equal(t, http.StatusOK, c, "request %d: scanner outage must serve stale", i)
+	}
+	assert.Equal(t, int32(1), hs.av.calls.Load(), "one flight, one (failed) scan")
+	assert.Equal(t, before, hs.fc.entries[hs.ref.Key()].LastMalwareCheck,
+		"failed re-check must not bump the timestamp")
 }
