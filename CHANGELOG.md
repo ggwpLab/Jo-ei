@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Docker: by-digest pulls with a cached gate verdict are served without
+  contacting the upstream registry — repeat pulls are faster and survive
+  registry outages (fresh verdict → straight from cache; expired verdict →
+  stale fallback when the upstream is unreachable). By-tag pulls still
+  require the upstream for resolution.
+
+### Changed
+
+- Concurrent re-checks of one expired cache entry (and concurrent Docker
+  evaluations of one image digest) coalesce into a single scan whose verdict
+  is shared by all waiting requests.
+
 ## [0.2.0] - 2026-07-19
 
 ### Security

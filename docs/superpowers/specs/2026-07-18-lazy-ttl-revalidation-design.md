@@ -120,6 +120,10 @@ changes are caught by the policy step). TTLs reach the handler via two new
     Exception: `FetchManifest` (the upstream registry) runs before the cached
     verdict is even consulted, so an unreachable upstream still fails the
     pull closed.
+    (Superseded for digest refs by
+    `2026-07-19-recheck-coalescing-offline-digest-design.md`: a by-digest
+    pull consults the cached verdict before the fetch and survives an
+    unreachable upstream.)
 - Blobs have no independent TTL: a blob is owned by its image and is
   re-validated transitively when the manifest verdict expires. Direct blob
   hits serve as today.
