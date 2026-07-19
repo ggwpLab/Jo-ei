@@ -367,6 +367,7 @@ func TestOfflineByDigestPullSurvivesUpstreamOutage(t *testing.T) {
 	resp, err := http.Get(srv.URL + "/v2/library/app/manifests/latest")
 	require.NoError(t, err)
 	digest := resp.Header.Get("Docker-Content-Digest")
+	contentType1 := resp.Header.Get("Content-Type")
 	body1, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -383,5 +384,5 @@ func TestOfflineByDigestPullSurvivesUpstreamOutage(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "fresh cached verdict must serve without upstream")
 	require.Equal(t, body1, body2, "served manifest must be byte-identical")
 	require.Equal(t, digest, resp.Header.Get("Docker-Content-Digest"))
-	require.NotEmpty(t, resp.Header.Get("Content-Type"))
+	require.Equal(t, contentType1, resp.Header.Get("Content-Type"), "offline pull must not sniff a different media type than the seed pull")
 }

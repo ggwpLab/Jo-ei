@@ -167,7 +167,9 @@ store) serves the previously clean entry and retries on the next hit. For Docker
 verdict. An unreachable upstream registry fails **by-tag** pulls (tag
 resolution needs the upstream), but **by-digest** repeat pulls are served
 from the cache: a fresh cached verdict is served without contacting the
-upstream at all, and an expired one degrades to the stale verdict. Load is proportional to traffic,
+upstream at all, and an expired one degrades to the stale verdict (when the
+cached manifest body itself is servable; a body without a detectable media
+type falls back to requiring the upstream). Load is proportional to traffic,
 not cache size.
 
 | Key | Default | Description |
