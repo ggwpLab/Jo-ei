@@ -207,6 +207,12 @@ The console reads live proxy state via the JSON API described below. React and t
 console UI are compiled to a single bundle baked into the binary — it needs no CDN
 and works fully offline.
 
+![Console overview — gate pipeline, throughput sparklines, scanner health](docs/images/console-overview.png)
+
+| Live request feed | Policy editor | Registries & cache |
+|---|---|---|
+| [<img src="docs/images/console-requests.png" alt="Live request feed with PASS / CACHE / BLOCK verdicts">](docs/images/console-requests.png) | [<img src="docs/images/console-policy.png" alt="Runtime policy editor — modes, severity threshold, allowlists, denylist">](docs/images/console-policy.png) | [<img src="docs/images/console-registries.png" alt="Registries and cache — per-ecosystem upstreams, cache usage">](docs/images/console-registries.png) |
+
 ### Admin console & API
 
 The embedded console at `/console/` shows live proxy state and lets you edit
