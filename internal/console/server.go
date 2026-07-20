@@ -49,7 +49,7 @@ type RegistryStore interface {
 	SaveRegistries([]RegistryInfo) error
 }
 
-var knownEcos = []string{"pypi", "npm", "maven", "rubygems", "docker"}
+var knownEcos = []string{"pypi", "npm", "maven", "rubygems", "go", "docker"}
 
 // ScannerHealthProvider supplies live scan-engine health for the overview.
 // *health.Monitor satisfies it.

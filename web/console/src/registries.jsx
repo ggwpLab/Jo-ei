@@ -1,6 +1,6 @@
 /* 浄衛 Jōei :: REGISTRIES & CACHE */
 
-const REG_ECOS = ["pypi", "npm", "maven", "rubygems", "docker"];
+const REG_ECOS = ["pypi", "npm", "maven", "rubygems", "go", "docker"];
 
 function UpstreamEditor({ upstreams, onChange }) {
   const [val, setVal] = useState("");
