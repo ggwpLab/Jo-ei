@@ -1,8 +1,12 @@
 package adapters
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
@@ -113,4 +117,53 @@ func (a *GoAdapter) UpstreamURLs(r *http.Request) []string {
 		urls[i] = base + r.URL.RequestURI()
 	}
 	return urls
+}
+
+// goInfo is the subset of the GOPROXY .info document we consume. encoding/json
+// parses the RFC3339 Time string into time.Time automatically.
+type goInfo struct {
+	Version string
+	Time    time.Time
+}
+
+// FetchMetadata fetches the module version's .info document from each upstream
+// in order, returning the first success. The .info Time is the publish date;
+// the Go protocol carries no license or (SHA256) checksum there, so those stay
+// empty.
+func (a *GoAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
+	lastErr := fmt.Errorf("no upstreams configured for go")
+	encModule := encodeGoPath(ref.Name)
+	encVersion := encodeGoPath(ref.Version)
+	for _, base := range a.upstreams {
+		meta, err := a.fetchInfoFrom(ctx, base, encModule, encVersion)
+		if err == nil {
+			return meta, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (a *GoAdapter) fetchInfoFrom(ctx context.Context, base, encModule, encVersion string) (*gate.PackageMetadata, error) {
+	apiURL := base + "/" + encModule + "/@v/" + encVersion + ".info"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building go info request: %w", err)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching go info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("go proxy returned HTTP %d for %s", resp.StatusCode, apiURL)
+	}
+	var info goInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("decoding go info: %w", err)
+	}
+	if info.Time.IsZero() {
+		return nil, fmt.Errorf("go info for %s has no Time", encVersion)
+	}
+	return &gate.PackageMetadata{PublishedAt: info.Time.UTC()}, nil
 }

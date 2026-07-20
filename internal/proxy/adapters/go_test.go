@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 )
 
@@ -62,7 +63,51 @@ func TestGoAdapter_Name(t *testing.T) {
 	assert.Equal(t, "go", adapters.NewGoAdapter(nil).Name())
 }
 
-// keep imports used across Task 2 + Task 3
-var _ = context.Background
-var _ = json.NewEncoder
-var _ = time.Now
+func TestGoAdapter_FetchMetadata(t *testing.T) {
+	publishedAt := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/github.com/!azure/azure-sdk-for-go/@v/v68.0.0+incompatible.info", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Version": "v68.0.0+incompatible",
+			"Time":    publishedAt.Format(time.RFC3339),
+		})
+	}))
+	defer srv.Close()
+
+	a := adapters.NewGoAdapter([]string{srv.URL})
+	ref := &gate.PackageRef{Ecosystem: "go", Name: "github.com/Azure/azure-sdk-for-go", Version: "v68.0.0+incompatible"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, publishedAt, meta.PublishedAt)
+	assert.Empty(t, meta.License)
+}
+
+func TestGoAdapter_FetchMetadata_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	a := adapters.NewGoAdapter([]string{srv.URL})
+	ref := &gate.PackageRef{Ecosystem: "go", Name: "example.com/x", Version: "v1.0.0"}
+	_, err := a.FetchMetadata(context.Background(), ref)
+	require.Error(t, err)
+}
+
+func TestGoAdapter_FetchMetadata_Failover(t *testing.T) {
+	published := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer down.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Version": "v1.0.0", "Time": published.Format(time.RFC3339)})
+	}))
+	defer up.Close()
+
+	a := adapters.NewGoAdapter([]string{down.URL, up.URL})
+	ref := &gate.PackageRef{Ecosystem: "go", Name: "example.com/x", Version: "v1.0.0"}
+	meta, err := a.FetchMetadata(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, published, meta.PublishedAt)
+}
