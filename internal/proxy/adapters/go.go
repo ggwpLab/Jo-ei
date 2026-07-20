@@ -163,7 +163,7 @@ func (a *GoAdapter) fetchInfoFrom(ctx context.Context, base, encModule, encVersi
 		return nil, fmt.Errorf("decoding go info: %w", err)
 	}
 	if info.Time.IsZero() {
-		return nil, fmt.Errorf("go info for %s has no Time", encVersion)
+		return nil, fmt.Errorf("go info for %s@%s has no Time", encModule, encVersion)
 	}
 	return &gate.PackageMetadata{PublishedAt: info.Time.UTC()}, nil
 }
