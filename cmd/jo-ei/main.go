@@ -333,7 +333,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	if len(handlers) == 0 && len(rawHandlers) == 0 {
-		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems,docker}.enabled: true")
+		return fmt.Errorf("no registries enabled; set at least one of registries.{pypi,npm,maven,rubygems,go,docker}.enabled: true")
 	}
 
 	// The yarn prefix is an alias of the npm handler, not a separate registry.
@@ -432,6 +432,9 @@ func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Hand
 	}
 	if cfg.Registries.RubyGems.Enabled {
 		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams, client), shared)
+	}
+	if cfg.Registries.Go.Enabled {
+		handlers["go"] = buildHandler(adapters.NewGoAdapter(cfg.Registries.Go.Upstreams, client), shared)
 	}
 	return handlers
 }
@@ -544,6 +547,8 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 			cfg.Registries.Maven = rc
 		case "rubygems":
 			cfg.Registries.RubyGems = rc
+		case "go":
+			cfg.Registries.Go = rc
 		case "docker":
 			cfg.Registries.Docker = rc
 		default:
@@ -569,6 +574,7 @@ func registryInfo(cfg *config.Config) []console.RegistryInfo {
 		{Ecosystem: "npm", Enabled: cfg.Registries.NPM.Enabled, Upstreams: cfg.Registries.NPM.Upstreams},
 		{Ecosystem: "maven", Enabled: cfg.Registries.Maven.Enabled, Upstreams: cfg.Registries.Maven.Upstreams},
 		{Ecosystem: "rubygems", Enabled: cfg.Registries.RubyGems.Enabled, Upstreams: cfg.Registries.RubyGems.Upstreams},
+		{Ecosystem: "go", Enabled: cfg.Registries.Go.Enabled, Upstreams: cfg.Registries.Go.Upstreams},
 		{Ecosystem: "docker", Enabled: cfg.Registries.Docker.Enabled, Upstreams: cfg.Registries.Docker.Upstreams},
 	}
 }
