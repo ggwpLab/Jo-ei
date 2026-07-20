@@ -10,6 +10,7 @@
     maven:    { id: "maven",    label: "mvn",  name: "Maven" },
     yarn:     { id: "yarn",     label: "yarn", name: "yarn" },
     rubygems: { id: "rubygems", label: "rb",   name: "RubyGems" },
+    go:       { id: "go",       label: "go",   name: "Go" },
     docker:   { id: "docker",   label: "dck",  name: "Docker" },
   };
 

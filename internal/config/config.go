@@ -30,6 +30,7 @@ func (c *Config) Validate() error {
 		"npm":      c.Registries.NPM,
 		"maven":    c.Registries.Maven,
 		"rubygems": c.Registries.RubyGems,
+		"go":       c.Registries.Go,
 		"docker":   c.Registries.Docker,
 	}
 	for name, rc := range regs {
@@ -136,6 +137,7 @@ type RegistriesConfig struct {
 	NPM      RegistryConfig `mapstructure:"npm"`
 	Maven    RegistryConfig `mapstructure:"maven"`
 	RubyGems RegistryConfig `mapstructure:"rubygems"`
+	Go       RegistryConfig `mapstructure:"go"`
 	Docker   RegistryConfig `mapstructure:"docker"`
 }
 

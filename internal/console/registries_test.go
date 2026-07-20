@@ -37,13 +37,14 @@ func (f *fakeRegStore) SaveRegistries(in []console.RegistryInfo) error {
 	return nil
 }
 
-// allFive returns a canonical five-ecosystem payload.
-func allFive(dockerEnabled bool) []console.RegistryInfo {
+// allSix returns a canonical six-ecosystem payload.
+func allSix(dockerEnabled bool) []console.RegistryInfo {
 	return []console.RegistryInfo{
 		{Ecosystem: "pypi", Enabled: true, Upstreams: []string{"https://pypi.org/simple"}},
 		{Ecosystem: "npm", Enabled: false, Upstreams: []string{}},
 		{Ecosystem: "maven", Enabled: false, Upstreams: []string{}},
 		{Ecosystem: "rubygems", Enabled: false, Upstreams: []string{}},
+		{Ecosystem: "go", Enabled: false, Upstreams: []string{}},
 		{Ecosystem: "docker", Enabled: dockerEnabled, Upstreams: func() []string {
 			if dockerEnabled {
 				return []string{"https://registry-1.docker.io"}
@@ -87,11 +88,11 @@ func putRegistries(t *testing.T, url string, regs []console.RegistryInfo) (*http
 // ---------------------------------------------------------------------------
 
 func TestPutRegistries_PersistsAndFlagsPending(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	fs := &fakeRegStore{regs: running, ok: true}
 	srv := regHandler(t, fs, running, false)
 
-	edited := allFive(false)
+	edited := allSix(false)
 	edited[1].Enabled = true
 	edited[1].Upstreams = []string{"https://registry.npmjs.org"}
 
@@ -107,7 +108,7 @@ func TestPutRegistries_PersistsAndFlagsPending(t *testing.T) {
 }
 
 func TestGetRegistries_NoPendingWhenUnchanged(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	fs := &fakeRegStore{regs: running, ok: true}
 	srv := regHandler(t, fs, running, false)
 
@@ -118,14 +119,14 @@ func TestGetRegistries_NoPendingWhenUnchanged(t *testing.T) {
 	code := getJSON(t, srv.URL+"/api/registries", &out)
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, out.PendingRestart)
-	assert.Len(t, out.Registries, 5)
+	assert.Len(t, out.Registries, 6)
 }
 
 func TestPutRegistries_EnabledNeedsUpstream(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
 
-	bad := allFive(false)
+	bad := allSix(false)
 	bad[1].Enabled = true // npm enabled with no upstreams
 	resp, body := putRegistries(t, srv.URL, bad)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -136,10 +137,10 @@ func TestPutRegistries_EnabledNeedsUpstream(t *testing.T) {
 }
 
 func TestPutRegistries_UnknownEcoRejected(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
 
-	bad := append(allFive(false), console.RegistryInfo{Ecosystem: "cargo", Enabled: false, Upstreams: []string{}})
+	bad := append(allSix(false), console.RegistryInfo{Ecosystem: "cargo", Enabled: false, Upstreams: []string{}})
 	resp, body := putRegistries(t, srv.URL, bad)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	var e struct{ Error, Field string }
@@ -149,11 +150,11 @@ func TestPutRegistries_UnknownEcoRejected(t *testing.T) {
 }
 
 func TestPutRegistries_DockerWithoutImageScanWarns(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	fs := &fakeRegStore{regs: running, ok: true}
 	srv := regHandler(t, fs, running, false) // image_scan OFF
 
-	edited := allFive(true) // docker enabled
+	edited := allSix(true) // docker enabled
 	resp, body := putRegistries(t, srv.URL, edited)
 	require.Equal(t, http.StatusOK, resp.StatusCode) // warning, not rejection
 	var out struct {
@@ -162,7 +163,7 @@ func TestPutRegistries_DockerWithoutImageScanWarns(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &out))
 	require.NotEmpty(t, out.Warnings)
 	assert.Contains(t, out.Warnings[0], "image_scan")
-	assert.True(t, fs.regs[4].Enabled, "docker still persisted despite warning")
+	assert.True(t, fs.regs[5].Enabled, "docker still persisted despite warning")
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +203,7 @@ func TestGetRegistries_DefensiveCopy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPutRegistries_DuplicateEco(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
 
 	// Two "pypi" entries; all ecosystems are known, so the unknown-eco branch
@@ -223,7 +224,7 @@ func TestPutRegistries_DuplicateEco(t *testing.T) {
 }
 
 func TestPutRegistries_MissingEco(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
 
 	// Only 4 ecosystems — "docker" is absent.
@@ -242,11 +243,11 @@ func TestPutRegistries_MissingEco(t *testing.T) {
 }
 
 func TestPutRegistries_InvalidUpstreamURL(t *testing.T) {
-	running := allFive(false)
+	running := allSix(false)
 	srv := regHandler(t, &fakeRegStore{regs: running, ok: true}, running, false)
 
 	// pypi is enabled but its upstream uses ftp:// — not http(s).
-	bad := allFive(false)
+	bad := allSix(false)
 	bad[0].Upstreams = []string{"ftp://bad.example.com"}
 	resp, body := putRegistries(t, srv.URL, bad)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)

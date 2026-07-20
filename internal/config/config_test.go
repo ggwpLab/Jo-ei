@@ -216,6 +216,24 @@ database:
 	assert.True(t, cfg.Registries.RubyGems.Enabled)
 }
 
+func TestLoad_ParsesGoUpstreams(t *testing.T) {
+	path := writeTempConfig(t, `
+server:
+  listen: ":8080"
+registries:
+  go:
+    enabled: true
+    upstreams:
+      - "https://proxy.golang.org"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://proxy.golang.org"}, cfg.Registries.Go.Upstreams)
+	assert.True(t, cfg.Registries.Go.Enabled)
+}
+
 func TestLoad_EnabledRubyGemsWithoutUpstreamsFails(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
