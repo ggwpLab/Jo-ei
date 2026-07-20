@@ -20,6 +20,21 @@ transparently.
 - `GoAdapter` implementing `gate.RegistryAdapter` under the `/go/` prefix.
 - Interception of `…/@v/<version>.zip` downloads for gating.
 - Transparent proxying of `@v/list`, `.info`, `.mod`, `@latest`.
+
+### Why `.mod` / `.info` / `list` are proxied without gating
+
+Jo-ei's model gates the installable/executable artifact, not the resolution
+manifests. `.mod` is the module's `go.mod` — text, non-executable, carrying no
+code; a signature/CVE scan of it is meaningless. A CVE or malware payload only
+materializes when code is compiled/run, and that code lives **only in the
+`.zip`**, which is gated. A blocked module's `.zip` returns 423/403, so `go
+build` fails — the fact that its `.mod` passed grants no code. Transitive
+`require`s do not bypass gating either: each dependency is fetched as its own
+proxy request and its own `.zip` is gated independently. This mirrors the npm
+adapter, which proxies the metadata document (including `scripts`/`postinstall`)
+transparently while gating the `.tgz`. (Policy over `go.mod` *contents* — e.g.
+forbidding a specific `require`/`replace` — would be a separate dependency-graph
+policy feature, not a malware/CVE scan, and is out of scope.)
 - Case-encoding decode (`!x` → `X`) for module path and version, so OSV and the
   allowlist see canonical coordinates.
 - Publish date from `.info` via `FetchMetadata` (supply-chain gate input).
