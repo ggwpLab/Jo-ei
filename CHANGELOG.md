@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Go module registry adapter: pull Go modules through Jōei
+  (`GOPROXY=http://<jo-ei>/go`) so module zips pass the supply-chain, CVE, and
+  malware gates. Enable via `registries.go` (disabled by default).
 - Docker: by-digest pulls with a cached gate verdict are served without
   contacting the upstream registry — repeat pulls are faster and survive
   registry outages (fresh verdict → straight from cache; expired verdict →
