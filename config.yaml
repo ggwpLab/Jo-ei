@@ -26,6 +26,10 @@ registries:
     upstreams:
       - "https://rubygems.org"
     enabled: true
+  go:
+    upstreams:
+      - "https://proxy.golang.org"
+    enabled: false   # opt-in; Go module pull-through proxy (GOPROXY=http://<jo-ei>/go)
   docker:
     upstreams:
       - "https://registry-1.docker.io"
