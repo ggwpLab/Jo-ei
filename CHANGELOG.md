@@ -7,22 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-20
+
 ### Added
 
-- Go module registry adapter: pull Go modules through Jōei
+- **Go module registry adapter** — pull Go modules through Jōei
   (`GOPROXY=http://<jo-ei>/go`) so module zips pass the supply-chain, CVE, and
-  malware gates. Enable via `registries.go` (disabled by default).
-- Docker: by-digest pulls with a cached gate verdict are served without
-  contacting the upstream registry — repeat pulls are faster and survive
-  registry outages (fresh verdict → straight from cache; expired verdict →
-  stale fallback when the upstream is unreachable). By-tag pulls still
-  require the upstream for resolution.
+  malware gates. Metadata endpoints (`.info` / `.mod` / `@v/list` / `@latest`)
+  are proxied transparently. Disabled by default (`registries.go`).
+- **Offline by-digest Docker pulls** — a by-digest pull with a fresh cached
+  verdict is served straight from the cache, without contacting the upstream
+  registry; an expired verdict falls back to the cached artifact when the
+  upstream is unreachable. By-tag pulls still need the upstream to resolve the
+  digest.
 
 ### Changed
 
-- Concurrent re-checks of one expired cache entry (and concurrent Docker
-  evaluations of one image digest) coalesce into a single scan whose verdict
-  is shared by all waiting requests.
+- **Coalesced re-checks** — concurrent lazy re-checks of one expired cache
+  entry, and concurrent Docker evaluations of one image digest, now collapse
+  into a single scan (singleflight) whose verdict every waiting request shares.
 
 ## [0.2.0] - 2026-07-19
 
@@ -93,6 +96,7 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ggwpLab/Jo-ei/releases/tag/v0.1.0
