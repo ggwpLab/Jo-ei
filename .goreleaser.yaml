@@ -37,8 +37,9 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# Release notes come from CHANGELOG.md, extracted by scripts/release-notes.sh
-# and passed with --release-notes in the release workflow.
+# Release notes come from CHANGELOG.md: scripts/release-notes.sh extracts the
+# section and a post-goreleaser "gh release edit" step sets the body (goreleaser's
+# --release-notes did not populate it). This disables the auto commit-list only.
 changelog:
   disable: true
 
