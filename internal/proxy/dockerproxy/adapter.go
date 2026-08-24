@@ -50,6 +50,10 @@ func NewAdapter(upstreams []string, client *http.Client) *Adapter {
 
 // do issues a request to base+path with bearer-token auth retry. accept sets the
 // Accept header (empty → none). Returns the response; caller closes the body.
+// When the initial request gets a 401 but the subsequent token exchange
+// itself fails, do returns (nil, err) even though the registry did answer —
+// so the caller's retry loop records this outcome as status 0 ("never
+// reached the mirror"), which is not quite accurate for this one case.
 func (a *Adapter) do(ctx context.Context, method, base, path, accept string) (*http.Response, error) {
 	build := func(token string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, method, base+path, nil)

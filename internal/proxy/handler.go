@@ -523,7 +523,9 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 // HTTP 200 with its response header. Every failed mirror is recorded in atts,
 // which is also returned as the error when no mirror succeeded — so the caller
 // can both log each attempt and ask atts.AllNotFound() whether the artifact was
-// merely absent (404) rather than unreachable (502).
+// merely absent (404) rather than unreachable (502). It does not itself guard
+// against an empty urls list — the caller owns that check — and an empty list
+// here simply returns a zero-length, non-nil atts as the error.
 func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, header http.Header, atts upstream.Attempts, err error) {
 	for _, u := range urls {
 		start := time.Now()

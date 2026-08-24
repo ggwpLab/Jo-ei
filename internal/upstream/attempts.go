@@ -33,8 +33,11 @@ type Attempt struct {
 // structured array field.
 type Attempts []Attempt
 
-// Add appends one outcome. Credentials embedded in rawURL are stripped so they
-// never reach the log.
+// Add appends one outcome. Credentials embedded in rawURL are stripped from
+// the resulting URL field only. err's own text is not sanitised: it is the
+// caller's responsibility. In practice net/http masks a *url.Error's password
+// but leaves the username, and http.NewRequestWithContext on a malformed URL
+// returns the raw URL unmasked.
 func (a *Attempts) Add(rawURL string, status int, err error, d time.Duration) {
 	*a = append(*a, Attempt{
 		URL:      SanitizeURL(rawURL),

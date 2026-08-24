@@ -156,6 +156,45 @@ func TestAdapter_ResolveDigestWithNoUpstreamsFails(t *testing.T) {
 	}
 }
 
+func TestAdapter_FetchManifestReportsEveryMirror(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	a := NewAdapter([]string{deadURL, missing.URL}, nil)
+	_, _, _, err := a.FetchManifest(context.Background(), "library/nginx", "1.25")
+	if err == nil {
+		t.Fatal("expected an error when every mirror fails")
+	}
+
+	atts, ok := upstream.AttemptsFrom(err)
+	if !ok {
+		t.Fatalf("error does not carry upstream attempts: %v", err)
+	}
+	if len(atts) != 2 || atts[0].Status != 0 || atts[1].Status != http.StatusNotFound {
+		t.Fatalf("attempts = %+v, want [status 0, status 404]", atts)
+	}
+}
+
+func TestAdapter_FetchBlobWithNoUpstreamsFails(t *testing.T) {
+	a := NewAdapter(nil, nil)
+	rc, size, err := a.FetchBlob(context.Background(), "library/nginx", "sha256:deadbeef")
+	if err == nil {
+		t.Fatal("zero upstreams must be an error, not a nil ReadCloser with nil error")
+	}
+	if rc != nil {
+		t.Errorf("ReadCloser = %v, want nil (caller defers rc.Close() unconditionally)", rc)
+	}
+	if size != 0 {
+		t.Errorf("size = %d, want 0", size)
+	}
+}
+
 func TestHostFromUpstreamNormalizesDockerHub(t *testing.T) {
 	tests := []struct {
 		in   []string

@@ -60,8 +60,12 @@ func RootPool(caFiles []string) (*x509.CertPool, int, error) {
 func NewTransport(pool *x509.CertPool) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if tr.TLSClientConfig == nil {
-		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		// Defence only: as of this Go version, Clone() always returns a non-nil
+		// TLSClientConfig (it applies h2 configuration itself), so this branch is
+		// not expected to run. MinVersion is set unconditionally below regardless.
+		tr.TLSClientConfig = &tls.Config{}
 	}
+	tr.TLSClientConfig.MinVersion = tls.VersionTLS12
 	tr.TLSClientConfig.RootCAs = pool
 	return tr
 }

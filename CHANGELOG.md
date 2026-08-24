@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata fetches, and Docker manifest/blob fetches now log an
   `upstream_attempts` array with each mirror's URL, HTTP status (0 for a
   transport failure), error, and duration. Response statuses are unchanged.
+  The `artifact not found on any upstream` and `failed to download artifact`
+  log lines no longer carry the old `upstream_urls` field; `upstream_attempts`
+  supersedes it.
 
 ## [0.3.0] - 2026-07-20
 
