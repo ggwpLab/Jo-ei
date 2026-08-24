@@ -433,11 +433,12 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 		body = b
 	}
 
-	allNotFound := true
+	var atts upstream.Attempts
 	for _, url := range urls {
+		start := time.Now()
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, url, bytes.NewReader(body))
 		if err != nil {
-			allNotFound = false
+			atts.Add(url, 0, fmt.Errorf("building request: %w", err), time.Since(start))
 			continue
 		}
 		for key, vals := range r.Header {
@@ -451,7 +452,7 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := h.httpClient.Do(req) // #nosec G704 -- fetching configured upstream registries is the proxy's purpose
 		if err != nil {
-			allNotFound = false
+			atts.Add(url, 0, err, time.Since(start))
 			continue
 		}
 		if resp.StatusCode < 400 {
@@ -470,16 +471,18 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 			return
 		}
-		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusGone {
-			allNotFound = false
-		}
+		atts.Add(url, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), time.Since(start))
 		resp.Body.Close()
 	}
 
-	if allNotFound {
+	if atts.AllNotFound() {
+		h.cfg.Logger.Warn().Array("upstream_attempts", atts).
+			Str("path", r.URL.Path).Msg("transparent proxy: not found on any upstream")
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	h.cfg.Logger.Error().Array("upstream_attempts", atts).
+		Str("path", r.URL.Path).Msg("transparent proxy: no upstream available")
 	http.Error(w, "upstream unavailable", http.StatusBadGateway)
 }
 

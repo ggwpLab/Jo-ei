@@ -834,3 +834,38 @@ func TestHandler_AllMirrors404Yields404(t *testing.T) {
 		t.Fatalf("404 path lost the attempt array: %s", logBuf.String())
 	}
 }
+
+// A transparent (non-intercepted) request that fails everywhere must leave a
+// log trail. It previously produced a silent 502.
+func TestHandler_TransparentProxyLogsAttempts(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+
+	var logBuf bytes.Buffer
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewNPMAdapter([]string{deadURL, broken.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.New(&logBuf),
+	})
+
+	// A bare package document is metadata, not a tarball download, so
+	// NormalizeRequest returns false and the request goes transparent.
+	req := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, `"status":0`) || !strings.Contains(logs, `"status":500`) {
+		t.Fatalf("transparent proxy did not log both mirror outcomes: %s", logs)
+	}
+}
