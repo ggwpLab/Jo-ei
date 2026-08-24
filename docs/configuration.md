@@ -50,9 +50,9 @@ tls:
     - /etc/jo-ei/ca/corp-root.pem
 ```
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `ca_files` | list of paths | empty | PEM files whose certificates are added to the system root pool |
+| Key | Default | Description |
+| --- | --- | --- |
+| `ca_files` | empty | List of PEM file paths whose certificates are added to the system root pool |
 
 The listed certificates **supplement** the system roots — they do not replace
 them — so an internal mirror signed by a corporate CA and a public registry both
@@ -69,13 +69,19 @@ tls: added CA certificates to the upstream trust pool certificates=1 sources=1
 
 ### Getting a mirror's CA certificate
 
+Dump the chain the mirror presents — each certificate is one PEM block, the
+mirror's own certificate first, its issuers after:
+
 ```bash
-openssl s_client -showcerts -connect mirror.corp:443 </dev/null \
-  | openssl x509 -outform PEM > /etc/jo-ei/ca/corp-root.pem
+openssl s_client -showcerts -connect mirror.corp:443 </dev/null 2>/dev/null \
+  | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' > mirror-chain.pem
 ```
 
-Prefer the CA that signed the mirror over the mirror's own leaf certificate: a
-leaf must be replaced in this file every time it is rotated.
+Copy the issuing CA's block out of `mirror-chain.pem` into the file you list in
+`ca_files`. Prefer that CA over the mirror's own leaf certificate: a leaf must be
+replaced here every time it is rotated, while the CA outlives it. A mirror with a
+self-signed certificate presents a single block, and that one certificate is both
+the leaf and the trust anchor — list it directly.
 
 ## `registries`
 
