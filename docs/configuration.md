@@ -40,6 +40,43 @@ process exits non-zero.
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`).
 
+## `tls`
+
+Trust for outbound connections to upstream registries.
+
+```yaml
+tls:
+  ca_files:
+    - /etc/jo-ei/ca/corp-root.pem
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `ca_files` | list of paths | empty | PEM files whose certificates are added to the system root pool |
+
+The listed certificates **supplement** the system roots — they do not replace
+them — so an internal mirror signed by a corporate CA and a public registry both
+verify through the same pool. A bundle containing several certificates in one
+file is fine; all of them are added.
+
+Startup fails, naming the file, when a listed file cannot be read, contains no
+certificate (a private key or a DER file with a `.pem` name are the usual
+causes), or holds an unparseable certificate. On success the startup log reads:
+
+```
+tls: added CA certificates to the upstream trust pool certificates=1 sources=1
+```
+
+### Getting a mirror's CA certificate
+
+```bash
+openssl s_client -showcerts -connect mirror.corp:443 </dev/null \
+  | openssl x509 -outform PEM > /etc/jo-ei/ca/corp-root.pem
+```
+
+Prefer the CA that signed the mirror over the mirror's own leaf certificate: a
+leaf must be replaced in this file every time it is rotated.
+
 ## `registries`
 
 Five fixed ecosystems: `pypi`, `npm`, `maven`, `rubygems`, `docker`. Each:

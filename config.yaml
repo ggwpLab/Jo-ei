@@ -8,6 +8,14 @@ server:
   # against HTTP 429. Default 10 when unset; raise for a large shared instance.
   upstream_rate_per_second: 10
 
+# Extra certificate authorities trusted when connecting to upstream registries.
+# Use this when a mirror presents a corporate or self-signed certificate: the
+# listed PEM files are added to the system root pool, so public registries keep
+# working alongside it. A file that cannot be read or parsed stops startup.
+# tls:
+#   ca_files:
+#     - /etc/jo-ei/ca/corp-root.pem
+
 registries:
   pypi:
     upstreams:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Trusted CA certificates for upstream registries** (`tls.ca_files`) — PEM
+  files listed here are added to the system root pool used for every upstream
+  connection, so a mirror presenting a corporate or self-signed certificate can
+  be fetched without weakening verification for public registries. An unreadable
+  or certificate-less file stops startup with a message naming it.
+
 ### Changed
 
 - **Every upstream mirror's own error now reaches the log.** A fetch that fails
