@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // decodeGoPath reverses Go module case-encoding: a '!' followed by a lowercase
@@ -131,39 +132,43 @@ type goInfo struct {
 // the Go protocol carries no license or (SHA256) checksum there, so those stay
 // empty.
 func (a *GoAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	lastErr := fmt.Errorf("no upstreams configured for go")
+	if len(a.upstreams) == 0 {
+		return nil, fmt.Errorf("no upstreams configured for go")
+	}
 	encModule := encodeGoPath(ref.Name)
 	encVersion := encodeGoPath(ref.Version)
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		meta, err := a.fetchInfoFrom(ctx, base, encModule, encVersion)
+		start := time.Now()
+		meta, url, status, err := a.fetchInfoFrom(ctx, base, encModule, encVersion)
 		if err == nil {
 			return meta, nil
 		}
-		lastErr = err
+		atts.Add(url, status, err, time.Since(start))
 	}
-	return nil, lastErr
+	return nil, atts
 }
 
-func (a *GoAdapter) fetchInfoFrom(ctx context.Context, base, encModule, encVersion string) (*gate.PackageMetadata, error) {
+func (a *GoAdapter) fetchInfoFrom(ctx context.Context, base, encModule, encVersion string) (*gate.PackageMetadata, string, int, error) {
 	apiURL := base + "/" + encModule + "/@v/" + encVersion + ".info"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building go info request: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("building go info request: %w", err)
 	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching go info: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("fetching go info: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("go proxy returned HTTP %d for %s", resp.StatusCode, apiURL)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("go proxy returned HTTP %d for %s", resp.StatusCode, upstream.SanitizeURL(apiURL))
 	}
 	var info goInfo
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("decoding go info: %w", err)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("decoding go info: %w", err)
 	}
 	if info.Time.IsZero() {
-		return nil, fmt.Errorf("go info for %s@%s has no Time", encModule, encVersion)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("go info for %s@%s has no Time", encModule, encVersion)
 	}
-	return &gate.PackageMetadata{PublishedAt: info.Time.UTC()}, nil
+	return &gate.PackageMetadata{PublishedAt: info.Time.UTC()}, apiURL, resp.StatusCode, nil
 }

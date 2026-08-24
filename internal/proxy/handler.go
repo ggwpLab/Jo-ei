@@ -162,7 +162,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !deferSC {
 		meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to fetch upstream metadata")
+			ev := log.Error().Err(err)
+			if atts, ok := upstream.AttemptsFrom(err); ok {
+				ev = ev.Array("upstream_attempts", atts)
+			}
+			ev.Msg("failed to fetch upstream metadata")
 			record(gate.VerdictError, gate.GateSupply, "upstream_metadata_unavailable", http.StatusBadGateway, nil)
 			h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_metadata_unavailable")
 			return

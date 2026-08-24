@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // pypiJSONResponse represents the PyPI JSON API response for a specific version.
@@ -84,52 +85,57 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool)
 }
 
 // FetchMetadata walks the configured upstreams in order, returning the first
-// success. If all upstreams fail, the last error is returned.
+// success. When every upstream fails, the returned error is an
+// upstream.Attempts carrying each mirror's own outcome.
 func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	lastErr := fmt.Errorf("no upstreams configured for pypi")
+	if len(a.upstreams) == 0 {
+		return nil, fmt.Errorf("no upstreams configured for pypi")
+	}
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		meta, err := a.fetchMetadataFrom(ctx, base, ref)
+		start := time.Now()
+		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
 		if err == nil {
 			return meta, nil
 		}
-		lastErr = err
+		atts.Add(url, status, err, time.Since(start))
 	}
-	return nil, lastErr
+	return nil, atts
 }
 
-func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
+func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
 	apiURL := fmt.Sprintf("%s/pypi/%s/%s/json", base, ref.Name, ref.Version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building metadata request: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("building metadata request: %w", err)
 	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching pypi metadata: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("fetching pypi metadata: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("package %s@%s not found on PyPI", ref.Name, ref.Version)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("package %s@%s not found on PyPI", ref.Name, ref.Version)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pypi returned HTTP %d", resp.StatusCode)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("pypi returned HTTP %d", resp.StatusCode)
 	}
 
 	var info pypiJSONResponse
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("decoding pypi response: %w", err)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("decoding pypi response: %w", err)
 	}
 	if len(info.URLs) == 0 {
-		return nil, fmt.Errorf("no download URLs in pypi response for %s@%s", ref.Name, ref.Version)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("no download URLs in pypi response for %s@%s", ref.Name, ref.Version)
 	}
 
 	publishedAt, err := time.Parse(time.RFC3339, info.URLs[0].UploadTimeISO)
 	if err != nil {
 		publishedAt, err = time.Parse("2006-01-02T15:04:05.999999Z07:00", info.URLs[0].UploadTimeISO)
 		if err != nil {
-			return nil, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", info.URLs[0].UploadTimeISO, err)
+			return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", info.URLs[0].UploadTimeISO, err)
 		}
 	}
 	return &gate.PackageMetadata{
@@ -137,7 +143,7 @@ func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *g
 		Maintainer:  info.Info.Author,
 		License:     info.Info.License,
 		Checksum:    info.URLs[0].Digests.SHA256,
-	}, nil
+	}, apiURL, resp.StatusCode, nil
 }
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
