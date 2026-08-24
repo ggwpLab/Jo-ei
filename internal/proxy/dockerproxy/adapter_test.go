@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 func TestResolveDigest(t *testing.T) {
@@ -119,6 +121,38 @@ func TestImageConfigCreatedAndLayers(t *testing.T) {
 	}
 	if len(layers) != 2 || layers[0] != "sha256:l1" || layers[1] != "sha256:l2" {
 		t.Errorf("layers = %v", layers)
+	}
+}
+
+func TestAdapter_ResolveDigestReportsEveryMirror(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	a := NewAdapter([]string{deadURL, missing.URL}, nil)
+	_, err := a.ResolveDigest(context.Background(), "library/nginx", "1.25")
+	if err == nil {
+		t.Fatal("expected an error when every mirror fails")
+	}
+
+	atts, ok := upstream.AttemptsFrom(err)
+	if !ok {
+		t.Fatalf("error does not carry upstream attempts: %v", err)
+	}
+	if len(atts) != 2 || atts[0].Status != 0 || atts[1].Status != http.StatusNotFound {
+		t.Fatalf("attempts = %+v, want [status 0, status 404]", atts)
+	}
+}
+
+func TestAdapter_ResolveDigestWithNoUpstreamsFails(t *testing.T) {
+	a := NewAdapter(nil, nil)
+	if _, err := a.ResolveDigest(context.Background(), "library/nginx", "1.25"); err == nil {
+		t.Fatal("zero upstreams must be an error, not an empty digest with nil error")
 	}
 }
 

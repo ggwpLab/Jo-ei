@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Every upstream mirror's own error now reaches the log.** A fetch that fails
+  across several mirrors used to report only the last mirror's error, so a
+  mirror rejected for a TLS or DNS failure was hidden behind another mirror's
+  plain 404. Artifact downloads, transparent proxying, npm/PyPI/RubyGems/Go
+  metadata fetches, and Docker manifest/blob fetches now log an
+  `upstream_attempts` array with each mirror's URL, HTTP status (0 for a
+  transport failure), error, and duration. Response statuses are unchanged.
+
 ## [0.3.0] - 2026-07-20
 
 ### Added
