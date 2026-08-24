@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // HandlerConfig groups dependencies for the ProxyHandler.
@@ -209,15 +210,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
 		return
 	}
-	tmpPath, header, allNotFound, err := h.downloadFromUpstreams(ctx, upstreamURLs)
+	tmpPath, header, atts, err := h.downloadFromUpstreams(ctx, upstreamURLs)
 	if err != nil {
-		if allNotFound {
-			log.Warn().Strs("upstream_urls", upstreamURLs).Msg("artifact not found on any upstream")
+		if atts.AllNotFound() {
+			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on any upstream")
 			record(gate.VerdictError, gate.GateSupply, "artifact_not_found", http.StatusNotFound, nil)
 			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
 			return
 		}
-		log.Error().Err(err).Strs("upstream_urls", upstreamURLs).Msg("failed to download artifact")
+		log.Error().Err(err).Array("upstream_attempts", atts).Msg("failed to download artifact")
 		record(gate.VerdictError, gate.GateSupply, "upstream_unavailable", http.StatusBadGateway, nil)
 		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_unavailable")
 		return
@@ -492,11 +493,11 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 	}
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("downloading %s: %w", url, err)
+		return "", nil, 0, fmt.Errorf("downloading %s: %w", upstream.SanitizeURL(url), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, url)
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, upstream.SanitizeURL(url))
 	}
 
 	tmp, err := os.CreateTemp("", "jo-ei-artifact-*")
@@ -512,25 +513,20 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 }
 
 // downloadFromUpstreams tries each candidate URL in order, returning the first
-// HTTP 200 with its response header. allNotFound is true iff every attempt
-// returned 404/410 (no other failure occurred), which the caller maps to a 404
-// instead of 502.
-func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, header http.Header, allNotFound bool, err error) {
-	if len(urls) == 0 {
-		return "", nil, false, fmt.Errorf("downloadFromUpstreams: no upstream URLs provided")
-	}
-	allNotFound = true
+// HTTP 200 with its response header. Every failed mirror is recorded in atts,
+// which is also returned as the error when no mirror succeeded — so the caller
+// can both log each attempt and ask atts.AllNotFound() whether the artifact was
+// merely absent (404) rather than unreachable (502).
+func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, header http.Header, atts upstream.Attempts, err error) {
 	for _, u := range urls {
+		start := time.Now()
 		path, hdr, status, derr := h.tryDownload(ctx, u)
 		if derr == nil {
-			return path, hdr, false, nil
+			return path, hdr, atts, nil
 		}
-		if status != http.StatusNotFound && status != http.StatusGone {
-			allNotFound = false
-		}
-		err = derr
+		atts.Add(u, status, derr, time.Since(start))
 	}
-	return "", nil, allNotFound, err
+	return "", nil, atts, atts
 }
 
 // serveFromCache streams the cached artifact to the response writer. It
