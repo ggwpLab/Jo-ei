@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -761,4 +762,110 @@ func TestHandler_DownloadServerErrorReturns502(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+}
+
+// A mirror that cannot be reached at all and a mirror that answers 404 must
+// both appear in the log. Before attempt aggregation the transport failure was
+// overwritten by the 404 and vanished.
+func TestHandler_LogsEveryUpstreamAttempt(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close() // nothing listens here any more: connection refused
+
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	var logBuf bytes.Buffer
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewMavenAdapter([]string{deadURL, missing.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.New(&logBuf),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/com/example/lib/1.0.0/lib-1.0.0.jar", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (one mirror failed at the transport layer)", rec.Code)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, `"status":0`) {
+		t.Fatalf("log does not carry the transport failure (status 0): %s", logs)
+	}
+	if !strings.Contains(logs, `"status":404`) {
+		t.Fatalf("log does not carry the 404 mirror: %s", logs)
+	}
+	if !strings.Contains(logs, "upstream_attempts") {
+		t.Fatalf("log has no upstream_attempts array: %s", logs)
+	}
+}
+
+// Regression guard on the 404-versus-502 rule: every mirror absent is a 404.
+func TestHandler_AllMirrors404Yields404(t *testing.T) {
+	notFound := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "not found", http.StatusNotFound)
+		}))
+	}
+	a, b := notFound(), notFound()
+	defer a.Close()
+	defer b.Close()
+
+	var logBuf bytes.Buffer
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewMavenAdapter([]string{a.URL, b.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.New(&logBuf),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/com/example/lib/1.0.0/lib-1.0.0.jar", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when every mirror answered 404", rec.Code)
+	}
+	if !strings.Contains(logBuf.String(), "upstream_attempts") {
+		t.Fatalf("404 path lost the attempt array: %s", logBuf.String())
+	}
+}
+
+// A transparent (non-intercepted) request that fails everywhere must leave a
+// log trail. It previously produced a silent 502.
+func TestHandler_TransparentProxyLogsAttempts(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+
+	var logBuf bytes.Buffer
+	h := proxy.NewHandler(proxy.HandlerConfig{
+		Adapter: adapters.NewNPMAdapter([]string{deadURL, broken.URL}),
+		Filter:  supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:   newFakeCache(),
+		Logger:  zerolog.New(&logBuf),
+	})
+
+	// A bare package document is metadata, not a tarball download, so
+	// NormalizeRequest returns false and the request goes transparent.
+	req := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, `"status":0`) || !strings.Contains(logs, `"status":500`) {
+		t.Fatalf("transparent proxy did not log both mirror outcomes: %s", logs)
+	}
 }

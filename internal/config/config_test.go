@@ -538,3 +538,38 @@ database:
 	assert.Equal(t, "CRITICAL", cfg.CVE.BlockOn)
 	assert.Equal(t, 48, cfg.SupplyChain.MinAgeHours)
 }
+
+func TestLoad_TLSCAFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `
+database:
+  path: ./jo-ei.db
+tls:
+  ca_files:
+    - /etc/jo-ei/ca/corp-root.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TLS.CAFiles) != 1 || cfg.TLS.CAFiles[0] != "/etc/jo-ei/ca/corp-root.pem" {
+		t.Fatalf("TLS.CAFiles = %v, want the single configured path", cfg.TLS.CAFiles)
+	}
+}
+
+func TestLoad_TLSSectionIsOptional(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("database:\n  path: ./jo-ei.db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TLS.CAFiles) != 0 {
+		t.Fatalf("TLS.CAFiles = %v, want empty when the section is absent", cfg.TLS.CAFiles)
+	}
+}

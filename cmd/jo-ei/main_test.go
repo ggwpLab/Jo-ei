@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -58,4 +59,37 @@ func TestBuildHandlers_RubyGemsRegisteredWhenEnabled(t *testing.T) {
 	assert.Contains(t, h, "rubygems")
 	assert.NotContains(t, h, "npm")
 	assert.NotContains(t, h, "yarn")
+}
+
+// A CA file that cannot be parsed must stop startup with a message naming it,
+// not surface later as an opaque x509 failure on the first artifact fetch.
+func TestRunProxy_FailsFastOnUnusableCAFile(t *testing.T) {
+	dir := t.TempDir()
+	badCA := filepath.Join(dir, "not-a-cert.pem")
+	if err := os.WriteFile(badCA, []byte("definitely not PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	slash := filepath.ToSlash
+	body := "" +
+		"database:\n  path: " + slash(filepath.Join(dir, "jo-ei.db")) + "\n" +
+		"cache:\n  backend: local\n  local:\n    path: " + slash(filepath.Join(dir, "cache")) + "\n" +
+		"policy:\n  active_profile: default\n  profiles:\n    default:\n      cve_block: false\n" +
+		"tls:\n  ca_files:\n    - " + slash(badCA) + "\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	old := cfgFile
+	cfgFile = cfgPath
+	t.Cleanup(func() { cfgFile = old })
+
+	err := runProxy(nil, nil)
+	if err == nil {
+		t.Fatal("startup succeeded with an unusable CA file")
+	}
+	if !strings.Contains(err.Error(), "not-a-cert.pem") {
+		t.Fatalf("err = %v, want it to name the offending CA file", err)
+	}
 }

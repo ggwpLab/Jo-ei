@@ -40,6 +40,49 @@ process exits non-zero.
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`).
 
+## `tls`
+
+Trust for outbound connections to upstream registries.
+
+```yaml
+tls:
+  ca_files:
+    - /etc/jo-ei/ca/corp-root.pem
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `ca_files` | empty | List of PEM file paths whose certificates are added to the system root pool |
+
+The listed certificates **supplement** the system roots — they do not replace
+them — so an internal mirror signed by a corporate CA and a public registry both
+verify through the same pool. A bundle containing several certificates in one
+file is fine; all of them are added.
+
+Startup fails, naming the file, when a listed file cannot be read, contains no
+certificate (a private key or a DER file with a `.pem` name are the usual
+causes), or holds an unparseable certificate. On success the startup log reads:
+
+```
+tls: added CA certificates to the upstream trust pool certificates=1 sources=1
+```
+
+### Getting a mirror's CA certificate
+
+Dump the chain the mirror presents — each certificate is one PEM block, the
+mirror's own certificate first, its issuers after:
+
+```bash
+openssl s_client -showcerts -connect mirror.corp:443 </dev/null 2>/dev/null \
+  | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' > mirror-chain.pem
+```
+
+Copy the issuing CA's block out of `mirror-chain.pem` into the file you list in
+`ca_files`. Prefer that CA over the mirror's own leaf certificate: a leaf must be
+replaced here every time it is rotated, while the CA outlives it. A mirror with a
+self-signed certificate presents a single block, and that one certificate is both
+the leaf and the trust anchor — list it directly.
+
 ## `registries`
 
 Five fixed ecosystems: `pypi`, `npm`, `maven`, `rubygems`, `docker`. Each:

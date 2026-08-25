@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // rubygemsVersion is one entry in the /api/v1/versions/<gem>.json array.
@@ -103,55 +104,60 @@ func (a *RubyGemsAdapter) UpstreamURLs(r *http.Request) []string {
 }
 
 // FetchMetadata walks the configured upstreams in order, returning the first
-// success. If all upstreams fail, the last error is returned.
+// success. When every upstream fails, the returned error is an
+// upstream.Attempts carrying each mirror's own outcome.
 func (a *RubyGemsAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	lastErr := fmt.Errorf("no upstreams configured for rubygems")
+	if len(a.upstreams) == 0 {
+		return nil, fmt.Errorf("no upstreams configured for rubygems")
+	}
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		meta, err := a.fetchMetadataFrom(ctx, base, ref)
+		start := time.Now()
+		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
 		if err == nil {
 			return meta, nil
 		}
-		lastErr = err
+		atts.Add(url, status, err, time.Since(start))
 	}
-	return nil, lastErr
+	return nil, atts
 }
 
-func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
+func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
 	number, platform := splitGemVersion(ref.Version)
 	apiURL := fmt.Sprintf("%s/api/v1/versions/%s.json", base, ref.Name)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building rubygems metadata request: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("building rubygems metadata request: %w", err)
 	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching rubygems metadata: %w", err)
+		return nil, apiURL, 0, fmt.Errorf("fetching rubygems metadata: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rubygems returned HTTP %d for %s", resp.StatusCode, ref.Name)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("rubygems returned HTTP %d for %s", resp.StatusCode, ref.Name)
 	}
 
 	var versions []rubygemsVersion
 	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
-		return nil, fmt.Errorf("decoding rubygems response: %w", err)
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("decoding rubygems response: %w", err)
 	}
 
 	for _, v := range versions {
 		if v.Number == number && v.Platform == platform {
 			publishedAt, err := time.Parse(time.RFC3339, v.CreatedAt)
 			if err != nil {
-				return nil, fmt.Errorf("parsing rubygems created_at %q: %w", v.CreatedAt, err)
+				return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing rubygems created_at %q: %w", v.CreatedAt, err)
 			}
 			return &gate.PackageMetadata{
 				PublishedAt: publishedAt.UTC(),
 				License:     strings.Join(v.Licenses, ", "),
 				Checksum:    v.SHA,
-			}, nil
+			}, apiURL, resp.StatusCode, nil
 		}
 	}
-	return nil, fmt.Errorf("version %s (platform %s) not found for rubygems gem %s", number, platform, ref.Name)
+	return nil, apiURL, resp.StatusCode, fmt.Errorf("version %s (platform %s) not found for rubygems gem %s", number, platform, ref.Name)
 }
 
 // splitGemVersion decodes an encoded ref version into (number, platform).
