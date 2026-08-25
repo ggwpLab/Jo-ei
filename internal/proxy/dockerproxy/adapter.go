@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // Manifest / index media types we accept and recognise.
@@ -48,6 +50,10 @@ func NewAdapter(upstreams []string, client *http.Client) *Adapter {
 
 // do issues a request to base+path with bearer-token auth retry. accept sets the
 // Accept header (empty → none). Returns the response; caller closes the body.
+// When the initial request gets a 401 but the subsequent token exchange
+// itself fails, do returns (nil, err) even though the registry did answer —
+// so the caller's retry loop records this outcome as status 0 ("never
+// reached the mirror"), which is not quite accurate for this one case.
 func (a *Adapter) do(ctx context.Context, method, base, path, accept string) (*http.Response, error) {
 	build := func(token string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, method, base+path, nil)
@@ -123,12 +129,16 @@ func (a *Adapter) fetchToken(ctx context.Context, challenge string) (string, err
 }
 
 // ResolveDigest HEADs the manifest and returns the canonical content digest.
+// When no upstream yields one, the error is an upstream.Attempts carrying each
+// mirror's own outcome.
 func (a *Adapter) ResolveDigest(ctx context.Context, repo, ref string) (string, error) {
-	var lastErr error
+	path := "/v2/" + repo + "/manifests/" + ref
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		resp, err := a.do(ctx, http.MethodHead, base, "/v2/"+repo+"/manifests/"+ref, manifestAccept)
+		start := time.Now()
+		resp, err := a.do(ctx, http.MethodHead, base, path, manifestAccept)
 		if err != nil {
-			lastErr = err
+			atts.Add(base+path, 0, err, time.Since(start))
 			continue
 		}
 		resp.Body.Close()
@@ -136,12 +146,14 @@ func (a *Adapter) ResolveDigest(ctx context.Context, repo, ref string) (string, 
 			if dg := resp.Header.Get("Docker-Content-Digest"); dg != "" {
 				return dg, nil
 			}
-			lastErr = fmt.Errorf("upstream omitted Docker-Content-Digest for %s/%s", repo, ref)
+			atts.Add(base+path, resp.StatusCode,
+				fmt.Errorf("upstream omitted Docker-Content-Digest for %s/%s", repo, ref), time.Since(start))
 			continue
 		}
-		lastErr = fmt.Errorf("HEAD manifest %s/%s: HTTP %d", repo, ref, resp.StatusCode)
+		atts.Add(base+path, resp.StatusCode,
+			fmt.Errorf("HEAD manifest %s/%s: HTTP %d", repo, ref, resp.StatusCode), time.Since(start))
 	}
-	return "", lastErr
+	return "", atts
 }
 
 // FetchManifest fetches the raw manifest for ref (a tag or digest) and returns
@@ -204,24 +216,29 @@ func isFilesystemLayer(mt string) bool {
 
 // getManifest GETs a manifest by ref/digest from the first working upstream.
 func (a *Adapter) getManifest(ctx context.Context, repo, ref string) ([]byte, string, string, error) {
-	var lastErr error
+	path := "/v2/" + repo + "/manifests/" + ref
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		resp, err := a.do(ctx, http.MethodGet, base, "/v2/"+repo+"/manifests/"+ref, manifestAccept)
+		start := time.Now()
+		resp, err := a.do(ctx, http.MethodGet, base, path, manifestAccept)
 		if err != nil {
-			lastErr = err
+			atts.Add(base+path, 0, err, time.Since(start))
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
 			resp.Body.Close()
-			lastErr = fmt.Errorf("GET manifest %s/%s: HTTP %d", repo, ref, resp.StatusCode)
+			atts.Add(base+path, status,
+				fmt.Errorf("GET manifest %s/%s: HTTP %d", repo, ref, status), time.Since(start))
 			continue
 		}
 		b, rerr := io.ReadAll(resp.Body)
 		dg := resp.Header.Get("Docker-Content-Digest")
 		ct := resp.Header.Get("Content-Type")
+		status := resp.StatusCode
 		resp.Body.Close()
 		if rerr != nil {
-			lastErr = rerr
+			atts.Add(base+path, status, rerr, time.Since(start))
 			continue
 		}
 		if dg == "" {
@@ -229,27 +246,31 @@ func (a *Adapter) getManifest(ctx context.Context, repo, ref string) ([]byte, st
 		}
 		return b, ct, dg, nil
 	}
-	return nil, "", "", lastErr
+	return nil, "", "", atts
 }
 
 // FetchBlob opens a blob (config or layer) stream from the first working
 // upstream. The caller must close the returned ReadCloser.
 func (a *Adapter) FetchBlob(ctx context.Context, repo, digest string) (io.ReadCloser, int64, error) {
-	var lastErr error
+	path := "/v2/" + repo + "/blobs/" + digest
+	var atts upstream.Attempts
 	for _, base := range a.upstreams {
-		resp, err := a.do(ctx, http.MethodGet, base, "/v2/"+repo+"/blobs/"+digest, "")
+		start := time.Now()
+		resp, err := a.do(ctx, http.MethodGet, base, path, "")
 		if err != nil {
-			lastErr = err
+			atts.Add(base+path, 0, err, time.Since(start))
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
 			resp.Body.Close()
-			lastErr = fmt.Errorf("GET blob %s/%s: HTTP %d", repo, digest, resp.StatusCode)
+			atts.Add(base+path, status,
+				fmt.Errorf("GET blob %s/%s: HTTP %d", repo, digest, status), time.Since(start))
 			continue
 		}
 		return resp.Body, resp.ContentLength, nil
 	}
-	return nil, 0, lastErr
+	return nil, 0, atts
 }
 
 // hostFromUpstream returns the host[:port] of the first upstream, scheme

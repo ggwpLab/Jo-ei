@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 func TestNPMAdapter_NormalizeRequest_Tarball(t *testing.T) {
@@ -216,6 +218,50 @@ func TestNPMAdapter_FetchMetadata_UnknownLicenseShapeDegrades(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "", meta.License)
 	assert.Equal(t, "abc", meta.Checksum)
+}
+
+// FetchMetadata must surface every mirror it tried, not just the last.
+func TestNPMAdapter_FetchMetadataReportsEveryMirror(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	a := adapters.NewNPMAdapter([]string{deadURL, missing.URL})
+	_, err := a.FetchMetadata(context.Background(), &gate.PackageRef{
+		Ecosystem: "npm", Name: "left-pad", Version: "1.3.0",
+	})
+	if err == nil {
+		t.Fatal("expected an error when every mirror fails")
+	}
+
+	atts, ok := upstream.AttemptsFrom(err)
+	if !ok {
+		t.Fatalf("error does not carry upstream attempts: %v", err)
+	}
+	if len(atts) != 2 {
+		t.Fatalf("recorded %d attempts, want 2: %+v", len(atts), atts)
+	}
+	if atts[0].Status != 0 {
+		t.Fatalf("first attempt status = %d, want 0 (unreachable mirror)", atts[0].Status)
+	}
+	if atts[1].Status != http.StatusNotFound {
+		t.Fatalf("second attempt status = %d, want 404", atts[1].Status)
+	}
+}
+
+func TestNPMAdapter_FetchMetadataWithNoUpstreams(t *testing.T) {
+	a := adapters.NewNPMAdapter(nil)
+	_, err := a.FetchMetadata(context.Background(), &gate.PackageRef{
+		Ecosystem: "npm", Name: "left-pad", Version: "1.3.0",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no upstreams configured for npm") {
+		t.Fatalf("err = %v, want the no-upstreams message preserved", err)
+	}
 }
 
 func TestNPMAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {

@@ -195,13 +195,30 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if rate <= 0 {
 		rate = config.DefaultUpstreamRatePerSecond
 	}
+
+	// Upstream TLS trust: the system roots plus any operator-supplied CA files,
+	// so mirrors with a corporate or self-signed certificate can be fetched. A
+	// bad CA file stops startup here rather than becoming an x509 error on the
+	// first pull.
+	rootPool, addedCAs, err := httpx.RootPool(cfg.TLS.CAFiles)
+	if err != nil {
+		return fmt.Errorf("upstream TLS trust: %w", err)
+	}
+	if addedCAs > 0 {
+		logger.Info().
+			Int("certificates", addedCAs).
+			Int("sources", len(cfg.TLS.CAFiles)).
+			Msg("tls: added CA certificates to the upstream trust pool")
+	}
+
 	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
 	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
 	// skipped immediately in favor of a mirror instead of being retried/hammered.
-	// Inner: a coarse rate cap, then a concurrency cap, over the default transport.
+	// Inner: a coarse rate cap, then a concurrency cap, over a transport carrying
+	// the configured CA trust pool.
 	upstreamLimiter := httpx.NewCircuitBreaker(
 		httpx.NewRateLimiter(
-			httpx.NewConcurrencyLimiter(http.DefaultTransport, maxConc),
+			httpx.NewConcurrencyLimiter(httpx.NewTransport(rootPool), maxConc),
 			float64(rate), 2*rate,
 		),
 		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
