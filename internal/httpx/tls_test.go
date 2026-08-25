@@ -8,9 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
 )
+
+// handshakeTimeoutForTest is well above http.DefaultTransport's 10s default.
+// These tests assert on the *kind* of TLS error (x509 verification, or a
+// successful HTTP/2 handshake), not on latency. Under a whole-suite parallel
+// test run (and doubly so under -race, which CI runs), CPU contention can
+// push a real handshake past the default timeout, turning a verification
+// assertion into a spurious "TLS handshake timeout" failure. Raising the
+// timeout keeps the assertion measuring what it claims to measure.
+const handshakeTimeoutForTest = 60 * time.Second
 
 // writeCertPEM writes srv's self-signed certificate to a PEM file and returns
 // its path — the same thing an operator does with a corporate CA.
@@ -40,7 +50,9 @@ func TestNewTransport_SelfSignedRejectedThenTrusted(t *testing.T) {
 	if added != 0 {
 		t.Fatalf("added = %d with no CA files, want 0", added)
 	}
-	untrusted := &http.Client{Transport: httpx.NewTransport(systemPool)}
+	untrustedTr := httpx.NewTransport(systemPool)
+	untrustedTr.TLSHandshakeTimeout = handshakeTimeoutForTest
+	untrusted := &http.Client{Transport: untrustedTr}
 	if _, err := untrusted.Get(srv.URL); err == nil {
 		t.Fatal("self-signed server was accepted without its CA configured")
 	} else if !strings.Contains(err.Error(), "x509") {
@@ -55,7 +67,9 @@ func TestNewTransport_SelfSignedRejectedThenTrusted(t *testing.T) {
 	if added != 1 {
 		t.Fatalf("added = %d, want 1", added)
 	}
-	trusted := &http.Client{Transport: httpx.NewTransport(pool)}
+	trustedTr := httpx.NewTransport(pool)
+	trustedTr.TLSHandshakeTimeout = handshakeTimeoutForTest
+	trusted := &http.Client{Transport: trustedTr}
 	resp, err := trusted.Get(srv.URL)
 	if err != nil {
 		t.Fatalf("configured CA did not make the mirror reachable: %v", err)
@@ -79,7 +93,9 @@ func TestNewTransport_KeepsHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RootPool: %v", err)
 	}
-	resp, err := (&http.Client{Transport: httpx.NewTransport(pool)}).Get(srv.URL)
+	http2Tr := httpx.NewTransport(pool)
+	http2Tr.TLSHandshakeTimeout = handshakeTimeoutForTest
+	resp, err := (&http.Client{Transport: http2Tr}).Get(srv.URL)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
