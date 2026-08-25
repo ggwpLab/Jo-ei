@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Server      ServerConfig      `mapstructure:"server"`
+	TLS         TLSConfig         `mapstructure:"tls"`
 	Registries  RegistriesConfig  `mapstructure:"registries"`
 	SupplyChain SupplyChainConfig `mapstructure:"supply_chain"`
 	CVE         CVEConfig         `mapstructure:"cve"`
@@ -113,6 +114,14 @@ const DefaultUpstreamMaxConcurrent = 6
 // DefaultUpstreamRatePerSecond is the per-host outbound request-rate cap applied
 // when server.upstream_rate_per_second is unset.
 const DefaultUpstreamRatePerSecond = 10
+
+// TLSConfig configures trust for outbound connections to upstream registries.
+// CAFiles lists PEM files whose certificates are added to the system root pool,
+// which is what makes a mirror with a corporate or self-signed certificate
+// reachable. An empty list means system roots only.
+type TLSConfig struct {
+	CAFiles []string `mapstructure:"ca_files"`
+}
 
 // ConsoleConfig holds admin-console settings.
 type ConsoleConfig struct {

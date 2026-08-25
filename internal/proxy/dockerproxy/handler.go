@@ -12,6 +12,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // Config groups the Docker proxy handler dependencies.
@@ -54,7 +55,11 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 
 	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
 	if err != nil {
-		log.Error().Err(err).Msg("docker gate error")
+		ev := log.Error().Err(err)
+		if atts, ok := upstream.AttemptsFrom(err); ok {
+			ev = ev.Array("upstream_attempts", atts)
+		}
+		ev.Msg("docker gate error")
 		h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
 		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream or scan failure")
 		return

@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // Passthrough reasons: manifests served without gating because they carry no
@@ -129,8 +130,11 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
 	if err != nil {
 		if offlineStale != nil {
-			g.logger.Warn().Err(err).Str("repo", repo).Str("digest", ref).
-				Msg("upstream unreachable; serving stale cached verdict for by-digest pull")
+			ev := g.logger.Warn().Err(err).Str("repo", repo).Str("digest", ref)
+			if atts, ok := upstream.AttemptsFrom(err); ok {
+				ev = ev.Array("upstream_attempts", atts)
+			}
+			ev.Msg("upstream unreachable; serving stale cached verdict for by-digest pull")
 			return ref, *offlineStale, nil
 		}
 		return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w", repo, ref, err)
