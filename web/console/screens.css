@@ -64,22 +64,37 @@
 .torii {
   position: relative;
   width: 132px; height: 116px;
-  filter: drop-shadow(0 6px 18px rgba(0,0,0,.4));
-  transition: filter .4s;
 }
 .torii svg { width: 100%; height: 100%; overflow: visible; }
-.torii .arch-glow { transition: opacity .5s, fill .4s, stroke .4s; }
+.torii-arch { position: relative; filter: drop-shadow(0 6px 18px rgba(0,0,0,.4)); }
+.torii .arch-glow { transition: fill .4s; }
 
-.gate.pass   .torii { filter: drop-shadow(0 0 14px rgba(63,182,139,.45)); }
-.gate.block  .torii { filter: drop-shadow(0 0 16px rgba(217,71,43,.5)); }
+/* The lit halo lives on its own layer (an exact copy of the arch, sitting
+   behind it) whose drop-shadow never changes. A gate lights up by fading that
+   layer in, so the blur is rasterized once instead of on every frame. */
+.torii-glow {
+  position: absolute; inset: 0;
+  opacity: 0;
+  transition: opacity .4s;
+  pointer-events: none;
+}
+.gate.pass  .torii-glow { opacity: 1; filter: drop-shadow(0 0 14px rgba(63,182,139,.45)); }
+.gate.block .torii-glow { opacity: 1; filter: drop-shadow(0 0 16px rgba(217,71,43,.5)); }
 
 .gate-kanji {
   position: absolute; top: 38px; left: 50%; transform: translateX(-50%);
   font-family: var(--mincho); font-size: 30px; color: var(--washi);
-  pointer-events: none; transition: color .4s, text-shadow .4s;
+  pointer-events: none; transition: color .4s;
 }
-.gate.pass .gate-kanji  { color: var(--jade-l); text-shadow: 0 0 16px rgba(63,182,139,.6); }
-.gate.block .gate-kanji { color: var(--vermilion-l); text-shadow: 0 0 16px rgba(217,71,43,.6); }
+.gate.pass .gate-kanji  { color: var(--jade-l); }
+.gate.block .gate-kanji { color: var(--vermilion-l); }
+
+/* Same trick for the glyph: a twin drawn over the base one, carrying the lit
+   text-shadow and crossfaded by opacity. Its colour switches instantly, which
+   is invisible because it only ever happens while the twin is transparent. */
+.gate-kanji-glow { opacity: 0; transition: opacity .4s; }
+.gate.pass .gate-kanji-glow  { opacity: 1; color: var(--jade-l); text-shadow: 0 0 16px rgba(63,182,139,.6); }
+.gate.block .gate-kanji-glow { opacity: 1; color: var(--vermilion-l); text-shadow: 0 0 16px rgba(217,71,43,.6); }
 
 .gate-meta { text-align: center; }
 .gate-name { font-size: 13.5px; font-weight: 600; letter-spacing: .01em; }
@@ -92,10 +107,23 @@
 .gate-count .bc { color: var(--vermilion-l); }
 .gate-count .sep { color: var(--washi-faint); }
 
-/* traveling package token */
+/* Traveling package token. The track spans the pipeline's full width, so
+   translateX(N%) puts the token exactly where left:N% used to — but `left`
+   is a layout property (relayout + repaint every frame, and the 1.1s glide
+   never finished before the next 1.15s step began), while `transform` is
+   handed to the compositor. */
+.token-track {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 0;
+  z-index: 3;
+  pointer-events: none;
+  transition: transform 1.1s cubic-bezier(.6,.02,.3,1);
+  will-change: transform;
+}
 .token {
   position: absolute;
-  top: 50%; left: 0;
+  top: 0; left: 0;
   width: 30px; height: 30px; margin-top: -15px; margin-left: -15px;
   border-radius: 8px;
   display: grid; place-items: center;
@@ -104,8 +132,7 @@
   color: var(--gold-l);
   font-family: var(--mono); font-size: 9px; font-weight: 700;
   box-shadow: 0 0 18px rgba(200,162,74,.5);
-  z-index: 3;
-  transition: left 1.1s cubic-bezier(.6,.02,.3,1), background .3s, border-color .3s, color .3s, box-shadow .3s;
+  transition: background .3s, border-color .3s, color .3s, box-shadow .3s;
 }
 .token.purified { border-color: var(--jade); color: var(--jade-l); background: rgba(63,182,139,.16); box-shadow: 0 0 22px rgba(63,182,139,.55); }
 .token.rejected { border-color: var(--vermilion); color: var(--vermilion-l); background: rgba(217,71,43,.18); box-shadow: 0 0 22px rgba(217,71,43,.6); }

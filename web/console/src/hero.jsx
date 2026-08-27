@@ -110,6 +110,10 @@ function Procession({ flow, stats }) {
               <div style={{ position: "relative" }}>
                 <Torii state={st} />
                 {s.kanji && <span className="gate-kanji kanji">{s.kanji}</span>}
+                {/* Glyph twin carrying the lit text-shadow. Same reason as the
+                    torii glow layer: crossfading its opacity costs nothing,
+                    transitioning text-shadow repaints every frame. */}
+                {s.kanji && <span className="gate-kanji gate-kanji-glow kanji" aria-hidden="true">{s.kanji}</span>}
               </div>
               <div className="gate-meta">
                 <div className="gate-name">{s.label}</div>
@@ -123,10 +127,15 @@ function Procession({ flow, stats }) {
           );
         })}
       </div>
-      {/* traveling package token — hidden until there is real traffic */}
+      {/* Traveling package token — hidden until there is real traffic. The
+          track spans the full pipeline width and carries the movement, so the
+          same percentages land on the same points as the old `left` did, but
+          as a compositor transform rather than a layout change per frame. */}
       {!flow.idle && (
-        <div className={`token ${flow.tokenState}`} style={{ left: flow.leftPct + "%", top: "78px" }}>
-          {JOEI.ECO[flow.cur.eco].label}
+        <div className="token-track" style={{ transform: `translateX(${flow.leftPct}%)`, top: "78px" }}>
+          <div className={`token ${flow.tokenState}`}>
+            {JOEI.ECO[flow.cur.eco].label}
+          </div>
         </div>
       )}
     </div>
