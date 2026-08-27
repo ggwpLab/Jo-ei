@@ -61,8 +61,22 @@ function App() {
   const [policy, setPolicyState] = useState(JOEI.policy);
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showLoader, setShowLoader] = useState(true);
   const [connected, setConnected] = useState(JOEI.connected);
   const tid = useRef(0);
+
+  // The overlay is hidden by opacity alone, which does not stop its infinite
+  // torii animation: left mounted, it repainted a fully transparent element
+  // for as long as the tab stayed open. Keep it through the 0.6s fade-out
+  // (see .purify-overlay in screens.css), then drop the node.
+  useEffect(() => {
+    if (loading) {
+      setShowLoader(true);
+      return;
+    }
+    const id = setTimeout(() => setShowLoader(false), 600);
+    return () => clearTimeout(id);
+  }, [loading]);
 
   useEffect(() => {
     const onData = () => { setLoading(false); setPolicyState(JOEI.policy); };
@@ -131,7 +145,7 @@ function App() {
 
   return (
     <div className="app">
-      <PurifyLoader hide={!loading} />
+      {showLoader && <PurifyLoader hide={!loading} />}
 
       {/* ---------- sidebar ---------- */}
       <nav className="sidebar">

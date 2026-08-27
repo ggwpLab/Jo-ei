@@ -274,11 +274,21 @@ input, select, textarea { font-family: inherit; }
 .pill.enforce { color: var(--jade-l); border-color: rgba(63,182,139,.35); background: var(--jade-t); }
 .pill.dry     { color: var(--gold-l); border-color: rgba(200,162,74,.35); background: var(--gold-t); }
 .pill.off     { color: var(--washi-mut); }
-.pill .dot.live { animation: pulse-dot 2s ease-in-out infinite; }
+/* The pulse rides a ring on a pseudo-element, animated with transform and
+   opacity. Animating box-shadow instead repainted the dot on every frame for
+   as long as the console stayed open. */
+.pill .dot.live { position: relative; }
+.pill .dot.live::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px currentColor;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
 
 @keyframes pulse-dot {
-  0%,100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
-  50% { box-shadow: 0 0 0 4px transparent; opacity: .55; }
+  0%,100% { opacity: .55; transform: scale(.4); }
+  50% { opacity: 0; transform: scale(1); }
 }
 
 .btn {
