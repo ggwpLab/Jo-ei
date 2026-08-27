@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The console no longer burns CPU while it sits idle.** An open overview tab
+  cost ~14% CPU doing nothing: the pipeline token was animated through `left`,
+  a layout property, so every frame relaid out the page and the 1.1s glide
+  never finished before the next step began; gate highlights animated
+  `drop-shadow` and `text-shadow`, re-rasterizing the whole arch each frame;
+  and the loading overlay, hidden by `opacity` alone, kept running its
+  infinite torii animation for the life of the tab. Movement now rides
+  `transform`, highlights crossfade pre-rendered glow layers by `opacity`, and
+  the overlay is unmounted once its fade-out ends. The animation looks the
+  same.
+
 ### Added
 
 - **Trusted CA certificates for upstream registries** (`tls.ca_files`) — PEM

@@ -73,6 +73,25 @@ const Icons = {
 };
 
 /* ---------- torii SVG (the gate motif) ---------- */
+// The arch's shapes, drawn twice per gate: once for real, once as the glow
+// layer behind it. Both copies are identical, so the glow layer is completely
+// hidden by the real arch and only its drop-shadow halo escapes.
+function ToriiShapes({ beam, pillar, stroke }) {
+  return (
+    <>
+      {/* kasagi — curved top lintel */}
+      <path className="arch-glow" d="M6 22 Q66 6 126 22 L126 33 Q66 19 6 33 Z" fill={beam} stroke={stroke}/>
+      {/* nuki — second beam */}
+      <rect className="arch-glow" x="18" y="40" width="96" height="9" rx="2" fill={beam} opacity="0.78" stroke={stroke}/>
+      {/* gakuzuka — center tablet */}
+      <rect x="60" y="30" width="12" height="14" rx="1.5" fill={pillar} stroke={stroke}/>
+      {/* pillars (slight inward lean) */}
+      <path d="M30 49 L36 110 L46 110 L40 49 Z" fill={pillar} stroke={stroke}/>
+      <path d="M102 49 L96 110 L86 110 L92 49 Z" fill={pillar} stroke={stroke}/>
+    </>
+  );
+}
+
 function Torii({ state }) {
   // state: idle | pass | block  -> drives kasagi (top beam) color
   const beam = state === "pass" ? "var(--jade)" : state === "block" ? "var(--vermilion)" : "var(--ink-600)";
@@ -80,16 +99,15 @@ function Torii({ state }) {
   const stroke = "rgba(237,231,218,0.10)";
   return (
     <div className="torii">
-      <svg viewBox="0 0 132 116">
-        {/* kasagi — curved top lintel */}
-        <path className="arch-glow" d="M6 22 Q66 6 126 22 L126 33 Q66 19 6 33 Z" fill={beam} stroke={stroke}/>
-        {/* nuki — second beam */}
-        <rect className="arch-glow" x="18" y="40" width="96" height="9" rx="2" fill={beam} opacity="0.78" stroke={stroke}/>
-        {/* gakuzuka — center tablet */}
-        <rect x="60" y="30" width="12" height="14" rx="1.5" fill={pillar} stroke={stroke}/>
-        {/* pillars (slight inward lean) */}
-        <path d="M30 49 L36 110 L46 110 L40 49 Z" fill={pillar} stroke={stroke}/>
-        <path d="M102 49 L96 110 L86 110 L92 49 Z" fill={pillar} stroke={stroke}/>
+      {/* Glow layer. Lighting a gate crossfades this layer's opacity — a
+          compositor property — instead of animating the arch's own `filter`,
+          which re-rasterized the whole 132x116 arch on every frame of every
+          gate transition and dominated the console's idle CPU. */}
+      <svg className="torii-glow" viewBox="0 0 132 116" aria-hidden="true">
+        <ToriiShapes beam={beam} pillar={pillar} stroke={stroke}/>
+      </svg>
+      <svg className="torii-arch" viewBox="0 0 132 116">
+        <ToriiShapes beam={beam} pillar={pillar} stroke={stroke}/>
       </svg>
     </div>
   );
