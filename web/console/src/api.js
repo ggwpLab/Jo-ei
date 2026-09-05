@@ -96,6 +96,10 @@
       res = await fetch(path, opts);
     }
     if (res.status === 401 || res.status === 503) {
+      // The stream authenticates by cookie too, and EventSource reconnects on
+      // its own: leaving it open would retry /api/events forever behind the
+      // login screen.
+      disconnectEvents();
       setAuthenticated(false);
       throw new AuthError(res.status === 503 ? "auth_not_configured" : "unauthorized");
     }
@@ -287,11 +291,20 @@
   // server sets HttpOnly cookies; the access_token in the body is for curl and
   // CI, and the console deliberately never touches it.
   async function login(username, password) {
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
+    let res;
+    try {
+      res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+    } catch (_) {
+      // Never reached the proxy: not a credential problem.
+      setConnected(false);
+      const err = new Error("unreachable");
+      err.status = 0;
+      throw err;
+    }
     let data = null;
     try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) {
@@ -319,7 +332,10 @@
   // start, not an error — it renders the login screen.
   async function boot() {
     try {
-      const res = await fetch("/api/auth/me");
+      let res = await fetch("/api/auth/me");
+      if (res.status === 401 && await refreshSession()) {
+        res = await fetch("/api/auth/me");
+      }
       if (!res.ok) {
         setAuthenticated(false);
         return;
@@ -329,7 +345,9 @@
       await load();
       connectEvents();
     } catch (_) {
-      if (J.authenticated) setConnected(false);
+      // A throw here means the request never reached the proxy — that is a
+      // connectivity failure, not a lapsed session.
+      setConnected(false);
     } finally {
       J.ready = true;
       fire("joei:data");

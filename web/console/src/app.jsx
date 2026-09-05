@@ -68,7 +68,9 @@ function LoginScreen() {
     setErr("");
     JOEI.login(username, password)
       .catch((ex) => {
-        setErr(ex.status === 503
+        setErr(ex.status === 0
+          ? "Cannot reach the proxy. Check that it is running, then try again."
+          : ex.status === 503
           ? "Authentication is not configured on this server. Add console.auth.users or JOEI_CONSOLE_AUTH_USERS and restart."
           : "Incorrect username or password.");
         setPassword("");
@@ -220,6 +222,9 @@ function App() {
     return (
       <>
         {showLoader && <PurifyLoader hide={!loading} />}
+        {!loading && !connected && (
+          <div className="conn-banner">&#9888; No connection to the proxy — check that it is running.</div>
+        )}
         {!loading && <LoginScreen />}
       </>
     );
