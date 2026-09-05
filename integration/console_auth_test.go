@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -166,16 +167,35 @@ func TestConsoleAuth_RefreshKeepsSessionAliveAndLogoutEndsIt(t *testing.T) {
 	require.NoError(t, err)
 	client := &http.Client{Jar: jar}
 
+	srvURL, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	cookieValue := func(name string) string {
+		for _, c := range jar.Cookies(srvURL) {
+			if c.Name == name {
+				return c.Value
+			}
+		}
+		return ""
+	}
+
 	login, err := client.Post(srv.URL+"/api/auth/login", "application/json",
 		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
 	require.NoError(t, err)
 	defer login.Body.Close()
 	require.Equal(t, http.StatusOK, login.StatusCode)
 
+	beforeAccess := cookieValue(auth.AccessCookie)
+	require.NotEmpty(t, beforeAccess, "login must set the access cookie")
+
 	refresh, err := client.Post(srv.URL+"/api/auth/refresh", "", nil)
 	require.NoError(t, err)
 	defer refresh.Body.Close()
 	assert.Equal(t, http.StatusOK, refresh.StatusCode)
+
+	afterAccess := cookieValue(auth.AccessCookie)
+	require.NotEmpty(t, afterAccess)
+	assert.NotEqual(t, beforeAccess, afterAccess,
+		"refresh must mint a new access cookie, not merely succeed")
 
 	after, err := client.Get(srv.URL + "/api/overview")
 	require.NoError(t, err)
