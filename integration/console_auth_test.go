@@ -4,7 +4,10 @@ package integration_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -23,10 +26,12 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/web"
 )
 
-// authConsoleStack mirrors cmd/jo-ei wiring with auth.Middleware wrapping the
-// /api/ handler. users==nil yields the locked (fail-closed) state. The console
+// authConsoleStack mirrors cmd/jo-ei wiring: the console shell is public, the
+// session endpoints are public, and sessions.Middleware gates the rest of
+// /api/. users==nil yields the locked (fail-closed) state. The console
 // handler logs into logBuf so attribution can be asserted.
 func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users, logBuf *bytes.Buffer) *httptest.Server {
 	t.Helper()
@@ -54,8 +59,15 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 	mux := proxy.NewMux(map[string]*proxy.Handler{"pypi": handler}, nil, zerolog.Nop())
 
 	consoleLogger := zerolog.New(logBuf)
+
+	signer, err := auth.NewSigner([]byte("0123456789abcdef0123456789abcdef"))
+	require.NoError(t, err)
+	sessions := auth.NewSessions(users, signer, 15*time.Minute, 168*time.Hour)
+
 	root := http.NewServeMux()
-	root.Handle("/api/", users.Middleware(console.NewHandler(console.Config{
+	root.Handle("/console/", web.ConsoleHandler())
+	root.Handle("/api/auth/", sessions.Handler())
+	root.Handle("/api/", sessions.Middleware(console.NewHandler(console.Config{
 		Store: store, Broadcaster: bcast, Policy: runtime, Logger: consoleLogger,
 	})))
 	root.Handle("/", mux)
@@ -74,61 +86,130 @@ func testUsers(t *testing.T) *auth.Users {
 	return u
 }
 
-func TestConsoleAuth_RequiresCredentials(t *testing.T) {
+func TestConsoleAuth_ShellIsPublicButAPIIsNot(t *testing.T) {
 	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
 	defer upstream.Close()
 	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
 
-	// No credentials -> 401.
-	resp, err := http.Get(srv.URL + "/api/overview")
+	shell, err := http.Get(srv.URL + "/console/")
 	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	assert.Contains(t, resp.Header.Get("WWW-Authenticate"), "Basic realm=")
+	defer shell.Body.Close()
+	assert.Equal(t, http.StatusOK, shell.StatusCode, "the login screen must load without a session")
 
-	// Wrong password -> 401.
+	api, err := http.Get(srv.URL + "/api/overview")
+	require.NoError(t, err)
+	defer api.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, api.StatusCode)
+	assert.Empty(t, api.Header.Get("WWW-Authenticate"))
+}
+
+func TestConsoleAuth_LoginThenCookieAccess(t *testing.T) {
+	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
+	defer upstream.Close()
+	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client := &http.Client{Jar: jar}
+
+	login, err := client.Post(srv.URL+"/api/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
+	require.NoError(t, err)
+	defer login.Body.Close()
+	require.Equal(t, http.StatusOK, login.StatusCode)
+
+	// The jar now carries joei_at; the console makes exactly this call.
+	res, err := client.Get(srv.URL + "/api/overview")
+	require.NoError(t, err)
+	defer res.Body.Close()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+
+	me, err := client.Get(srv.URL + "/api/auth/me")
+	require.NoError(t, err)
+	defer me.Body.Close()
+	body, err := io.ReadAll(me.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"username":"admin"}`, string(body))
+}
+
+func TestConsoleAuth_LoginThenBearerAccess(t *testing.T) {
+	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
+	defer upstream.Close()
+	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+
+	login, err := http.Post(srv.URL+"/api/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
+	require.NoError(t, err)
+	defer login.Body.Close()
+	var out struct {
+		AccessToken string `json:"access_token"`
+	}
+	require.NoError(t, json.NewDecoder(login.Body).Decode(&out))
+	require.NotEmpty(t, out.AccessToken)
+
+	// The curl/CI path: no cookie jar, one header.
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
 	require.NoError(t, err)
-	req.SetBasicAuth("admin", "wrong")
-	resp, err = http.DefaultClient.Do(req)
+	req.Header.Set("Authorization", "Bearer "+out.AccessToken)
+	res, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	defer res.Body.Close()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+}
 
-	// Correct credentials -> 200.
-	req, err = http.NewRequest(http.MethodGet, srv.URL+"/api/overview", nil)
-	require.NoError(t, err)
-	req.SetBasicAuth("admin", "s3cret")
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+func TestConsoleAuth_RefreshKeepsSessionAliveAndLogoutEndsIt(t *testing.T) {
+	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
+	defer upstream.Close()
+	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
 
-	// /health is open without credentials.
-	resp, err = http.Get(srv.URL + "/health")
+	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	client := &http.Client{Jar: jar}
+
+	login, err := client.Post(srv.URL+"/api/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
+	require.NoError(t, err)
+	defer login.Body.Close()
+	require.Equal(t, http.StatusOK, login.StatusCode)
+
+	refresh, err := client.Post(srv.URL+"/api/auth/refresh", "", nil)
+	require.NoError(t, err)
+	defer refresh.Body.Close()
+	assert.Equal(t, http.StatusOK, refresh.StatusCode)
+
+	after, err := client.Get(srv.URL + "/api/overview")
+	require.NoError(t, err)
+	defer after.Body.Close()
+	assert.Equal(t, http.StatusOK, after.StatusCode)
+
+	logout, err := client.Post(srv.URL+"/api/auth/logout", "", nil)
+	require.NoError(t, err)
+	defer logout.Body.Close()
+	require.Equal(t, http.StatusNoContent, logout.StatusCode)
+
+	gone, err := client.Get(srv.URL + "/api/overview")
+	require.NoError(t, err)
+	defer gone.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, gone.StatusCode)
 }
 
 func TestConsoleAuth_LockedReturns503(t *testing.T) {
 	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
 	defer upstream.Close()
-
-	locked, err := auth.NewUsers(nil, "") // no users
+	locked, err := auth.NewUsers(nil, "") // no users configured
 	require.NoError(t, err)
 	srv := authConsoleStack(t, upstream, locked, &bytes.Buffer{})
 
-	resp, err := http.Get(srv.URL + "/api/overview")
+	res, err := http.Get(srv.URL + "/api/overview")
 	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	defer res.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
 
-	// Proxy/health still serve while the console is locked.
-	resp, err = http.Get(srv.URL + "/health")
+	login, err := http.Post(srv.URL+"/api/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
 	require.NoError(t, err)
-	resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	defer login.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, login.StatusCode)
 }
 
 func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
@@ -137,14 +218,23 @@ func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
 	var logBuf bytes.Buffer
 	srv := authConsoleStack(t, upstream, testUsers(t), &logBuf)
 
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client := &http.Client{Jar: jar}
+
+	login, err := client.Post(srv.URL+"/api/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
+	require.NoError(t, err)
+	defer login.Body.Close()
+	require.Equal(t, http.StatusOK, login.StatusCode)
+
 	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/policy", strings.NewReader(body))
 	require.NoError(t, err)
-	req.SetBasicAuth("admin", "s3cret")
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	require.NoError(t, err)
-	resp.Body.Close()
+	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	assert.Contains(t, logBuf.String(), `"user":"admin"`,
