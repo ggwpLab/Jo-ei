@@ -36,7 +36,9 @@ const FILTERS = [
 // than the live in-memory window. The chip value is sent verbatim as ?verdict=.
 const HISTORY_FILTERS = { BLOCK: true, ERROR: true };
 
-const PAGE_SIZE = 50;
+// One page, for both listing modes: the live window reveals rows from the
+// in-memory buffer, the history filters fetch this many per server page.
+const PAGE_SIZE = 20;
 
 function LiveFeed({ openThreat }) {
   const [rows, setRows] = useState(() => JOEI.requests.slice(0, 120));
@@ -44,6 +46,9 @@ function LiveFeed({ openThreat }) {
   const [q, setQ] = useState("");
   const [paused, setPaused] = useState(false);
   const [newId, setNewId] = useState(null);
+  // How many live rows are rendered. History mode ignores it — the server
+  // already pages there — so this only ever grows via "Show more" below.
+  const [visible, setVisible] = useState(PAGE_SIZE);
 
   // History-mode state, active only while filter is in HISTORY_FILTERS.
   const [histRows, setHistRows] = useState([]);
@@ -56,6 +61,9 @@ function LiveFeed({ openThreat }) {
   const reqToken = useRef(0);
 
   const history = !!HISTORY_FILTERS[filter];
+  // A new filter or query restarts at the first page; without this, narrowing
+  // a search would keep an inflated row count from the previous filter.
+  useEffect(() => { setVisible(PAGE_SIZE); }, [filter, q]);
 
   // Live window: prepend SSE events and resync on full refresh. Kept warm even
   // in history mode so switching back to a live filter is instant.
@@ -118,6 +126,9 @@ function LiveFeed({ openThreat }) {
     if (q && !(`${r.pkg}@${r.ver}`.toLowerCase().includes(q.toLowerCase()) || r.request_id.includes(q))) return false;
     return true;
   });
+  // History rows arrive one server page at a time and accumulate on "Show
+  // more", so they are rendered whole; the live window is sliced client-side.
+  const page = history ? shown : shown.slice(0, visible);
 
   return (
     <div className="content-inner">
@@ -157,7 +168,9 @@ function LiveFeed({ openThreat }) {
             <Icons.search />
             <input placeholder="filter by package or request_id…" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <span className="right muted mono" style={{ fontSize: 12 }}>{shown.length} shown</span>
+          <span className="right muted mono" style={{ fontSize: 12 }}>
+            {page.length < shown.length ? `${page.length} of ${shown.length} shown` : `${shown.length} shown`}
+          </span>
         </div>
 
         <div className="feed-row head">
@@ -184,7 +197,7 @@ function LiveFeed({ openThreat }) {
             </div>
           )
         ) : (
-          shown.map((r) => (
+          page.map((r) => (
             <FeedRow key={r.request_id} r={r} onOpen={openThreat} isNew={r.request_id === newId} />
           ))
         )}
@@ -201,6 +214,10 @@ function LiveFeed({ openThreat }) {
             <button className="btn sm ghost" onClick={loadMore} disabled={loading || !hasMore}>
               {loading ? "Loading…" : "Show more"}
             </button>
+          </div>
+        ) : !history && page.length < shown.length ? (
+          <div style={{ padding: "12px", textAlign: "center", borderTop: "1px solid var(--washi-faint)" }}>
+            <button className="btn sm ghost" onClick={() => setVisible((n) => n + PAGE_SIZE)}>Show more</button>
           </div>
         ) : null}
       </div>
