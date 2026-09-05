@@ -163,9 +163,10 @@ Resolution order at startup:
 
 Consequences worth stating plainly: a configured secret shared across replicas
 makes sessions portable between them; a generated one is per-database, so
-sessions do not survive a wipe of the SQLite file but do survive a restart. When
-no database is configured, the secret is held in memory only and every restart
-invalidates sessions — logged at warn level so this is not a surprise.
+sessions survive a restart but not a wipe of the SQLite file. `cmd/jo-ei` always
+opens the database and the settings store before wiring auth, so there is no
+storeless branch to design for — a deployment that discards its database simply
+logs everyone out on the next boot.
 
 An explicitly configured secret shorter than 32 bytes is a startup error, in the
 same style as every other config validation failure.
@@ -177,8 +178,14 @@ New keys under `console.auth`:
 | Key | Env | Default | Meaning |
 |---|---|---|---|
 | `jwt_secret` | `JOEI_CONSOLE_JWT_SECRET` | generated | HS256 signing key, ≥32 bytes |
-| `access_ttl` | — | `15m` | Access token lifetime |
-| `refresh_ttl` | — | `168h` | Refresh token lifetime |
+| `access_ttl_minutes` | — | `15` | Access token lifetime |
+| `refresh_ttl_hours` | — | `168` | Refresh token lifetime |
+
+TTLs are integer minutes/hours rather than duration strings, matching the
+existing `cache.revalidation.*_ttl_minutes` keys. The secret is read from the
+environment with `os.Getenv` in `cmd/jo-ei`, the way `JOEI_CONSOLE_AUTH_USERS`
+already is — viper's `AutomaticEnv` only overrides keys present in the file, so
+an env-only secret would silently not apply.
 
 `console.auth.users` and `JOEI_CONSOLE_AUTH_USERS` keep their current meaning,
 format, precedence, and validation. No migration of stored credentials: the
