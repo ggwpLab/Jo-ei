@@ -28,8 +28,16 @@ type loginRequest struct {
 }
 
 func (s *Sessions) login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.users.Locked() {
 		writeJSONError(w, http.StatusServiceUnavailable, "auth_not_configured")
+		return
+	}
+	// login sets cookies from a request body a cross-site page can forge (a
+	// <form enctype="text/plain"> whose body happens to parse as our JSON), so
+	// it gets the same origin check every other cookie-setting mutation gets.
+	if !sameOrigin(r) {
+		writeJSONError(w, http.StatusForbidden, "cross_origin")
 		return
 	}
 	var req loginRequest
@@ -57,6 +65,7 @@ func (s *Sessions) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sessions) refresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.users.Locked() {
 		writeJSONError(w, http.StatusServiceUnavailable, "auth_not_configured")
 		return
@@ -96,6 +105,7 @@ func (s *Sessions) refresh(w http.ResponseWriter, r *http.Request) {
 // succeeds" means regardless of whether a session existed, not regardless of
 // origin — a cross-site logout is still rejected like any other mutation.
 func (s *Sessions) logout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !sameOrigin(r) {
 		writeJSONError(w, http.StatusForbidden, "cross_origin")
 		return
@@ -105,6 +115,7 @@ func (s *Sessions) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sessions) me(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.users.Locked() {
 		writeJSONError(w, http.StatusServiceUnavailable, "auth_not_configured")
 		return

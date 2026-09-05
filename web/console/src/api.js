@@ -89,19 +89,31 @@
   }
 
   // Every API call goes through here: on 401 it refreshes once and replays the
-  // request, and gives up to the login screen if that fails.
+  // request, and gives up to the login screen if that fails. A 503 is only
+  // treated as "auth not configured" when the body actually says so — other
+  // endpoints (e.g. PUT /api/registries) use 503 for their own reasons, and
+  // those must reach the caller as a normal error, not a forced sign-out.
   async function authFetch(path, opts) {
     let res = await fetch(path, opts);
     if (res.status === 401 && await refreshSession()) {
       res = await fetch(path, opts);
     }
-    if (res.status === 401 || res.status === 503) {
-      // The stream authenticates by cookie too, and EventSource reconnects on
-      // its own: leaving it open would retry /api/events forever behind the
-      // login screen.
+    if (res.status === 401) {
       disconnectEvents();
       setAuthenticated(false);
-      throw new AuthError(res.status === 503 ? "auth_not_configured" : "unauthorized");
+      throw new AuthError("unauthorized");
+    }
+    if (res.status === 503) {
+      let body = null;
+      try { body = await res.clone().json(); } catch (_) { /* non-JSON error body */ }
+      if (body && body.error === "auth_not_configured") {
+        // The stream authenticates by cookie too, and EventSource reconnects
+        // on its own: leaving it open would retry /api/events forever behind
+        // the login screen.
+        disconnectEvents();
+        setAuthenticated(false);
+        throw new AuthError("auth_not_configured");
+      }
     }
     return res;
   }
@@ -267,7 +279,10 @@
   function probeConnection() {
     if (probing || !J.authenticated) return;
     probing = true;
-    load().catch(() => setConnected(false)).finally(() => { probing = false; });
+    load()
+      .then(() => connectEvents()) // no-op if a live stream is already open
+      .catch(() => setConnected(false))
+      .finally(() => { probing = false; });
   }
 
   let es = null;
@@ -280,7 +295,13 @@
       fire("joei:event", r);
     };
     es.onopen = () => setConnected(true);
-    es.onerror = () => probeConnection(); // EventSource reconnects on its own
+    es.onerror = () => {
+      // A closed EventSource never retries on its own (the spec fails the
+      // connection on a non-200, which is what a lapsed session produces).
+      // Drop it so a successful probe can open a fresh one.
+      if (es && es.readyState === 2) es = null;
+      probeConnection();
+    };
   }
 
   function disconnectEvents() {
