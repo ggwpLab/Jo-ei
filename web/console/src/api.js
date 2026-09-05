@@ -305,6 +305,7 @@
       err.status = 0;
       throw err;
     }
+    setConnected(true);
     let data = null;
     try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) {
@@ -336,6 +337,9 @@
       if (res.status === 401 && await refreshSession()) {
         res = await fetch("/api/auth/me");
       }
+      // Any HTTP response — 200, 401, 503 — proves the proxy is reachable. Only
+      // a thrown fetch (handled in the catch below) means it is not.
+      setConnected(true);
       if (!res.ok) {
         setAuthenticated(false);
         return;
