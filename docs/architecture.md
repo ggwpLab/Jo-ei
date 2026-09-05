@@ -59,7 +59,7 @@ that is what makes the graph acyclic.
 | `internal/storage` | Shared embedded SQLite (pure Go, no cgo): PRAGMAs, per-component migrations. `storagetest` holds the retrying temp-dir helper for tests. |
 | `internal/settings` | Generic key→JSON settings store on `storage`, used for policy and registry persistence. |
 | `internal/config` | YAML + `JOEI_*` env loading (viper) and validation. |
-| `internal/auth` | HTTP Basic middleware for the console/API; bcrypt user lists from YAML and `JOEI_CONSOLE_AUTH_USERS`. |
+| `internal/auth` | Console/API authentication: bcrypt user list from YAML and `JOEI_CONSOLE_AUTH_USERS`, HS256 JWT sessions (HttpOnly access/refresh cookies for the browser, bearer tokens for scripts), the `/api/auth/*` endpoints and the gating middleware. |
 | `internal/console` | Console REST API (`/api/…`) and SSE event stream. |
 | `internal/health` | Scanner health registry and probe loop. |
 | `web` | Embedded console SPA (React, vendored, compiled by `internal/uibuild` via `go generate` — no npm). |
