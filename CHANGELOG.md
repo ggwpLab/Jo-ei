@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transform`, highlights crossfade pre-rendered glow layers by `opacity`, and
   the overlay is unmounted once its fade-out ends. The animation looks the
   same.
+- **Console overview:** the 7d/30d toggle now moves the KPI values and the
+  block breakdown, not only the sparklines.
+- **Console feed:** both the live and the history listings page 20 rows at a
+  time behind a "Show more" button (history previously fetched 50; the live
+  window rendered all 120 buffered rows).
+- **Console sidebar:** the gate badge reports the worst scan-engine status
+  instead of a hardcoded "gate healthy".
 
 ### Added
 
