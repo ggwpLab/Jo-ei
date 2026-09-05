@@ -63,6 +63,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showLoader, setShowLoader] = useState(true);
   const [connected, setConnected] = useState(JOEI.connected);
+  const [scanners, setScanners] = useState(JOEI.scanners);
   const tid = useRef(0);
 
   // The overlay is hidden by opacity alone, which does not stop its infinite
@@ -79,7 +80,7 @@ function App() {
   }, [loading]);
 
   useEffect(() => {
-    const onData = () => { setLoading(false); setPolicyState(JOEI.policy); };
+    const onData = () => { setLoading(false); setPolicyState(JOEI.policy); setScanners(JOEI.scanners); };
     const onConn = () => setConnected(JOEI.connected);
     window.addEventListener("joei:data", onData);
     window.addEventListener("joei:policy", onData);
@@ -143,6 +144,20 @@ function App() {
 
   const meta = PAGE_META[page];
 
+  // The sidebar badge reports the worst scan-engine status. "off" (configured
+  // but not attached by the active profile) and "unknown" (not probed yet) are
+  // not failures, so they stay green — otherwise every boot looks broken for
+  // its first probe interval. A dead API outranks everything.
+  const down = scanners.filter((s) => s.status === "down");
+  const warn = scanners.filter((s) => s.status === "warn");
+  const gate = !connected
+    ? { cls: "off", label: "no connection", title: "The console cannot reach the API" }
+    : down.length
+    ? { cls: "down", label: "gate degraded", title: `Not responding: ${down.map((s) => s.name).join(", ")}` }
+    : warn.length
+    ? { cls: "warn", label: "gate slow", title: `Slow to respond: ${warn.map((s) => s.name).join(", ")}` }
+    : { cls: "ok", label: "gate healthy", title: "All attached scan engines are responding" };
+
   return (
     <div className="app">
       {showLoader && <PurifyLoader hide={!loading} />}
@@ -172,7 +187,7 @@ function App() {
 
         <div className="sidebar-foot">
           <div className="row" style={{ gap: 10, padding: "2px 8px" }}>
-            <span className="health ok" style={{ fontSize: 11 }}><i className="hdot"></i>gate healthy</span>
+            <span className={`health ${gate.cls}`} style={{ fontSize: 11 }} title={gate.title}><i className="hdot"></i>{gate.label}</span>
           </div>
           <div className="row" style={{ gap: 10, padding: "0 8px" }}>
             <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--ink-700)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, color: "var(--washi-soft)" }}>SK</div>
