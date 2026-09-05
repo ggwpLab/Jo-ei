@@ -113,6 +113,21 @@ func TestLoginLockedReturns503(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "auth_not_configured")
 }
 
+func TestLoginRejectsCrossSiteOrigin(t *testing.T) {
+	s := sessions(t, adminUser(t))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "example.test"
+	req.Header.Set("Origin", "http://evil.test")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Empty(t, rec.Result().Cookies(), "a rejected cross-site login must not set a session")
+}
+
 func TestRefreshRotatesBothCookies(t *testing.T) {
 	s := sessions(t, adminUser(t))
 	login := postJSON(t, s.Handler(), "/api/auth/login", `{"username":"admin","password":"secret"}`)

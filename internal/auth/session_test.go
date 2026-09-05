@@ -219,15 +219,19 @@ func TestMiddlewareCookieMutationRequiresSameOrigin(t *testing.T) {
 	tok := accessToken(t, s)
 
 	cases := map[string]struct {
-		origin   string
-		fetchSit string
-		want     int
+		origin    string
+		fetchSit  string
+		forwarded string
+		want      int
 	}{
 		"same-origin header":   {origin: "http://example.test", want: http.StatusOK},
 		"no origin at all":     {want: http.StatusOK},
 		"sec-fetch-site same":  {fetchSit: "same-origin", want: http.StatusOK},
 		"cross-site origin":    {origin: "http://evil.test", want: http.StatusForbidden},
 		"sec-fetch-site cross": {fetchSit: "cross-site", want: http.StatusForbidden},
+		"same host, wrong scheme": {
+			origin: "http://example.test", forwarded: "https", want: http.StatusForbidden,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -239,6 +243,9 @@ func TestMiddlewareCookieMutationRequiresSameOrigin(t *testing.T) {
 			}
 			if tc.fetchSit != "" {
 				req.Header.Set("Sec-Fetch-Site", tc.fetchSit)
+			}
+			if tc.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.forwarded)
 			}
 			rec := httptest.NewRecorder()
 			s.Middleware(okHandler()).ServeHTTP(rec, req)

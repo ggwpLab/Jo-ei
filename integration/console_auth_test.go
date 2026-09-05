@@ -66,6 +66,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 	sessions := auth.NewSessions(users, signer, 15*time.Minute, 168*time.Hour)
 
 	root := http.NewServeMux()
+	root.Handle("/favicon.ico", web.FaviconHandler())
 	root.Handle("/console/", web.ConsoleHandler())
 	root.Handle("/api/auth/", sessions.Handler())
 	root.Handle("/api/", sessions.Middleware(console.NewHandler(console.Config{
@@ -102,6 +103,11 @@ func TestConsoleAuth_ShellIsPublicButAPIIsNot(t *testing.T) {
 	defer api.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, api.StatusCode)
 	assert.Empty(t, api.Header.Get("WWW-Authenticate"))
+
+	health, err := http.Get(srv.URL + "/health")
+	require.NoError(t, err)
+	defer health.Body.Close()
+	assert.Equal(t, http.StatusOK, health.StatusCode, "/health must be open without credentials")
 }
 
 func TestConsoleAuth_LoginThenCookieAccess(t *testing.T) {
@@ -230,6 +236,11 @@ func TestConsoleAuth_LockedReturns503(t *testing.T) {
 	require.NoError(t, err)
 	defer login.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, login.StatusCode)
+
+	health, err := http.Get(srv.URL + "/health")
+	require.NoError(t, err)
+	defer health.Body.Close()
+	assert.Equal(t, http.StatusOK, health.StatusCode, "/health must still serve while /api/ is locked")
 }
 
 func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
