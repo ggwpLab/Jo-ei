@@ -314,7 +314,13 @@ once.
 > **TLS:** Jōei serves plain HTTP. Session cookies and bearer tokens are only
 > as private as the transport — for any non-loopback or public deployment,
 > terminate TLS at a reverse proxy (nginx, Traefik, Caddy) in front of Jōei.
-> In-binary TLS is not provided.
+> In-binary TLS is not provided. The proxy must forward
+> `X-Forwarded-Proto: https`, or Jōei has no way to know the connection was
+> secure and the session cookies will not carry `Secure`. It should also pass
+> the browser's original `Host` through rather than substituting its own
+> (nginx's default `proxy_set_header Host $proxy_host` does the latter),
+> since the same-origin check on cookie-authenticated mutations compares
+> `Origin` against `Host`.
 
 ### Scanner health
 

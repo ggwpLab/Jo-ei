@@ -147,8 +147,9 @@ logging:
   format: "json"
   output: "stdout"
 
-# Admin console / API authentication (HTTP Basic).
-# Without at least one user, /console/ and /api/ return HTTP 503 (fail-closed).
+# Admin console / API authentication (JWT sessions).
+# Without at least one user, /api/ returns HTTP 503 (fail-closed); the console
+# shell at /console/ still loads so its login screen can render.
 # Generate a hash with:  printf '%s' 'your-password' | jo-ei hashpw
 # Prefer the JOEI_CONSOLE_AUTH_USERS env var so hashes stay out of this file.
 # console:
@@ -156,3 +157,10 @@ logging:
 #     users:
 #       - username: admin
 #         password_hash: "$2a$10$REPLACE_WITH_A_REAL_BCRYPT_HASH"
+#     # HS256 key signing console sessions, at least 32 bytes. Prefer the
+#     # JOEI_CONSOLE_JWT_SECRET env var. Left unset, Jōei generates one on
+#     # first boot and persists it in the database, so sessions survive a
+#     # restart; set it explicitly to share sessions across replicas.
+#     jwt_secret: "REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES"
+#     access_ttl_minutes: 15  # access-token lifetime
+#     refresh_ttl_hours: 168  # refresh-token lifetime (7 days)

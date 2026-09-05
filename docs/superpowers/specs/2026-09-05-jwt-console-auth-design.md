@@ -116,8 +116,9 @@ hits the 7-day wall. Returns `{"username":…,"expires_in":900}`. A missing,
 expired, or wrong-`typ` refresh token is 401 `{"error":"unauthorized"}`.
 
 **`POST /api/auth/logout`** — clears both cookies (`Max-Age=0`, same
-`Path`/attributes as when set, or the browser keeps them). Always 204, whether
-or not a session existed.
+`Path`/attributes as when set, or the browser keeps them). Always 204 for a
+same-origin request, whether or not a session existed — a cross-origin logout
+is rejected like any other cookie-authenticated mutation (403).
 
 **`GET /api/auth/me`** — returns `{"username":"ops"}`. It sits outside the
 middleware with its siblings, so it resolves and validates the access
@@ -277,7 +278,9 @@ bundle, the Go handler tests above, and a manual pass over the login → session
 - `docs/configuration.md` — the `console` table gains the three keys; the
   fail-closed note is corrected (shell public, API 503).
 - `docs/architecture.md` — the `internal/auth` row.
-- `docker-compose.yaml` — `JOEI_CONSOLE_JWT_SECRET` in the example environment.
+- `.env.example` — `JOEI_CONSOLE_JWT_SECRET` in the example environment.
+- `config.yaml` — the commented-out `console.auth` example gains the three new
+  keys.
 - `CHANGELOG.md` — an Unreleased entry flagged as a **breaking change** for
   anyone scripting the API with Basic, with the two-line curl migration.
 

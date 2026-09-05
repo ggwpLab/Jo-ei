@@ -281,6 +281,19 @@ sees the token in JavaScript. `Secure` is set when the request arrives over TLS
 — terminate TLS in front of Jōei in any deployment that leaves a trusted
 network.
 
+**Behind a reverse proxy**, Jōei decides "was this request over TLS" from
+`X-Forwarded-Proto` (see `isTLS` in `internal/auth`), not from its own
+transport — it always speaks plain HTTP to the proxy. The proxy **must** set
+`X-Forwarded-Proto: https`, or `Secure` never gets set on the session cookies
+even though the browser sees a padlock. It should also pass through the
+browser's original `Host` header rather than substituting its own upstream
+address (nginx's default `proxy_set_header Host $proxy_host` does the latter),
+because the same-origin check on cookie-authenticated mutations compares
+`Origin` against the request's `Host`. In practice modern browsers send
+`Sec-Fetch-Site`, which is checked first and does not depend on `Host`, so a
+wrong `Host` is a belt-and-braces gap rather than something that breaks a
+current browser.
+
 **Scripts and CI** use the same endpoint and read the token from the response
 body:
 
