@@ -150,7 +150,7 @@ function App() {
   // its first probe interval. A dead API outranks everything.
   const down = scanners.filter((s) => s.status === "down");
   const warn = scanners.filter((s) => s.status === "warn");
-  const gate = !connected
+  const gateBadge = !connected
     ? { cls: "off", label: "no connection", title: "The console cannot reach the API" }
     : down.length
     ? { cls: "down", label: "gate degraded", title: `Not responding: ${down.map((s) => s.name).join(", ")}` }
@@ -187,7 +187,7 @@ function App() {
 
         <div className="sidebar-foot">
           <div className="row" style={{ gap: 10, padding: "2px 8px" }}>
-            <span className={`health ${gate.cls}`} style={{ fontSize: 11 }} title={gate.title}><i className="hdot"></i>{gate.label}</span>
+            <span className={`health ${gateBadge.cls}`} style={{ fontSize: 11 }} title={gateBadge.title}><i className="hdot"></i>{gateBadge.label}</span>
           </div>
           <div className="row" style={{ gap: 10, padding: "0 8px" }}>
             <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--ink-700)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, color: "var(--washi-soft)" }}>SK</div>

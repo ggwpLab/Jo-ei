@@ -26,8 +26,12 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const uptime = k.started_at ? fmtAgo(k.started_at).replace(" ago", "") : "—";
 
   const [win, setWin] = useState(30);
-  // Toggling the window only re-slices the already-loaded array — no refetch.
-  const rows = JOEI.daily.slice(-win);
+  // Daily rows exist only for days that saw traffic, so slicing the last N
+  // rows would let a "7d" window span weeks on an intermittently used proxy.
+  // Filter by date instead — r.day is UTC YYYY-MM-DD, so a string compare is
+  // a date compare. The window includes today, hence win - 1.
+  const cutoff = new Date(Date.now() - (win - 1) * 86400000).toISOString().slice(0, 10);
+  const rows = JOEI.daily.filter((r) => r.day >= cutoff);
   // Spark breaks on <2 points (Math.max(...[]) === -Infinity, divide by len-1).
   // With fewer points pass `undefined` so the card renders exactly as before.
   const haveTrend = rows.length >= 2;
@@ -39,11 +43,16 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const qSpark = haveTrend ? rows.map((r) => r.supply_blocked) : undefined;
 
   // The toggle moves the values, not only the sparklines: each card sums the
-  // daily rows inside the window. Below two rows the toggle is not rendered
-  // (see the section head), so the cards fall back to the lifetime counters
-  // and keep their "· total" wording — a fresh install looks unchanged.
+  // daily rows inside the window.
   const sum = (field) => rows.reduce((acc, r) => acc + (r[field] || 0), 0);
-  const w = haveTrend
+  // The toggle is rendered whenever there is any history (see the section
+  // head), and the values follow it: a window with no rows honestly reads 0
+  // for the period rather than falling back to lifetime totals under a
+  // "· 7d" label. Below two rows total the toggle is not rendered at all, so
+  // the cards fall back to the lifetime counters and "· total" wording — a
+  // fresh install looks unchanged.
+  const windowed = JOEI.daily.length >= 2;
+  const w = windowed
     ? {
         windowed: true,
         suffix: ` · ${win}d`,
@@ -102,7 +111,7 @@ function Overview({ treatment, setTreatment, openThreat }) {
 
       <div className="kpi-grid">
         <KpiCard label={`Requests${w.suffix}`} value={fmtCompact(w.requests)}
-          delta={<><b>{fmtNum(k.requests_total)}</b> lifetime · {fmtNum(w.errors)} errors</>} watermark="求"
+          delta={<><b>{fmtNum(k.requests_total)}</b> lifetime · {fmtNum(w.errors)} errors{w.windowed ? ` in ${win}d` : ""}</>} watermark="求"
           spark={reqSpark} sparkColor="var(--washi-mut)" />
         <KpiCard label={`Served from cache${w.suffix}`} value={(hitRate * 100).toFixed(1) + "%"} accent="jade"
           delta={<><b>{fmtCompact(w.cacheHits)}</b> hits{w.windowed ? ` in ${win}d` : " total"}</>} watermark="蔵"

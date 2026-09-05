@@ -41,7 +41,7 @@ const HISTORY_FILTERS = { BLOCK: true, ERROR: true };
 const PAGE_SIZE = 20;
 
 function LiveFeed({ openThreat }) {
-  const [rows, setRows] = useState(() => JOEI.requests.slice(0, 120));
+  const [rows, setRows] = useState(() => JOEI.requests.slice(0, 500));
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [paused, setPaused] = useState(false);
@@ -71,9 +71,9 @@ function LiveFeed({ openThreat }) {
     const onEvent = (e) => {
       if (paused) return;
       setNewId(e.detail.request_id);
-      setRows((rs) => [e.detail, ...rs].slice(0, 120));
+      setRows((rs) => [e.detail, ...rs].slice(0, 500));
     };
-    const onData = () => { if (!paused) setRows(JOEI.requests.slice(0, 120)); };
+    const onData = () => { if (!paused) setRows(JOEI.requests.slice(0, 500)); };
     window.addEventListener("joei:event", onEvent);
     window.addEventListener("joei:data", onData);
     return () => {
