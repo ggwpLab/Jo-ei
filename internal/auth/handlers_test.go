@@ -66,8 +66,10 @@ func TestLoginSetsBothCookiesAndReturnsToken(t *testing.T) {
 
 	rt := cookieByName(t, rec, auth.RefreshCookie)
 	assert.True(t, rt.HttpOnly)
+	assert.Equal(t, http.SameSiteStrictMode, rt.SameSite)
 	assert.Equal(t, auth.RefreshCookiePath, rt.Path)
 	assert.Equal(t, 168*3600, rt.MaxAge)
+	assert.False(t, rt.Secure, "plain HTTP must not set Secure, or the browser drops the cookie")
 }
 
 func TestLoginOverTLSSetsSecureCookies(t *testing.T) {
@@ -95,6 +97,7 @@ func TestLoginRejectsWrongPasswordAndUnknownUserIdentically(t *testing.T) {
 	assert.JSONEq(t, wrong.Body.String(), unknown.Body.String(),
 		"the response must not reveal whether the username exists")
 	assert.Empty(t, wrong.Result().Cookies())
+	assert.Empty(t, unknown.Result().Cookies())
 }
 
 func TestLoginRejectsMalformedBody(t *testing.T) {
@@ -146,15 +149,36 @@ func TestRefreshRejectsAnAccessToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestRefreshRejectsCrossSiteOrigin(t *testing.T) {
+	s := sessions(t, adminUser(t))
+	login := postJSON(t, s.Handler(), "/api/auth/login", `{"username":"admin","password":"secret"}`)
+	oldRefresh := cookieByName(t, login, auth.RefreshCookie)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", nil)
+	req.Host = "example.test"
+	req.Header.Set("Origin", "http://evil.test")
+	req.AddCookie(&http.Cookie{Name: auth.RefreshCookie, Value: oldRefresh.Value})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
 func TestLogoutClearsBothCookies(t *testing.T) {
 	s := sessions(t, adminUser(t))
 	rec := postJSON(t, s.Handler(), "/api/auth/logout", "")
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
-	for _, name := range []string{auth.AccessCookie, auth.RefreshCookie} {
+	paths := map[string]string{
+		auth.AccessCookie:  "/",
+		auth.RefreshCookie: auth.RefreshCookiePath,
+	}
+	for name, wantPath := range paths {
 		c := cookieByName(t, rec, name)
 		assert.Empty(t, c.Value)
 		assert.Equal(t, -1, c.MaxAge, "MaxAge=-1 is what expires the cookie now")
+		assert.Equal(t, wantPath, c.Path,
+			"clearing the wrong path leaves the real cookie alive in the browser")
 	}
 }
 

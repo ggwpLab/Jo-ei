@@ -101,9 +101,14 @@ func UserFromContext(ctx context.Context) (string, bool) {
 // a bearer token gets a clean 401 rather than a confusing fallback.
 func accessCredential(r *http.Request) (token string, bearer bool, found bool) {
 	if h := r.Header.Get("Authorization"); h != "" {
-		v, ok := strings.CutPrefix(h, "Bearer ")
-		v = strings.TrimSpace(v)
-		return v, true, ok && v != ""
+		// RFC 7235: the auth scheme name is case-insensitive ("Bearer", "bearer",
+		// "BEARER" are the same scheme), so match it that way.
+		scheme, rest, hasSpace := strings.Cut(h, " ")
+		if !strings.EqualFold(scheme, "Bearer") || !hasSpace {
+			return "", true, false
+		}
+		v := strings.TrimSpace(rest)
+		return v, true, v != ""
 	}
 	if c, err := r.Cookie(AccessCookie); err == nil && c.Value != "" {
 		return c.Value, false, true
@@ -125,6 +130,13 @@ func isMutating(method string) bool {
 // Origin header is compared to the request's own host. A request with neither
 // header is not a cross-site browser request (browsers always send Origin on
 // cross-origin requests), so it passes — that is the curl-with-a-cookie case.
+//
+// "same-site" (as opposed to "same-origin") is deliberately treated as
+// cross-site here: it covers sibling subdomains (e.g. a console at
+// console.example.com calling an API at api.example.com), and this project's
+// threat model wants those to authenticate as separate origins rather than be
+// trusted by virtue of sharing a registrable domain. Do not loosen this to
+// accept "same-site" without revisiting that decision.
 func sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "same-origin", "none":
@@ -140,7 +152,25 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return u.Host == r.Host
+	wantScheme := "http"
+	if isTLS(r) {
+		wantScheme = "https"
+	}
+	return u.Host == r.Host && u.Scheme == wantScheme
+}
+
+// sessionCookie builds one session cookie with the policy both session cookies
+// share: HttpOnly, SameSite=Strict, and Secure only over TLS. Secure must
+// track isTLS(r) rather than a literal true, or browsers drop the cookie on
+// plain-HTTP deployments; HttpOnly and SameSite=Strict are set unconditionally
+// below.
+//
+//nolint:gosec // G124 only recognises a literal Secure:true, not this reasoning.
+func sessionCookie(name, path, value string, maxAge int, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name: name, Value: value, Path: path,
+		MaxAge: maxAge, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
+	}
 }
 
 // issueSession signs a fresh token pair and sets both cookies. It returns the
@@ -155,14 +185,8 @@ func (s *Sessions) issueSession(w http.ResponseWriter, r *http.Request, username
 		return "", err
 	}
 	secure := isTLS(r)
-	http.SetCookie(w, &http.Cookie{
-		Name: AccessCookie, Value: access, Path: "/",
-		MaxAge: int(s.accessTTL.Seconds()), HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name: RefreshCookie, Value: refresh, Path: RefreshCookiePath,
-		MaxAge: int(s.refreshTTL.Seconds()), HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(w, sessionCookie(AccessCookie, "/", access, int(s.accessTTL.Seconds()), secure))
+	http.SetCookie(w, sessionCookie(RefreshCookie, RefreshCookiePath, refresh, int(s.refreshTTL.Seconds()), secure))
 	return access, nil
 }
 
@@ -174,10 +198,7 @@ func (s *Sessions) clearSession(w http.ResponseWriter, r *http.Request) {
 		{AccessCookie, "/"},
 		{RefreshCookie, RefreshCookiePath},
 	} {
-		http.SetCookie(w, &http.Cookie{
-			Name: c.name, Value: "", Path: c.path,
-			MaxAge: -1, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode,
-		})
+		http.SetCookie(w, sessionCookie(c.name, c.path, "", -1, secure))
 	}
 }
 

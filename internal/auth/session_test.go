@@ -91,6 +91,34 @@ func TestMiddlewareRejectsBasicAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestMiddlewareRejectsBasicAuthEvenWithAValidCookiePresent(t *testing.T) {
+	s := sessions(t, adminUser(t))
+	tok := accessToken(t, s)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	req.SetBasicAuth("admin", "secret") // a malformed (non-Bearer) Authorization header
+	req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: tok})
+	rec := httptest.NewRecorder()
+
+	s.Middleware(okHandler()).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"a present Authorization header must not fall through to the cookie, even a valid one")
+}
+
+func TestMiddlewareBearerTokenWinsOverCookie(t *testing.T) {
+	s := sessions(t, adminUser(t))
+	tok := accessToken(t, s)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.AddCookie(&http.Cookie{Name: auth.AccessCookie, Value: tok})
+	rec := httptest.NewRecorder()
+	s.Middleware(okHandler()).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestMiddlewareAcceptsBearerToken(t *testing.T) {
 	s := sessions(t, adminUser(t))
 	tok := accessToken(t, s)

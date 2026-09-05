@@ -61,6 +61,12 @@ func (s *Sessions) refresh(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "auth_not_configured")
 		return
 	}
+	// refresh is cookie-authenticated like every other mutation, so it gets the
+	// same origin check the Middleware applies to cookie-authenticated POSTs.
+	if !sameOrigin(r) {
+		writeJSONError(w, http.StatusForbidden, "cross_origin")
+		return
+	}
 	// Refresh is a browser-session concern: it reads the cookie only. Machine
 	// clients log in again instead of holding a long-lived credential.
 	c, err := r.Cookie(RefreshCookie)
@@ -86,8 +92,14 @@ func (s *Sessions) refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // logout always succeeds: clearing cookies that are not there is not an error,
-// and a failed logout is a worse outcome than a redundant one.
+// and a failed logout is a worse outcome than a redundant one. "Always
+// succeeds" means regardless of whether a session existed, not regardless of
+// origin — a cross-site logout is still rejected like any other mutation.
 func (s *Sessions) logout(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSONError(w, http.StatusForbidden, "cross_origin")
+		return
+	}
 	s.clearSession(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
