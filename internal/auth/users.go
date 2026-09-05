@@ -97,3 +97,11 @@ func (u *Users) Verify(username, password string) bool {
 	}
 	return bcrypt.CompareHashAndPassword([]byte(h), []byte(password)) == nil
 }
+
+// Known reports whether username is configured. A token stays cryptographically
+// valid after its user is removed from the config, so every request re-checks
+// the subject against the current set.
+func (u *Users) Known(username string) bool {
+	_, ok := u.byName[username]
+	return ok
+}
