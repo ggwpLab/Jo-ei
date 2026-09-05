@@ -377,13 +377,31 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	if authUsers.Locked() {
-		logger.Warn().Msg("console auth not configured — /console/ and /api/ are disabled (HTTP 503) until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+		logger.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
 	}
+	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
+	if err != nil {
+		return err
+	}
+	signer, err := auth.NewSigner(jwtSecret)
+	if err != nil {
+		return fmt.Errorf("console auth: %w", err)
+	}
+	accessTTL, refreshTTL := authTTLs(cfg.Console.Auth)
+	sessions := auth.NewSessions(authUsers, signer, accessTTL, refreshTTL)
+
 	root := http.NewServeMux()
 	// Public site icon: browsers auto-probe /favicon.ico on every page load, so
 	// serve it before the auth-gated routes and outside the proxy mux.
 	root.Handle("/favicon.ico", web.FaviconHandler())
-	root.Handle("/console/", authUsers.Middleware(web.ConsoleHandler()))
+	// The console shell is public: the login screen has to render before a
+	// session exists, and the bundle is UI code with no secrets in it. Every
+	// byte of data still comes from /api/, which stays gated.
+	root.Handle("/console/", web.ConsoleHandler())
+	// Session endpoints sit outside the middleware — a client with no session
+	// must be able to reach login. ServeMux prefers the longer pattern, so
+	// /api/auth/* lands here and everything else under /api/ stays gated.
+	root.Handle("/api/auth/", sessions.Handler())
 	// The console needs the effective staleness threshold (mirrors the default
 	// cache.New applies) and, when the backend supports it, on-demand purge.
 	staleDays := cfg.Cache.Local.StaleAfterDays
@@ -394,7 +412,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if p, ok := artifactCache.(console.CachePurger); ok {
 		cachePurger = p
 	}
-	root.Handle("/api/", authUsers.Middleware(console.NewHandler(console.Config{
+	root.Handle("/api/", sessions.Middleware(console.NewHandler(console.Config{
 		Store:               store,
 		Broadcaster:         broadcaster,
 		Policy:              policyRuntime,
