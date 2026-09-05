@@ -50,6 +50,8 @@
     scanners: [],
     connected: false,
     ready: false, // true once the initial load() has settled (either way)
+    authenticated: false, // set by the boot probe, login, and any 401
+    username: "",
   });
 
   function fire(name, detail) {
@@ -60,8 +62,48 @@
     if (J.connected !== v) { J.connected = v; fire("joei:connection"); }
   }
 
+  function setAuthenticated(v, username) {
+    const changed = J.authenticated !== v;
+    J.authenticated = v;
+    J.username = v ? (username || J.username) : "";
+    if (changed) fire("joei:auth");
+  }
+
+  // Raised when a call fails because the session is gone. The app shell shows
+  // the login screen for it, rather than the "no connection" banner: an
+  // expired session is not a dead proxy.
+  class AuthError extends Error {}
+
+  // One refresh at a time: a page load fires several requests at once and they
+  // would otherwise race to rotate the refresh cookie, each invalidating the
+  // others' new token.
+  let refreshing = null;
+  function refreshSession() {
+    if (!refreshing) {
+      refreshing = fetch("/api/auth/refresh", { method: "POST" })
+        .then((res) => res.ok)
+        .catch(() => false)
+        .finally(() => { refreshing = null; });
+    }
+    return refreshing;
+  }
+
+  // Every API call goes through here: on 401 it refreshes once and replays the
+  // request, and gives up to the login screen if that fails.
+  async function authFetch(path, opts) {
+    let res = await fetch(path, opts);
+    if (res.status === 401 && await refreshSession()) {
+      res = await fetch(path, opts);
+    }
+    if (res.status === 401 || res.status === 503) {
+      setAuthenticated(false);
+      throw new AuthError(res.status === 503 ? "auth_not_configured" : "unauthorized");
+    }
+    return res;
+  }
+
   async function getJSON(path) {
-    const res = await fetch(path);
+    const res = await authFetch(path);
     if (!res.ok) throw new Error(path + " -> HTTP " + res.status);
     return res.json();
   }
@@ -164,7 +206,7 @@
       mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on,
       allowlist_supply: p.allowlist_supply, allowlist_cve: p.allowlist_cve, denylist: p.denylist,
     };
-    const res = await fetch("/api/policy", {
+    const res = await authFetch("/api/policy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -183,7 +225,7 @@
 
   async function saveRegistries(list) {
     const body = { registries: list.map((r) => ({ eco: r.eco, enabled: r.enabled, upstreams: r.upstreams })) };
-    const res = await fetch("/api/registries", {
+    const res = await authFetch("/api/registries", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -205,7 +247,7 @@
   // Purge stale cache entries (idle past the server-side threshold), then
   // refresh so the meter reflects the freed space immediately.
   async function cleanupCache() {
-    const res = await fetch("/api/cache/cleanup", { method: "POST" });
+    const res = await authFetch("/api/cache/cleanup", { method: "POST" });
     let data = null;
     try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) throw new Error((data && data.error) || "cache cleanup failed (HTTP " + res.status + ")");
@@ -219,13 +261,15 @@
   // "no connection" banner.
   let probing = false;
   function probeConnection() {
-    if (probing) return;
+    if (probing || !J.authenticated) return;
     probing = true;
     load().catch(() => setConnected(false)).finally(() => { probing = false; });
   }
 
+  let es = null;
   function connectEvents() {
-    const es = new EventSource("/api/events");
+    if (es) return; // already streaming
+    es = new EventSource("/api/events");
     es.onmessage = (m) => {
       const r = reviveEvent(JSON.parse(m.data));
       J.requests = [r, ...J.requests].slice(0, 500);
@@ -235,24 +279,79 @@
     es.onerror = () => probeConnection(); // EventSource reconnects on its own
   }
 
+  function disconnectEvents() {
+    if (es) { es.close(); es = null; }
+  }
+
+  // Sign in, then start the session: load the panels and open the stream. The
+  // server sets HttpOnly cookies; the access_token in the body is for curl and
+  // CI, and the console deliberately never touches it.
+  async function login(username, password) {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok) {
+      const err = new Error((data && data.error) || "login_failed");
+      err.status = res.status;
+      throw err;
+    }
+    setAuthenticated(true, data.username);
+    await load().catch(() => setConnected(false));
+    connectEvents();
+    return J.username;
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      disconnectEvents();
+      setAuthenticated(false);
+      fire("joei:data"); // let the shell re-render against the signed-out state
+    }
+  }
+
+  // Boot: ask who we are before loading anything. A 401 here is a normal cold
+  // start, not an error — it renders the login screen.
+  async function boot() {
+    try {
+      const res = await fetch("/api/auth/me");
+      if (!res.ok) {
+        setAuthenticated(false);
+        return;
+      }
+      const me = await res.json();
+      setAuthenticated(true, me.username);
+      await load();
+      connectEvents();
+    } catch (_) {
+      if (J.authenticated) setConnected(false);
+    } finally {
+      J.ready = true;
+      fire("joei:data");
+    }
+  }
+
   J.load = load;
   J.savePolicy = savePolicy;
   J.pageRequests = pageRequests;
   J.saveRegistries = saveRegistries;
   J.cleanupCache = cleanupCache;
+  J.login = login;
+  J.logout = logout;
 
-  // Initial load; fire joei:data even on failure so the app shell can leave
-  // the loader and show the connection banner. J.ready marks the attempt as
-  // settled — the app reads it on mount because both events can fire before
-  // React subscribes (fetches finish while Babel is still compiling the app).
-  load().catch(() => { J.ready = true; setConnected(false); fire("joei:data"); }).finally(connectEvents);
+  boot();
   // Counters and quarantine are not pushed over SSE — refresh periodically.
   setInterval(() => {
-    if (!document.hidden) load().catch(() => setConnected(false));
+    if (!document.hidden && J.authenticated) load().catch(() => { if (J.authenticated) setConnected(false); });
   }, 15000);
   // Returning to a backgrounded tab: timers were paused and the SSE socket may
   // have died silently — refresh now instead of waiting for the next poll.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) load().catch(() => setConnected(false));
+    if (!document.hidden && J.authenticated) load().catch(() => { if (J.authenticated) setConnected(false); });
   });
 })();
