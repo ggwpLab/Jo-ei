@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
+### Added
+
+- **Trusted CA certificates for upstream registries** (`tls.ca_files`) — PEM
+  files listed here are added to the system root pool used for every upstream
+  connection, so a mirror presenting a corporate or self-signed certificate can
+  be fetched without weakening verification for public registries. An unreadable
+  or certificate-less file stops startup with a message naming it.
+- **Console session settings** — `console.auth.jwt_secret`
+  (`JOEI_CONSOLE_JWT_SECRET`, at least 32 bytes),
+  `console.auth.access_ttl_minutes` (default 15) and
+  `console.auth.refresh_ttl_hours` (default 168). With no secret configured,
+  one is generated on first boot and stored in the database, so sessions
+  survive a restart; set it explicitly to share sessions across replicas.
+
+### Changed
+
+- **BREAKING — console and API authentication is now JWT, not HTTP Basic.**
+  The console has a real login screen, shows who is signed in, and can sign
+  out. Browsers ride HttpOnly, `SameSite=Strict` cookies (`Secure` whenever the
+  request arrives over TLS), which is also what lets the live event stream
+  authenticate — `EventSource` cannot send an `Authorization` header. Scripts
+  obtain a token from `POST /api/auth/login` and send
+  `Authorization: Bearer <token>`; **`curl -u` no longer works.** Credentials
+  themselves are unchanged: the same bcrypt `console.auth.users` /
+  `JOEI_CONSOLE_AUTH_USERS` entries keep working. Tokens are stateless, so
+  signing out clears the cookies but an already-issued bearer token stays valid
+  until it expires (15 minutes by default); rotating `console.auth.jwt_secret`
+  and restarting ends every session at once.
+- **`/console/` is now served without authentication** — it is the static UI
+  bundle, and its login screen has to render before a session can exist. Every
+  byte of data still comes from `/api/`, which stays gated; with no users
+  configured `/api/` returns HTTP 503 and nobody can sign in.
+- **Every upstream mirror's own error now reaches the log.** A fetch that fails
+  across several mirrors used to report only the last mirror's error, so a
+  mirror rejected for a TLS or DNS failure was hidden behind another mirror's
+  plain 404. Artifact downloads, transparent proxying, npm/PyPI/RubyGems/Go
+  metadata fetches, and Docker manifest/blob fetches now log an
+  `upstream_attempts` array with each mirror's URL, HTTP status (0 for a
+  transport failure), error, and duration. Response statuses are unchanged.
+  The `artifact not found on any upstream` and `failed to download artifact`
+  log lines no longer carry the old `upstream_urls` field; `upstream_attempts`
+  supersedes it.
+
 ### Fixed
 
 - **The console no longer burns CPU while it sits idle.** An open overview tab
@@ -19,45 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transform`, highlights crossfade pre-rendered glow layers by `opacity`, and
   the overlay is unmounted once its fade-out ends. The animation looks the
   same.
-- **Console overview:** the 7d/30d toggle now moves the KPI values and the
-  block breakdown, not only the sparklines.
-- **Console feed:** both the live and the history listings page 20 rows at a
-  time behind a "Show more" button (history previously fetched 50; the live
-  window rendered all 120 buffered rows).
-- **Console sidebar:** the gate badge reports the worst scan-engine status
-  instead of a hardcoded "gate healthy".
-
-### Added
-
-- **Trusted CA certificates for upstream registries** (`tls.ca_files`) — PEM
-  files listed here are added to the system root pool used for every upstream
-  connection, so a mirror presenting a corporate or self-signed certificate can
-  be fetched without weakening verification for public registries. An unreadable
-  or certificate-less file stops startup with a message naming it.
-- `console.auth.jwt_secret` (`JOEI_CONSOLE_JWT_SECRET`),
-  `console.auth.access_ttl_minutes` (default 15) and
-  `console.auth.refresh_ttl_hours` (default 168). With no secret configured,
-  one is generated on first boot and stored in the database.
-
-### Changed
-
-- **Every upstream mirror's own error now reaches the log.** A fetch that fails
-  across several mirrors used to report only the last mirror's error, so a
-  mirror rejected for a TLS or DNS failure was hidden behind another mirror's
-  plain 404. Artifact downloads, transparent proxying, npm/PyPI/RubyGems/Go
-  metadata fetches, and Docker manifest/blob fetches now log an
-  `upstream_attempts` array with each mirror's URL, HTTP status (0 for a
-  transport failure), error, and duration. Response statuses are unchanged.
-  The `artifact not found on any upstream` and `failed to download artifact`
-  log lines no longer carry the old `upstream_urls` field; `upstream_attempts`
-  supersedes it.
-- **BREAKING — console and API authentication is now JWT, not HTTP Basic.**
-  The console has a real login screen, identity and sign-out. Scripts obtain a
-  token from `POST /api/auth/login` and send `Authorization: Bearer <token>`;
-  `curl -u` no longer works. Credentials themselves are unchanged — the same
-  `console.auth.users` / `JOEI_CONSOLE_AUTH_USERS` bcrypt hashes keep working.
-- `/console/` (the static UI bundle) is now served without authentication so
-  the login screen can load; all data remains behind the gated `/api/`.
+- **The console's 7d/30d control now moves the numbers, not only the charts.**
+  The KPI cards and the block breakdown read lifetime counters regardless of
+  the selected window. They now sum the daily rows inside it, and the window is
+  a UTC date range rather than a count of stored rows — daily rows exist only
+  for days that saw traffic, so "7d" could previously span weeks on an
+  intermittently used proxy. "In quarantine" stays unwindowed: it is a
+  current-state gauge with no daily counter.
+- **The live request feed pages 20 rows at a time** in both its live and its
+  history listings, behind the same "Show more" button. History filters
+  previously fetched 50 per page and the live filters did not page at all.
+- **The sidebar's gate badge reports real scan-engine health** instead of a
+  hardcoded "healthy": any engine down reads degraded, any engine slow reads
+  slow, and an unreachable API reads no connection. Engines that are configured
+  but unattached, or not yet probed, are not failures and stay green.
 
 ## [0.3.0] - 2026-07-20
 
@@ -148,7 +168,8 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ggwpLab/Jo-ei/releases/tag/v0.1.0
