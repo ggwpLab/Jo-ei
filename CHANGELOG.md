@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`docker-compose` now passes the whole `.env` to the proxy.** The compose
+  file listed environment variables one by one, so a `JOEI_*` override written
+  into `.env` reached compose — which reads that file for `${...}`
+  substitution — but never reached the container unless someone had also added
+  a line for it under `environment:`. The service reads `.env` through
+  `env_file` instead: setting a variable there is now enough. The file stays
+  optional, so a fresh clone still starts without one.
 - **The live feed no longer names a gate on successful requests.** A passing
   request used to show the deepest gate it cleared, so a clean package was
   listed as "Malware" next to its green PASS. The GATE column now speaks only

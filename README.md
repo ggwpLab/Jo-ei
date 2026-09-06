@@ -66,8 +66,9 @@ echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
 ```
 
-`docker-compose` reads `.env` automatically. `.env` is gitignored — your secrets
-stay out of git. Then open the console and log in as `admin`.
+Every variable in `.env` is passed into the container, so any `JOEI_*` override
+belongs there and nowhere else. `.env` is gitignored — your secrets stay out of
+git. Then open the console and log in as `admin`.
 
 The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
 malware scanning is active when the selected policy profile sets `malware_block: true`.

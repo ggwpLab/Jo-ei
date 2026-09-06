@@ -7,9 +7,14 @@ services:
       - ./config.yaml:/etc/jo-ei/config.yaml:ro
       - cache-data:/var/cache/jo-ei
       - jo-ei-db:/var/lib/jo-ei
-    environment:
-      - JOEI_LOGGING_LEVEL=info
-      - JOEI_CONSOLE_AUTH_USERS=${JOEI_CONSOLE_AUTH_USERS}
+    # Every JOEI_* variable in .env is passed to the container, so adding one
+    # there is enough — no matching entry is needed here. Listing them
+    # individually used to mean a variable set in .env silently never reached
+    # the proxy. See .env.example for the ones worth setting; secrets stay in
+    # .env, which is gitignored.
+    env_file:
+      - path: .env
+        required: false
     depends_on:
       clamav:
         condition: service_healthy
