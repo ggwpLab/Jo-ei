@@ -214,6 +214,7 @@
 .health.ok .hdot { background: var(--jade); box-shadow: 0 0 8px var(--jade); }
 .health.warn .hdot { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
 .health.down .hdot { background: var(--vermilion); box-shadow: 0 0 8px var(--vermilion); }
+.health.off .hdot, .health.unknown .hdot { background: var(--washi-faint); }
 
 /* ===================================================================
    LIVE REQUEST FEED

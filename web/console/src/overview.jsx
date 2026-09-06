@@ -26,8 +26,12 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const uptime = k.started_at ? fmtAgo(k.started_at).replace(" ago", "") : "—";
 
   const [win, setWin] = useState(30);
-  // Toggling the window only re-slices the already-loaded array — no refetch.
-  const rows = JOEI.daily.slice(-win);
+  // Daily rows exist only for days that saw traffic, so slicing the last N
+  // rows would let a "7d" window span weeks on an intermittently used proxy.
+  // Filter by date instead — r.day is UTC YYYY-MM-DD, so a string compare is
+  // a date compare. The window includes today, hence win - 1.
+  const cutoff = new Date(Date.now() - (win - 1) * 86400000).toISOString().slice(0, 10);
+  const rows = JOEI.daily.filter((r) => r.day >= cutoff);
   // Spark breaks on <2 points (Math.max(...[]) === -Infinity, divide by len-1).
   // With fewer points pass `undefined` so the card renders exactly as before.
   const haveTrend = rows.length >= 2;
@@ -38,6 +42,45 @@ function Overview({ treatment, setTreatment, openThreat }) {
   // daily flow — the new "awaiting maturity" holds per day.
   const qSpark = haveTrend ? rows.map((r) => r.supply_blocked) : undefined;
 
+  // The toggle moves the values, not only the sparklines: each card sums the
+  // daily rows inside the window.
+  const sum = (field) => rows.reduce((acc, r) => acc + (r[field] || 0), 0);
+  // The toggle is rendered whenever there is any history (see the section
+  // head), and the values follow it: a window with no rows honestly reads 0
+  // for the period rather than falling back to lifetime totals under a
+  // "· 7d" label. Below two rows total the toggle is not rendered at all, so
+  // the cards fall back to the lifetime counters and "· total" wording — a
+  // fresh install looks unchanged.
+  const windowed = JOEI.daily.length >= 2;
+  const w = windowed
+    ? {
+        windowed: true,
+        suffix: ` · ${win}d`,
+        requests: sum("requests"),
+        cacheHits: sum("cache_hits"),
+        blocked: sum("blocked"),
+        errors: sum("errors"),
+        supplyBlocked: sum("supply_blocked"),
+        cveBlocked: sum("cve_blocked"),
+        malwareBlocked: sum("malware_blocked"),
+        denylisted: sum("denylisted"),
+      }
+    : {
+        windowed: false,
+        suffix: " · total",
+        requests: k.requests_total,
+        cacheHits: k.cache_hits,
+        blocked: k.blocked_total,
+        errors: k.errors,
+        supplyBlocked: k.supply_blocked,
+        cveBlocked: k.cve_blocked,
+        malwareBlocked: k.malware_blocked,
+        denylisted: k.denylisted,
+      };
+  // Windowed hit rate is recomputed from the window's own totals; the lifetime
+  // rate is a server-side counter ratio and cannot be re-derived from it.
+  const hitRate = w.windowed ? (w.requests ? w.cacheHits / w.requests : 0) : k.hit_rate;
+
   return (
     <div className="content-inner">
       {/* hero */}
@@ -47,7 +90,7 @@ function Overview({ treatment, setTreatment, openThreat }) {
       <div className="section-head" style={{ marginTop: 28 }}>
         <span className="head-kanji kanji">衛</span>
         <div>
-          <div className="eyebrow">Totals · uptime {uptime}</div>
+          <div className="eyebrow">{w.windowed ? `Last ${win} days` : "Totals"} · uptime {uptime}</div>
           <h2>Gate throughput</h2>
         </div>
         <div className="spacer"></div>
@@ -67,15 +110,16 @@ function Overview({ treatment, setTreatment, openThreat }) {
       </div>
 
       <div className="kpi-grid">
-        <KpiCard label="Requests · total" value={fmtCompact(k.requests_total)}
-          delta={<><b>{fmtNum(k.requests_total)}</b> total · {fmtNum(k.errors)} errors</>} watermark="求"
+        <KpiCard label={`Requests${w.suffix}`} value={fmtCompact(w.requests)}
+          delta={<><b>{fmtNum(k.requests_total)}</b> lifetime · {fmtNum(w.errors)} errors{w.windowed ? ` in ${win}d` : ""}</>} watermark="求"
           spark={reqSpark} sparkColor="var(--washi-mut)" />
-        <KpiCard label="Served from cache" value={(k.hit_rate * 100).toFixed(1) + "%"} accent="jade"
-          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits total</>} watermark="蔵"
+        <KpiCard label={`Served from cache${w.suffix}`} value={(hitRate * 100).toFixed(1) + "%"} accent="jade"
+          delta={<><b>{fmtCompact(w.cacheHits)}</b> hits{w.windowed ? ` in ${win}d` : " total"}</>} watermark="蔵"
           spark={hitSpark} sparkColor="var(--jade)" />
-        <KpiCard label="Blocked · total" value={fmtNum(k.blocked_total)} accent="verm"
+        <KpiCard label={`Blocked${w.suffix}`} value={fmtNum(w.blocked)} accent="verm"
           delta={<>423 Locked + 403 Forbidden</>} watermark="封"
           spark={blkSpark} sparkColor="var(--vermilion)" />
+        {/* Quarantine is a current-state gauge, not a daily flow: no window. */}
         <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"
           delta={<>held until min-age maturity</>} watermark="守"
           spark={qSpark} sparkColor="var(--gold)" />
@@ -84,19 +128,19 @@ function Overview({ treatment, setTreatment, openThreat }) {
       {/* block breakdown */}
       <div className="card breakdown" style={{ marginTop: 14 }}>
         <div className="bd">
-          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(k.supply_blocked)}</span>
+          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(w.supplyBlocked)}</span>
           <span className="l">衛 Supply-chain · 423</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(k.cve_blocked)}</span>
+          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(w.cveBlocked)}</span>
           <span className="l">浄 CVE blocked · 403</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(k.malware_blocked)}</span>
+          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(w.malwareBlocked)}</span>
           <span className="l">浄 Malware blocked · 403</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--washi-soft)" }}>{fmtNum(k.denylisted)}</span>
+          <span className="v" style={{ color: "var(--washi-soft)" }}>{fmtNum(w.denylisted)}</span>
           <span className="l">Denylisted · 403</span>
         </div>
       </div>
