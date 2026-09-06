@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The live feed no longer names a gate on successful requests.** A passing
+  request used to show the deepest gate it cleared, so a clean package was
+  listed as "Malware" next to its green PASS. The GATE column now speaks only
+  for blocks (the gate that blocked) and errors (the stage that failed);
+  passes and cache hits leave it empty. Docker image-scan errors are labelled
+  instead of showing a bare dash.
+
 ### Changed
 
 - **Console overview totals now read on a single time base.** The 7d/30d
