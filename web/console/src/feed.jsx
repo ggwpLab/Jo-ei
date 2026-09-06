@@ -2,7 +2,13 @@
 
 function FeedRow({ r, onOpen, isNew }) {
   const blocked = r.verdict === "BLOCK";
-  const gateName = blocked ? GATE_LABEL[r.blocked_by[0]] : GATE_LABEL[r.gate] || "—";
+  // The GATE column answers "what stopped this request": the gate that blocked
+  // on BLOCK, the stage that failed on ERROR. On PASS r.gate is the deepest
+  // gate the artifact CLEARED, so naming it beside a green verdict read as an
+  // alert — "Malware" next to PASS. Successful outcomes name no gate at all,
+  // CACHE included: its verdict already says the request never reached one.
+  const failed = blocked || r.verdict === "ERROR";
+  const gateName = failed ? GATE_LABEL[blocked ? r.blocked_by[0] : r.gate] || "—" : "—";
   return (
     <div
       className={`feed-row ${blocked ? "clickable" : ""} ${isNew ? "new-row" : ""}`}

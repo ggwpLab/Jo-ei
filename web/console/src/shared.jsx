@@ -164,9 +164,13 @@ function Spark({ data, color = "var(--washi-mut)", h = 30, w = 130, fill = true 
 }
 
 /* ---------- gate label helper ---------- */
+// Keys cover both vocabularies: gate ids (cache, supply, cve, malware,
+// image_scan) and the blocked_by values (supply_chain, denylist, ...).
+// image_scan reaches the UI only on a Docker ERROR row — a block always
+// resolves to one of the four pipeline gates via blockedByForReason.
 const GATE_LABEL = {
   cache: "Cache", supply: "Supply Chain", cve: "CVE", malware: "Malware",
-  supply_chain: "Supply Chain", denylist: "Denylist",
+  supply_chain: "Supply Chain", denylist: "Denylist", image_scan: "Image Scan",
 };
 
 Object.assign(window, {
