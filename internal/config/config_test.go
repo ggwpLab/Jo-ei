@@ -560,6 +560,47 @@ tls:
 	}
 }
 
+func TestValidateRejectsShortJWTSecret(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Console.Auth.JWTSecret = "short"
+
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "console.auth.jwt_secret")
+}
+
+func TestValidateAcceptsA32ByteJWTSecret(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Console.Auth.JWTSecret = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, c.Validate())
+}
+
+func TestValidateRejectsNegativeTTLs(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Console.Auth.AccessTTLMinutes = -1
+	assert.Error(t, c.Validate())
+
+	c2 := &config.Config{}
+	c2.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c2.Console.Auth.RefreshTTLHours = -1
+	assert.Error(t, c2.Validate())
+}
+
+func TestAuthTTLsParseFromYAML(t *testing.T) {
+	cfg, err := loadTTLConfig(t, ttlBaseYAML+`
+console:
+  auth:
+    access_ttl_minutes: 5
+    refresh_ttl_hours: 24
+`)
+	require.NoError(t, err)
+	assert.Equal(t, 5, cfg.Console.Auth.AccessTTLMinutes)
+	assert.Equal(t, 24, cfg.Console.Auth.RefreshTTLHours)
+}
+
 func TestLoad_TLSSectionIsOptional(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("database:\n  path: ./jo-ei.db\n"), 0o600); err != nil {

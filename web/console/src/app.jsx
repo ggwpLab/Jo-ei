@@ -54,6 +54,58 @@ function PurifyLoader({ hide }) {
   );
 }
 
+/* ---------- login ---------- */
+function LoginScreen() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (busy || !username || !password) return;
+    setBusy(true);
+    setErr("");
+    JOEI.login(username, password)
+      .catch((ex) => {
+        setErr(ex.status === 0
+          ? "Cannot reach the proxy. Check that it is running, then try again."
+          : ex.status === 503
+          ? "Authentication is not configured on this server. Add console.auth.users or JOEI_CONSOLE_AUTH_USERS and restart."
+          : "Incorrect username or password.");
+        setPassword("");
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="login-wrap">
+      <form className="card login-card" onSubmit={submit}>
+        <div className="login-mark"><ToriiMark size={44} /></div>
+        <div className="login-title kanji">浄衛 <small>Jōei</small></div>
+        <div className="login-sub">The Purification Gate · console</div>
+
+        <label className="login-field">
+          <span>Username</span>
+          <input value={username} onChange={(e) => setUsername(e.target.value)}
+            autoFocus autoComplete="username" disabled={busy} />
+        </label>
+        <label className="login-field">
+          <span>Password</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password" disabled={busy} />
+        </label>
+
+        {err && <div className="login-err">{err}</div>}
+
+        <button className="btn primary login-submit" type="submit" disabled={busy || !username || !password}>
+          {busy ? "Opening the gate…" : "Sign in"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function App() {
   const [page, setPage] = useState("overview");
   const [treatment, setTreatment] = useState("procession");
@@ -64,6 +116,8 @@ function App() {
   const [showLoader, setShowLoader] = useState(true);
   const [connected, setConnected] = useState(JOEI.connected);
   const [scanners, setScanners] = useState(JOEI.scanners);
+  const [authed, setAuthed] = useState(JOEI.authenticated);
+  const [username, setUsername] = useState(JOEI.username);
   const tid = useRef(0);
 
   // The overlay is hidden by opacity alone, which does not stop its infinite
@@ -82,18 +136,22 @@ function App() {
   useEffect(() => {
     const onData = () => { setLoading(false); setPolicyState(JOEI.policy); setScanners(JOEI.scanners); };
     const onConn = () => setConnected(JOEI.connected);
+    const onAuth = () => { setAuthed(JOEI.authenticated); setUsername(JOEI.username); };
     window.addEventListener("joei:data", onData);
     window.addEventListener("joei:policy", onData);
     window.addEventListener("joei:connection", onConn);
+    window.addEventListener("joei:auth", onAuth);
     // The initial load can settle before this subscription exists (the
     // fetches finish while Babel is still compiling the app), so the events
     // above may already have fired into the void — sync from current state.
     if (JOEI.ready) onData();
     onConn();
+    onAuth();
     return () => {
       window.removeEventListener("joei:data", onData);
       window.removeEventListener("joei:policy", onData);
       window.removeEventListener("joei:connection", onConn);
+      window.removeEventListener("joei:auth", onAuth);
     };
   }, []);
 
@@ -158,6 +216,20 @@ function App() {
     ? { cls: "warn", label: "gate slow", title: `Slow to respond: ${warn.map((s) => s.name).join(", ")}` }
     : { cls: "ok", label: "gate healthy", title: "All attached scan engines are responding" };
 
+  // The purify overlay covers the /api/auth/me probe, so an operator with a
+  // live session never sees a flash of the login screen.
+  if (!authed) {
+    return (
+      <>
+        {showLoader && <PurifyLoader hide={!loading} />}
+        {!loading && !connected && (
+          <div className="conn-banner">&#9888; No connection to the proxy — check that it is running.</div>
+        )}
+        {!loading && <LoginScreen />}
+      </>
+    );
+  }
+
   return (
     <div className="app">
       {showLoader && <PurifyLoader hide={!loading} />}
@@ -190,11 +262,14 @@ function App() {
             <span className={`health ${gateBadge.cls}`} style={{ fontSize: 11 }} title={gateBadge.title}><i className="hdot"></i>{gateBadge.label}</span>
           </div>
           <div className="row" style={{ gap: 10, padding: "0 8px" }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--ink-700)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, color: "var(--washi-soft)" }}>SK</div>
-            <div className="col" style={{ lineHeight: 1.25 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600 }}>S. Kurosawa</span>
-              <span className="faint" style={{ fontSize: 11 }}>DevSecOps · admin</span>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--ink-700)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, color: "var(--washi-soft)" }}>
+              {username.slice(0, 2).toUpperCase()}
             </div>
+            <div className="col" style={{ lineHeight: 1.25, minWidth: 0 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{username}</span>
+              <span className="faint" style={{ fontSize: 11 }}>signed in</span>
+            </div>
+            <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => JOEI.logout()}>Sign out</button>
           </div>
         </div>
       </nav>

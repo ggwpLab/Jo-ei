@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection, so a mirror presenting a corporate or self-signed certificate can
   be fetched without weakening verification for public registries. An unreadable
   or certificate-less file stops startup with a message naming it.
+- `console.auth.jwt_secret` (`JOEI_CONSOLE_JWT_SECRET`),
+  `console.auth.access_ttl_minutes` (default 15) and
+  `console.auth.refresh_ttl_hours` (default 168). With no secret configured,
+  one is generated on first boot and stored in the database.
 
 ### Changed
 
@@ -47,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The `artifact not found on any upstream` and `failed to download artifact`
   log lines no longer carry the old `upstream_urls` field; `upstream_attempts`
   supersedes it.
+- **BREAKING — console and API authentication is now JWT, not HTTP Basic.**
+  The console has a real login screen, identity and sign-out. Scripts obtain a
+  token from `POST /api/auth/login` and send `Authorization: Bearer <token>`;
+  `curl -u` no longer works. Credentials themselves are unchanged — the same
+  `console.auth.users` / `JOEI_CONSOLE_AUTH_USERS` bcrypt hashes keep working.
+- `/console/` (the static UI bundle) is now served without authentication so
+  the login screen can load; all data remains behind the gated `/api/`.
 
 ## [0.3.0] - 2026-07-20
 

@@ -88,6 +88,15 @@ func (c *Config) Validate() error {
 	if c.Cache.Local.StaleAfterDays < 0 {
 		return fmt.Errorf("cache.local.stale_after_days must not be negative")
 	}
+	if s := c.Console.Auth.JWTSecret; s != "" && len(s) < MinJWTSecretLen {
+		return fmt.Errorf("console.auth.jwt_secret must be at least %d bytes when set, got %d", MinJWTSecretLen, len(s))
+	}
+	if c.Console.Auth.AccessTTLMinutes < 0 {
+		return fmt.Errorf("console.auth.access_ttl_minutes must not be negative")
+	}
+	if c.Console.Auth.RefreshTTLHours < 0 {
+		return fmt.Errorf("console.auth.refresh_ttl_hours must not be negative")
+	}
 	return nil
 }
 
@@ -128,12 +137,34 @@ type ConsoleConfig struct {
 	Auth AuthConfig `mapstructure:"auth"`
 }
 
-// AuthConfig holds the console/API Basic-auth credential list. An empty Users
-// list means authentication is unconfigured; the server then serves the
-// console and API as 503 (fail-closed).
+// AuthConfig holds the console/API credentials and JWT session parameters. An
+// empty Users list means authentication is unconfigured; the API then serves
+// 503 (fail-closed) while the console shell still loads its login screen.
 type AuthConfig struct {
 	Users []AuthUser `mapstructure:"users"`
+	// JWTSecret signs console session tokens (HS256). Empty means "resolve it
+	// elsewhere": JOEI_CONSOLE_JWT_SECRET, then the settings store, then a
+	// generated-and-persisted key. See cmd/jo-ei.
+	JWTSecret string `mapstructure:"jwt_secret"`
+	// AccessTTLMinutes is the access-token lifetime; zero selects the default
+	// (DefaultAccessTTLMinutes).
+	AccessTTLMinutes int `mapstructure:"access_ttl_minutes"`
+	// RefreshTTLHours is the refresh-token lifetime; zero selects the default
+	// (DefaultRefreshTTLHours).
+	RefreshTTLHours int `mapstructure:"refresh_ttl_hours"`
 }
+
+// Default console session lifetimes, applied when the keys are unset. Fifteen
+// minutes keeps a leaked access token short-lived; a week of refresh keeps an
+// operator signed in across a working week.
+const (
+	DefaultAccessTTLMinutes = 15
+	DefaultRefreshTTLHours  = 168
+)
+
+// MinJWTSecretLen mirrors auth.MinSecretLen. It is duplicated rather than
+// imported because config imports nothing from internal/.
+const MinJWTSecretLen = 32
 
 // AuthUser is one console credential: a username and a bcrypt password hash.
 type AuthUser struct {

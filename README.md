@@ -207,6 +207,9 @@ The console reads live proxy state via the JSON API described below. React and t
 console UI are compiled to a single bundle baked into the binary — it needs no CDN
 and works fully offline.
 
+The console signs in with the same operator credentials at `/console/`; a
+session lasts 15 minutes and silently refreshes for up to 7 days of activity.
+
 ![Console overview — gate pipeline, throughput sparklines, scanner health](docs/images/console-overview.png)
 
 | Live request feed | Policy editor | Registries & cache |
@@ -234,12 +237,15 @@ persistent (SQLite, with configurable retention).
 
 ### Console authentication
 
-The console and `/api/` require HTTP Basic authentication. Configure one or more
-operator accounts; the proxy data path (`/pypi/`, `/npm/`, …) and `/health`
-stay open.
+The console signs in through `POST /api/auth/login` and rides a JWT session:
+two HttpOnly, `SameSite=Strict` cookies (`joei_at` for API calls, `joei_rt`
+scoped to `/api/auth` for silent refresh) that JavaScript never touches.
+Configure one or more operator accounts; the proxy data path (`/pypi/`,
+`/npm/`, …) and `/health` stay open.
 
-**Fail-closed:** with no users configured, `/console/` and `/api/` return
-**HTTP 503** until you add at least one user. The proxy keeps serving.
+**Fail-closed:** with no users configured, `/api/` returns **HTTP 503** and no
+one can sign in, until you add at least one user. `/console/` (the static UI
+bundle) still loads so the login screen renders, and the proxy keeps serving.
 
 Generate a bcrypt hash:
 
@@ -281,10 +287,40 @@ Write the hash **literally** in `.env` — values there are not interpolated. On
 when you hardcode a hash *inline* in `docker-compose.yaml` must each `$` be
 doubled to `$$` to escape Compose variable substitution.
 
-> **TLS:** Jōei serves plain HTTP. Basic credentials are only as private as the
-> transport — for any non-loopback or public deployment, terminate TLS at a
-> reverse proxy (nginx, Traefik, Caddy) in front of Jōei. In-binary TLS is not
-> provided.
+**Signing the session.** Sessions are HS256 JWTs signed with
+`console.auth.jwt_secret` (`JOEI_CONSOLE_JWT_SECRET`, at least 32 bytes,
+preferred for the same reason as the users list). Leave it unset and Jōei
+generates one on first boot and stores it in the database, so sessions survive
+a restart; set it explicitly to share sessions across replicas. Access tokens
+last 15 minutes and refresh tokens 7 days by default
+(`console.auth.access_ttl_minutes` / `console.auth.refresh_ttl_hours`).
+
+**Scripts and CI** can't hold cookies the way a browser does, so they log in
+and send the token straight back as a bearer credential — `curl -u` no longer
+works:
+
+```bash
+TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"choose-a-strong-password"}' | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/overview
+```
+
+Signing out (`POST /api/auth/logout`) clears the browser's cookies, but a
+bearer token already issued is stateless and stays valid until it expires;
+rotating `console.auth.jwt_secret` and restarting invalidates every session at
+once.
+
+> **TLS:** Jōei serves plain HTTP. Session cookies and bearer tokens are only
+> as private as the transport — for any non-loopback or public deployment,
+> terminate TLS at a reverse proxy (nginx, Traefik, Caddy) in front of Jōei.
+> In-binary TLS is not provided. The proxy must forward
+> `X-Forwarded-Proto: https`, or Jōei has no way to know the connection was
+> secure and the session cookies will not carry `Secure`. It should also pass
+> the browser's original `Host` through rather than substituting its own
+> (nginx's default `proxy_set_header Host $proxy_host` does the latter),
+> since the same-origin check on cookie-authenticated mutations compares
+> `Origin` against `Host`.
 
 ### Scanner health
 

@@ -1,8 +1,14 @@
-// Package auth provides HTTP Basic authentication for the admin console and
+// Package auth provides JWT session authentication for the admin console and
 // API. Credentials are a set of username + bcrypt password-hash pairs loaded
-// from config and the JOEI_CONSOLE_AUTH_USERS environment variable. With no
-// users configured the set is "locked" (fail-closed): the middleware serves
-// 503 and never reaches the wrapped handler.
+// from config and the JOEI_CONSOLE_AUTH_USERS environment variable; a
+// successful POST /api/auth/login exchanges them for an HS256-signed session:
+// HttpOnly access/refresh cookies for the browser console, and a bearer
+// access token in the response body for scripts and CI. The /api/auth/*
+// endpoints (login, refresh, logout, me) and the session-verifying middleware
+// live alongside the credential set in this package. With no users configured
+// the set is "locked" (fail-closed): the middleware serves 503 on /api/ and
+// never reaches the wrapped handler — the console shell itself stays public so
+// its login screen can still render.
 package auth
 
 import (
@@ -96,4 +102,12 @@ func (u *Users) Verify(username, password string) bool {
 		return false
 	}
 	return bcrypt.CompareHashAndPassword([]byte(h), []byte(password)) == nil
+}
+
+// Known reports whether username is configured. A token stays cryptographically
+// valid after its user is removed from the config, so every request re-checks
+// the subject against the current set.
+func (u *Users) Known(username string) bool {
+	_, ok := u.byName[username]
+	return ok
 }

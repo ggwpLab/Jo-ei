@@ -25,6 +25,10 @@ mechanism:
   `username:bcrypt-hash`, multiple users separated by `;`. Merged with (and
   taking precedence over) `console.auth.users` from the file. Preferred over
   the file so password hashes stay out of version control.
+- **`JOEI_CONSOLE_JWT_SECRET`** — the HS256 key that signs console sessions,
+  taking precedence over `console.auth.jwt_secret` from the file. Preferred
+  over the file for the same reason, and required to share sessions across
+  replicas (see `console` below).
 
 Validation runs at startup; an invalid config prints the offending key and the
 process exits non-zero.
@@ -262,11 +266,50 @@ applied atomically without restart).
 
 ## `console`
 
-| Key | Description |
-|---|---|
-| `auth.users` | List of `{username, password_hash}` (bcrypt). Prefer `JOEI_CONSOLE_AUTH_USERS`. |
+| Key | Default | Description |
+|---|---|---|
+| `auth.users` | — | List of `{username, password_hash}` (bcrypt). Prefer `JOEI_CONSOLE_AUTH_USERS`. |
+| `auth.jwt_secret` | generated | HS256 key signing console sessions, at least 32 bytes. Prefer `JOEI_CONSOLE_JWT_SECRET`. Unset, Jōei generates one on first boot and stores it in the database, so sessions survive a restart; set it explicitly to share sessions across replicas. |
+| `auth.access_ttl_minutes` | `15` | Access-token lifetime. |
+| `auth.refresh_ttl_hours` | `168` | Refresh-token lifetime (7 days). |
 
-Generate a hash: `printf '%s' 'your-password' | jo-ei hashpw`
+Generate a password hash: `printf '%s' 'your-password' | jo-ei hashpw`
 
-**Fail-closed:** with zero users configured, `/console/` and `/api/` return
-HTTP 503; the proxy data path and `/health` stay open.
+**Sessions.** The console signs in at `POST /api/auth/login` and rides two
+HttpOnly, `SameSite=Strict` cookies (`joei_at`, `joei_rt`); the browser never
+sees the token in JavaScript. `Secure` is set when the request arrives over TLS
+— terminate TLS in front of Jōei in any deployment that leaves a trusted
+network.
+
+**Behind a reverse proxy**, Jōei decides "was this request over TLS" from
+`X-Forwarded-Proto` (see `isTLS` in `internal/auth`), not from its own
+transport — it always speaks plain HTTP to the proxy. The proxy **must** set
+`X-Forwarded-Proto: https`, or `Secure` never gets set on the session cookies
+even though the browser sees a padlock. It should also pass through the
+browser's original `Host` header rather than substituting its own upstream
+address (nginx's default `proxy_set_header Host $proxy_host` does the latter),
+because the same-origin check on cookie-authenticated mutations compares
+`Origin` against the request's `Host`. In practice modern browsers send
+`Sec-Fetch-Site`, which is checked first and does not depend on `Host`, so a
+wrong `Host` is a belt-and-braces gap rather than something that breaks a
+current browser.
+
+**Scripts and CI** use the same endpoint and read the token from the response
+body:
+
+```bash
+TOKEN=$(curl -sX POST "$JOEI/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ops","password":"…"}' | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" "$JOEI/api/overview"
+```
+
+HTTP Basic is no longer accepted.
+
+**Fail-closed:** with zero users configured, `/api/` returns HTTP 503 and no
+one can sign in; the console shell still loads (it is static UI), and the proxy
+data path and `/health` stay open.
+
+**Signing out** clears the cookies. Tokens are stateless, so a bearer token
+already issued stays valid until it expires (15 minutes by default); to end
+every session at once, change `auth.jwt_secret` and restart.
