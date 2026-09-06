@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Console overview totals now read on a single time base.** The 7d/30d
+  toggle is gone and every KPI card — requests, cache hit rate, blocked, and
+  the supply-chain/CVE/malware/denylist breakdown — shows the all-time
+  counter, which is exactly what the proxy persists. The sparklines stay, now
+  captioned "30d trend" so they read as a trend beside the value rather than a
+  breakdown of it (daily rows are pruned on their own retention, the counters
+  are not). The quarantine card is labelled as the live gauge it always was —
+  how many packages are held right now — and no longer carries a sparkline of
+  daily supply-chain blocks, a different quantity than the number above it.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added

@@ -1,6 +1,9 @@
 /* 浄衛 Jōei :: OVERVIEW dashboard */
 
-function KpiCard({ label, value, accent, delta, spark, sparkColor, watermark }) {
+// sparkNote captions the sparkline. The card's value is an all-time counter
+// while the sparkline is a 30-day daily trend, so the two are deliberately
+// labelled as different things rather than read as a total and its breakdown.
+function KpiCard({ label, value, accent, delta, spark, sparkColor, sparkNote, watermark }) {
   return (
     <div className="card kpi">
       {watermark && <span className="kpi-watermark">{watermark}</span>}
@@ -8,6 +11,7 @@ function KpiCard({ label, value, accent, delta, spark, sparkColor, watermark }) 
       <div className={`kpi-val ${accent || ""}`}>{value}</div>
       {delta && <div className="kpi-delta">{delta}</div>}
       {spark && <div className="kpi-spark"><Spark data={spark} color={sparkColor} h={44} /></div>}
+      {spark && sparkNote && <div className="kpi-sparknote">{sparkNote}</div>}
     </div>
   );
 }
@@ -25,61 +29,28 @@ function Overview({ treatment, setTreatment, openThreat }) {
   const recent = JOEI.requests.slice(0, 6);
   const uptime = k.started_at ? fmtAgo(k.started_at).replace(" ago", "") : "—";
 
-  const [win, setWin] = useState(30);
-  // Daily rows exist only for days that saw traffic, so slicing the last N
-  // rows would let a "7d" window span weeks on an intermittently used proxy.
-  // Filter by date instead — r.day is UTC YYYY-MM-DD, so a string compare is
-  // a date compare. The window includes today, hence win - 1.
-  const cutoff = new Date(Date.now() - (win - 1) * 86400000).toISOString().slice(0, 10);
+  // Every card value is an all-time counter from /api/overview. Telemetry is
+  // SQLite-only (database.path is required), so those counters survive
+  // restarts and "all time" is literally true — there is no second time base
+  // to reconcile them against.
+  //
+  // The sparklines are the one exception and are captioned as a separate
+  // thing: a fixed 30-day daily trend. Daily rows exist only for days that saw
+  // traffic, so the window is a UTC-date cutoff rather than a positional slice
+  // — r.day is UTC YYYY-MM-DD, so a string compare is a date compare, and the
+  // window includes today, hence 29 days back. daily_metrics is also pruned by
+  // database.daily_retention_days while the counters never are, which is the
+  // other reason the trend must not read as a breakdown of the value.
+  const TREND_DAYS = 30;
+  const cutoff = new Date(Date.now() - (TREND_DAYS - 1) * 86400000).toISOString().slice(0, 10);
   const rows = JOEI.daily.filter((r) => r.day >= cutoff);
   // Spark breaks on <2 points (Math.max(...[]) === -Infinity, divide by len-1).
-  // With fewer points pass `undefined` so the card renders exactly as before.
+  // With fewer points pass `undefined` and the card renders without a trend.
   const haveTrend = rows.length >= 2;
+  const trendNote = `${TREND_DAYS}d trend`;
   const reqSpark = haveTrend ? rows.map((r) => r.requests) : undefined;
   const hitSpark = haveTrend ? rows.map((r) => (r.requests ? r.cache_hits / r.requests : 0)) : undefined;
   const blkSpark = haveTrend ? rows.map((r) => r.blocked) : undefined;
-  // Quarantine has no daily counter; supply_blocked (423 min-age holds) is its
-  // daily flow — the new "awaiting maturity" holds per day.
-  const qSpark = haveTrend ? rows.map((r) => r.supply_blocked) : undefined;
-
-  // The toggle moves the values, not only the sparklines: each card sums the
-  // daily rows inside the window.
-  const sum = (field) => rows.reduce((acc, r) => acc + (r[field] || 0), 0);
-  // The toggle is rendered whenever there is any history (see the section
-  // head), and the values follow it: a window with no rows honestly reads 0
-  // for the period rather than falling back to lifetime totals under a
-  // "· 7d" label. Below two rows total the toggle is not rendered at all, so
-  // the cards fall back to the lifetime counters and "· total" wording — a
-  // fresh install looks unchanged.
-  const windowed = JOEI.daily.length >= 2;
-  const w = windowed
-    ? {
-        windowed: true,
-        suffix: ` · ${win}d`,
-        requests: sum("requests"),
-        cacheHits: sum("cache_hits"),
-        blocked: sum("blocked"),
-        errors: sum("errors"),
-        supplyBlocked: sum("supply_blocked"),
-        cveBlocked: sum("cve_blocked"),
-        malwareBlocked: sum("malware_blocked"),
-        denylisted: sum("denylisted"),
-      }
-    : {
-        windowed: false,
-        suffix: " · total",
-        requests: k.requests_total,
-        cacheHits: k.cache_hits,
-        blocked: k.blocked_total,
-        errors: k.errors,
-        supplyBlocked: k.supply_blocked,
-        cveBlocked: k.cve_blocked,
-        malwareBlocked: k.malware_blocked,
-        denylisted: k.denylisted,
-      };
-  // Windowed hit rate is recomputed from the window's own totals; the lifetime
-  // rate is a server-side counter ratio and cannot be re-derived from it.
-  const hitRate = w.windowed ? (w.requests ? w.cacheHits / w.requests : 0) : k.hit_rate;
 
   return (
     <div className="content-inner">
@@ -90,57 +61,60 @@ function Overview({ treatment, setTreatment, openThreat }) {
       <div className="section-head" style={{ marginTop: 28 }}>
         <span className="head-kanji kanji">衛</span>
         <div>
-          <div className="eyebrow">{w.windowed ? `Last ${win} days` : "Totals"} · uptime {uptime}</div>
+          <div className="eyebrow">All time · uptime {uptime}</div>
           <h2>Gate throughput</h2>
         </div>
         <div className="spacer"></div>
-        {JOEI.daily.length >= 2 ? (
-          <div className="seg" role="group" aria-label="Sparkline window">
-            {[7, 30].map((n) => (
-              <button key={n} className={win === n ? "active" : ""} onClick={() => setWin(n)}>{n}d</button>
-            ))}
-          </div>
-        ) : (
+        {!haveTrend && (
           <span className="faint" style={{ fontSize: 11 }}>
             {JOEI.daily.length === 0
-              ? "no history yet · set database.path to persist daily metrics"
-              : "charts appear after 2+ days of history"}
+              ? "no traffic recorded yet"
+              : `${trendNote} appears after 2+ days of traffic`}
           </span>
         )}
       </div>
 
       <div className="kpi-grid">
-        <KpiCard label={`Requests${w.suffix}`} value={fmtCompact(w.requests)}
-          delta={<><b>{fmtNum(k.requests_total)}</b> lifetime · {fmtNum(w.errors)} errors{w.windowed ? ` in ${win}d` : ""}</>} watermark="求"
-          spark={reqSpark} sparkColor="var(--washi-mut)" />
-        <KpiCard label={`Served from cache${w.suffix}`} value={(hitRate * 100).toFixed(1) + "%"} accent="jade"
-          delta={<><b>{fmtCompact(w.cacheHits)}</b> hits{w.windowed ? ` in ${win}d` : " total"}</>} watermark="蔵"
-          spark={hitSpark} sparkColor="var(--jade)" />
-        <KpiCard label={`Blocked${w.suffix}`} value={fmtNum(w.blocked)} accent="verm"
+        <KpiCard label="Requests" value={fmtCompact(k.requests_total)}
+          delta={<><b>{fmtNum(k.errors)}</b> errors</>} watermark="求"
+          spark={reqSpark} sparkColor="var(--washi-mut)" sparkNote={trendNote} />
+        <KpiCard label="Served from cache" value={(k.hit_rate * 100).toFixed(1) + "%"} accent="jade"
+          delta={<><b>{fmtCompact(k.cache_hits)}</b> hits</>} watermark="蔵"
+          spark={hitSpark} sparkColor="var(--jade)" sparkNote={trendNote} />
+        <KpiCard label="Blocked" value={fmtNum(k.blocked_total)} accent="verm"
           delta={<>423 Locked + 403 Forbidden</>} watermark="封"
-          spark={blkSpark} sparkColor="var(--vermilion)" />
-        {/* Quarantine is a current-state gauge, not a daily flow: no window. */}
+          spark={blkSpark} sparkColor="var(--vermilion)" sparkNote={trendNote} />
+        {/* Quarantine is a live gauge (quarantine.length), not a counter: how
+            many packages are held right now. It gets no sparkline — the daily
+            rows carry no quarantine depth, only the supply-block flow that
+            fills it, and plotting that under this number read as a history of
+            the gauge itself. */}
         <KpiCard label="In quarantine" value={fmtNum(k.quarantined)} accent="gold"
-          delta={<>held until min-age maturity</>} watermark="守"
-          spark={qSpark} sparkColor="var(--gold)" />
+          delta={<>held now · released at min-age maturity</>} watermark="守" />
       </div>
 
-      {/* block breakdown */}
-      <div className="card breakdown" style={{ marginTop: 14 }}>
+      {/* Block breakdown. "of which" and not "totalling": a block on a gate
+          outside supply/cve/malware that carries no denylist reason counts
+          toward blocked_total but lands in none of these buckets, so the four
+          are not promised to add up to the Blocked card. */}
+      <div className="faint" style={{ marginTop: 14, fontSize: 11, letterSpacing: ".04em" }}>
+        of which · all time
+      </div>
+      <div className="card breakdown" style={{ marginTop: 6 }}>
         <div className="bd">
-          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(w.supplyBlocked)}</span>
+          <span className="v" style={{ color: "var(--gold-l)" }}>{fmtNum(k.supply_blocked)}</span>
           <span className="l">衛 Supply-chain · 423</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(w.cveBlocked)}</span>
+          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(k.cve_blocked)}</span>
           <span className="l">浄 CVE blocked · 403</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(w.malwareBlocked)}</span>
+          <span className="v" style={{ color: "var(--vermilion-l)" }}>{fmtNum(k.malware_blocked)}</span>
           <span className="l">浄 Malware blocked · 403</span>
         </div>
         <div className="bd">
-          <span className="v" style={{ color: "var(--washi-soft)" }}>{fmtNum(w.denylisted)}</span>
+          <span className="v" style={{ color: "var(--washi-soft)" }}>{fmtNum(k.denylisted)}</span>
           <span className="l">Denylisted · 403</span>
         </div>
       </div>
