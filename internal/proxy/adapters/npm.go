@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,10 @@ type NPMAdapter struct {
 	upstreams  []string
 	httpClient *http.Client
 }
+
+// Compile-time proof that npm supports metadata filtering; the handler
+// type-asserts this capability rather than requiring it of every adapter.
+var _ gate.MetadataFilterer = (*NPMAdapter)(nil)
 
 // NewNPMAdapter creates an npm adapter over the given ordered upstream URLs.
 func NewNPMAdapter(upstreams []string, opts ...Option) *NPMAdapter {
@@ -209,4 +214,95 @@ func isNPMPackageName(s string) bool {
 		return len(parts) == 2 && len(parts[0]) > 1 && parts[1] != ""
 	}
 	return len(parts) == 1
+}
+
+// FilterVersions implements gate.MetadataFilterer. It rewrites an npm packument,
+// dropping every version decide rejects along with that version's "time" entry.
+// Unknown fields survive because the document is decoded one level deep, as raw
+// JSON. dist-tags are deliberately left alone: npm tolerates a tag naming a
+// version that is no longer listed and falls back to the highest one that is,
+// which spares this project a semver comparator.
+func (a *NPMAdapter) FilterVersions(doc []byte, decide gate.VersionDecider) (gate.FilteredDocument, error) {
+	unchanged := gate.FilteredDocument{Body: doc}
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &top); err != nil {
+		return gate.FilteredDocument{}, fmt.Errorf("decoding npm packument: %w", err)
+	}
+	rawVersions, ok := top["versions"]
+	if !ok {
+		return unchanged, nil
+	}
+	var versions map[string]json.RawMessage
+	if err := json.Unmarshal(rawVersions, &versions); err != nil {
+		return gate.FilteredDocument{}, fmt.Errorf("decoding npm packument versions: %w", err)
+	}
+
+	published := npmPublishDates(top["time"])
+
+	var removed []string
+	for version := range versions {
+		if !decide(version, published[version]) {
+			removed = append(removed, version)
+		}
+	}
+	if len(removed) == 0 {
+		return unchanged, nil
+	}
+	sort.Strings(removed)
+	if len(removed) == len(versions) {
+		// Serving an empty version list would turn every install of this
+		// package into a resolution error. Hand back the original and let the
+		// artifact gate state the real reason at download time.
+		return gate.FilteredDocument{Body: doc, Removed: removed, AllRejected: true}, nil
+	}
+
+	for _, v := range removed {
+		delete(versions, v)
+	}
+	encodedVersions, err := json.Marshal(versions)
+	if err != nil {
+		return gate.FilteredDocument{}, fmt.Errorf("encoding npm packument versions: %w", err)
+	}
+	top["versions"] = encodedVersions
+
+	if raw, ok := top["time"]; ok {
+		var times map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &times); err == nil {
+			for _, v := range removed {
+				delete(times, v)
+			}
+			if encoded, err := json.Marshal(times); err == nil {
+				top["time"] = encoded
+			}
+		}
+	}
+
+	body, err := json.Marshal(top)
+	if err != nil {
+		return gate.FilteredDocument{}, fmt.Errorf("encoding npm packument: %w", err)
+	}
+	return gate.FilteredDocument{Body: body, Removed: removed}, nil
+}
+
+// npmPublishDates decodes a packument's "time" map. It is absent from the
+// abbreviated document, and a version missing from it yields the zero time,
+// which mutes any age-based rule for that version. The map also holds the
+// non-version keys "created" and "modified"; they are harmless here because
+// only version names are ever looked up.
+func npmPublishDates(raw json.RawMessage) map[string]time.Time {
+	if len(raw) == 0 {
+		return nil
+	}
+	var times map[string]string
+	if err := json.Unmarshal(raw, &times); err != nil {
+		return nil
+	}
+	out := make(map[string]time.Time, len(times))
+	for version, s := range times {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			out[version] = t.UTC()
+		}
+	}
+	return out
 }
