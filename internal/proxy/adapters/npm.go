@@ -175,3 +175,38 @@ func (a *NPMAdapter) UpstreamURLs(r *http.Request) []string {
 	}
 	return urls
 }
+
+// NormalizeMetadataRequest reports whether r asks for an npm packument — the
+// per-package document npm resolves version ranges from. Only a bare package
+// name qualifies: registry service endpoints live under "/-/", and a
+// single-version manifest ("/left-pad/1.3.0") carries no version list to
+// rewrite, so both are proxied untouched and blocked at download time instead.
+func (a *NPMAdapter) NormalizeMetadataRequest(r *http.Request) (*gate.MetadataRef, bool) {
+	if r.Method != http.MethodGet {
+		return nil, false
+	}
+	// URL.Path arrives percent-decoded, so npm's two spellings of a scoped name
+	// — "/@types%2fnode" and "/@types/node" — are the same string here.
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	if !isNPMPackageName(name) {
+		return nil, false
+	}
+	return &gate.MetadataRef{Ecosystem: "npm", Name: name}, true
+}
+
+// isNPMPackageName reports whether s is a bare package name: "left-pad" or
+// "@types/node". A leading "-" segment is a registry service endpoint, and any
+// extra segment means a tarball or a single-version manifest.
+func isNPMPackageName(s string) bool {
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, "/")
+	if parts[0] == "-" {
+		return false
+	}
+	if strings.HasPrefix(s, "@") {
+		return len(parts) == 2 && len(parts[0]) > 1 && parts[1] != ""
+	}
+	return len(parts) == 1
+}

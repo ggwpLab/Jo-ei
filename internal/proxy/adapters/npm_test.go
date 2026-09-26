@@ -273,3 +273,50 @@ func TestNPMAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
 		"https://mirror.example.org/lodash/-/lodash-1.0.0.tgz",
 	}, urls)
 }
+
+func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		wantOK   bool
+		wantName string
+	}{
+		{name: "bare package", method: http.MethodGet, path: "/left-pad", wantOK: true, wantName: "left-pad"},
+		{name: "scoped encoded", method: http.MethodGet, path: "/@types%2fnode", wantOK: true, wantName: "@types/node"},
+		{name: "scoped plain", method: http.MethodGet, path: "/@types/node", wantOK: true, wantName: "@types/node"},
+
+		// A single-version manifest has no version list to rewrite.
+		{name: "version manifest", method: http.MethodGet, path: "/left-pad/1.3.0"},
+		{name: "scoped version manifest", method: http.MethodGet, path: "/@types/node/20.0.0"},
+
+		// Tarballs belong to NormalizeRequest, service endpoints to nobody.
+		{name: "tarball", method: http.MethodGet, path: "/left-pad/-/left-pad-1.3.0.tgz"},
+		{name: "search", method: http.MethodGet, path: "/-/v1/search"},
+		{name: "npm api", method: http.MethodGet, path: "/-/npm/v1/user"},
+		{name: "whoami", method: http.MethodGet, path: "/-/whoami"},
+
+		// Publishes must never be rewritten.
+		{name: "publish put", method: http.MethodPut, path: "/left-pad"},
+		{name: "publish post", method: http.MethodPost, path: "/left-pad"},
+
+		{name: "root", method: http.MethodGet, path: "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(tt.method, tt.path, nil)
+			ref, ok := a.NormalizeMetadataRequest(r)
+			require.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				assert.Nil(t, ref)
+				return
+			}
+			require.NotNil(t, ref)
+			assert.Equal(t, "npm", ref.Ecosystem)
+			assert.Equal(t, tt.wantName, ref.Name)
+		})
+	}
+}
