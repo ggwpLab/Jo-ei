@@ -280,13 +280,20 @@ func TestIntegration_NPMMetadataFilter_RevalidateWithOurTag(t *testing.T) {
 	ourTag := first.Header.Get("ETag")
 	require.True(t, strings.HasPrefix(ourTag, `"joei.`))
 
-	second, body := getPackument(t, srv, map[string]string{"If-None-Match": ourTag})
+	second, body := getPackument(t, srv, map[string]string{
+		"If-None-Match":     ourTag,
+		"If-Modified-Since": "Tue, 16 Apr 2024 05:01:58 GMT",
+	})
 
 	assert.Equal(t, http.StatusNotModified, second.StatusCode)
 	assert.Empty(t, body)
 	assert.Equal(t, ourTag, second.Header.Get("ETag"))
+	assert.Equal(t, "public, max-age=300", second.Header.Get("Cache-Control"),
+		"the own-304 path deliberately relays upstream's Cache-Control")
 	assert.Empty(t, reg.lastPackumentRequest(t).Get("If-None-Match"),
 		"our own tag must never be forwarded upstream")
+	assert.Empty(t, reg.lastPackumentRequest(t).Get("If-Modified-Since"),
+		"a date validator paired with our tag must not reach upstream either")
 }
 
 // Scenario C: once nothing needs hiding, the client is handed upstream's own
@@ -307,6 +314,8 @@ func TestIntegration_NPMMetadataFilter_RecoversToUpstreamTag(t *testing.T) {
 	assert.Contains(t, versionsOf(t, body), "1.3.0")
 	assert.Equal(t, `"upstream-v1"`, second.Header.Get("ETag"))
 	assert.NotEmpty(t, second.Header.Get("Last-Modified"), "an untouched document keeps upstream's date too")
+	assert.Empty(t, reg.lastPackumentRequest(t).Get("If-None-Match"),
+		"the synthetic tag must be stripped on this path too, or this test cannot tell the strip from a 200 upstream never revalidated")
 }
 
 // Scenario D: a client holding an upstream tag is revalidated against upstream,
@@ -316,13 +325,25 @@ func TestIntegration_NPMMetadataFilter_RelaysUpstream304(t *testing.T) {
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	before := reg.bodyCount()
-	resp, body := getPackument(t, srv, map[string]string{"If-None-Match": `"upstream-v1"`})
+	// Accept-Encoding is the discriminating bit here: on the base behaviour
+	// (no early return), the empty 304 body still reaches writeMetadataDocument,
+	// which sees the client accepts gzip and sets Content-Encoding on the
+	// response — a relayed 304 never runs that code at all, so this header's
+	// presence is what would catch the early return being deleted. Equal
+	// StatusCode/empty-body/upstream-saw-the-tag assertions alone pass under
+	// both behaviours and would not.
+	resp, body := getPackument(t, srv, map[string]string{
+		"If-None-Match":   `"upstream-v1"`,
+		"Accept-Encoding": "gzip",
+	})
 
 	assert.Equal(t, http.StatusNotModified, resp.StatusCode)
 	assert.Empty(t, body)
+	assert.Empty(t, resp.Header.Get("Content-Encoding"),
+		"a relayed 304 must carry only upstream's headers, not ones this proxy would add while writing a document")
 	assert.Equal(t, `"upstream-v1"`, reg.lastPackumentRequest(t).Get("If-None-Match"),
 		"an upstream tag must be forwarded so upstream can answer 304")
-	assert.Equal(t, before, reg.bodyCount(), "no document body should have been served or parsed")
+	assert.Equal(t, before, reg.bodyCount(), "the mock served no body for this request either way; this only confirms the mock's own count, not what the proxy did with it")
 }
 
 // Scenario F: dry_run reports but never blocks, so it must never hide either.

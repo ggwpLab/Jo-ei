@@ -90,11 +90,16 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	// request alone: a client holding one of our tags needs a fresh body to
 	// filter, so its validators must not reach upstream. Everyone else keeps
 	// their conditional request, and with it the chance of a cheap 304.
-	clientTag := r.Header.Get("If-None-Match")
-	ourTag := holdsSyntheticETag(clientTag)
+	//
+	// Header.Values, not Header.Get: repeated If-None-Match field lines are
+	// legal HTTP and mean the same thing as one comma-joined line, so joining
+	// them here is what makes detection independent of which shape the client
+	// chose to send.
+	clientTag := strings.Join(r.Header.Values("If-None-Match"), ", ")
+	clientHoldsOurTag := holdsSyntheticETag(clientTag)
 
 	outbound := r
-	if ourTag {
+	if clientHoldsOurTag {
 		outbound = r.Clone(r.Context())
 		outbound.Header.Del("If-None-Match")
 		outbound.Header.Del("If-Modified-Since")
@@ -107,8 +112,10 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 	defer resp.Body.Close()
 
-	// Upstream says the document is unchanged, and the client is holding an
-	// upstream tag for it. There is no body to filter and none is needed.
+	// Upstream answered 304, which it can only do for a validator we
+	// forwarded — a client holding one of our tags never reaches this branch,
+	// because its validators were stripped above. There is no body to filter
+	// and none is needed.
 	if resp.StatusCode == http.StatusNotModified {
 		copyProxyHeaders(w.Header(), resp.Header)
 		w.WriteHeader(http.StatusNotModified)
@@ -174,11 +181,16 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	rewritten := len(filtered.Removed) > 0 && !filtered.AllRejected
 	if rewritten {
 		tag := syntheticETag(filtered.Body)
-		if ourTag && etagMatches(clientTag, tag) {
+		if clientHoldsOurTag && etagMatches(clientTag, tag) {
 			// Same document, same policy, same rewrite: the copy the client
 			// already has is current.
 			w.Header().Set("ETag", tag)
-			w.Header().Set("Cache-Control", resp.Header.Get("Cache-Control"))
+			if cc := resp.Header.Get("Cache-Control"); cc != "" {
+				w.Header().Set("Cache-Control", cc)
+			}
+			if vary := resp.Header.Get("Vary"); vary != "" {
+				w.Header().Set("Vary", vary)
+			}
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
