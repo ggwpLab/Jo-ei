@@ -107,16 +107,37 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 
 	// Requests that would get different answers must not be coalesced: the
-	// path picks the package, Accept picks the document shape, and a client
-	// holding one of our tags needs a body while others may be given a 304.
-	key := fmt.Sprintf("%s\x00%s\x00%t", r.URL.Path, r.Header.Get("Accept"), clientHoldsOurTag)
+	// full request URI — not just the path — picks the document, since
+	// UpstreamURLs builds the fetch from it query string included; Accept
+	// picks the document's shape; and the validators actually forwarded
+	// upstream (after a held synthetic tag is stripped above) decide whether
+	// upstream can answer 304 at all. Folding in the forwarded validators
+	// themselves, rather than just whether one was held, is what matters: two
+	// callers that both forward nothing share a flight safely (neither can
+	// get a 304), but a caller forwarding no validator must never share a
+	// flight with one forwarding a validator upstream might honour — sharing
+	// that flight would hand the first caller a bodyless 304 for a request
+	// that has nothing to revalidate.
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s",
+		r.URL.RequestURI(),
+		r.Header.Get("Accept"),
+		outbound.Header.Get("If-None-Match"),
+		outbound.Header.Get("If-Modified-Since"),
+	)
 
 	fetch, oversized, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)
 	switch {
 	case oversized:
 		// Not shareable across callers: its remainder is a live reader that
-		// belongs to one request, so this caller fetches it alone.
-		h.streamOversizedMetadata(w, r, outbound, &log)
+		// belongs to one request, so this caller fetches it alone. outbound's
+		// body was already drained and closed by the flight's own attempt —
+		// Clone shares the Body field by reference rather than deep-copying it,
+		// so fetchMetadataDocument's internal clone consumed the same body this
+		// one would reuse — so this retry needs a fresh one. Metadata GETs never
+		// carry a request body, so NoBody is exact here, not just a stand-in.
+		retry := outbound.Clone(outbound.Context())
+		retry.Body = http.NoBody
+		h.streamOversizedMetadata(w, r, retry, &log)
 		return
 	case fetch == nil && (err == nil || errors.Is(err, errNoUpstreams) || errors.Is(err, errUnreadableRequestBody)):
 		// forwardUpstream itself never produced a usable response — every
@@ -127,10 +148,15 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		h.writeForwardError(w, r, atts, err)
 		return
 	case err != nil:
-		// A cancelled context means the client hung up mid-fetch, not a genuine
-		// upstream or read failure; logging that at error level would flood the
-		// logs every time an npm install aborts a large packument early. The 502
-		// itself is still correct either way — the client gets nothing usable.
+		// A cancelled context would mean the client hung up mid-fetch, not a
+		// genuine upstream or read failure — but fetchMetadataDocument detaches
+		// the flight's own request context (context.WithoutCancel), precisely so
+		// one caller's disconnect cannot cancel the fetch for every other waiter
+		// sharing it. That means this specific read can no longer observe THIS
+		// caller's cancellation: an aborted npm install now surfaces later, at
+		// the write in writeMetadataDocument, which carries the matching
+		// demotion. This branch is kept defensive-only, in case a future path
+		// ever reaches readMetadataDocument without that detachment.
 		event := log.Error()
 		if errors.Is(err, context.Canceled) {
 			event = log.Debug()
@@ -141,9 +167,11 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 
 	// Upstream answered 304, which it can only do for a validator we
-	// forwarded — a client holding one of our tags never reaches this branch,
-	// because its validators were stripped above. There is no body to filter
-	// and none is needed.
+	// forwarded — and every caller sharing this flight forwarded the exact
+	// same validator, because the coalescing key folds it in above. A client
+	// holding one of our tags never reaches this branch, because its
+	// validators were stripped above and upstream never 304s an empty
+	// conditional. There is no body to filter and none is needed.
 	if fetch.status == http.StatusNotModified {
 		copyProxyHeaders(w.Header(), fetch.header)
 		w.WriteHeader(http.StatusNotModified)
@@ -351,7 +379,17 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(status)
 	if _, err := w.Write(payload); err != nil {
-		log.Error().Err(err).Msg("metadata filter: writing response")
+		// The flight's own fetch context is detached from any one caller's
+		// disconnect (see fetchMetadataDocument), so an aborted npm install no
+		// longer shows up as a cancelled read — it shows up here instead, as a
+		// write against a connection the client already closed. That is the
+		// same "client hung up, not a proxy failure" case the read path used to
+		// demote, just relocated to where it now actually occurs.
+		event := log.Error()
+		if r.Context().Err() != nil {
+			event = log.Debug()
+		}
+		event.Err(err).Msg("metadata filter: writing response")
 	}
 }
 

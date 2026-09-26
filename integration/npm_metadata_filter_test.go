@@ -208,10 +208,47 @@ func newNPMProxy(t *testing.T, reg *npmRegistry, minAgeHours int, mode string, c
 }
 
 // getPackument fetches the packument through the proxy with the given headers.
+// It calls testify's require, so it must only ever run on the test's own
+// goroutine — a concurrency test that needs the fetch itself to happen on a
+// worker goroutine must use fetchPackument instead.
 func getPackument(t *testing.T, srv *httptest.Server, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/left-pad", nil)
+	resp, body, err := doFetchPackument(srv, headers)
 	require.NoError(t, err)
+	return resp, body
+}
+
+// packumentResult is one worker goroutine's outcome from fetchPackument: the
+// status and body it got, or the error it hit, collected without ever calling
+// into testify from that goroutine. t.FailNow (which require/assert.FailNow
+// call on failure) is documented as illegal outside the test's own goroutine,
+// so a concurrency test reads err here and asserts on it after wg.Wait().
+type packumentResult struct {
+	status int
+	body   []byte
+	err    error
+}
+
+// fetchPackument is getPackument's goroutine-safe twin: same request, but every
+// failure is returned rather than asserted, so it is safe to call directly
+// from a worker goroutine in a concurrency test.
+func fetchPackument(srv *httptest.Server, headers map[string]string) packumentResult {
+	resp, body, err := doFetchPackument(srv, headers)
+	if err != nil {
+		return packumentResult{err: err}
+	}
+	return packumentResult{status: resp.StatusCode, body: body}
+}
+
+// doFetchPackument is the shared plumbing behind getPackument and
+// fetchPackument: build the request, disable transport compression so
+// Content-Length assertions elsewhere hold, and read the body fully before
+// closing it.
+func doFetchPackument(srv *httptest.Server, headers map[string]string) (*http.Response, []byte, error) {
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/left-pad", nil)
+	if err != nil {
+		return nil, nil, err
+	}
 	req.Header.Set("Accept", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -222,11 +259,15 @@ func getPackument(t *testing.T, srv *httptest.Server, headers map[string]string)
 	// correct code. Disabling transport compression keeps this test in control
 	// of what encoding is requested and how the response is read.
 	resp, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	resp.Body.Close()
-	return resp, body
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, body, nil
 }
 
 func versionsOf(t *testing.T, body []byte) map[string]json.RawMessage {
@@ -467,29 +508,73 @@ func TestIntegration_NPMMetadataFilter_CoalescesConcurrentFetches(t *testing.T) 
 	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 1, Delay: 150 * time.Millisecond})
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
-	type outcome struct {
-		status int
-		body   []byte
-	}
-
 	const clients = 8
-	results := make([]outcome, clients)
+	results := make([]packumentResult, clients)
 	var wg sync.WaitGroup
 	wg.Add(clients)
 	for i := 0; i < clients; i++ {
 		go func(i int) {
 			defer wg.Done()
-			resp, body := getPackument(t, srv, nil)
-			results[i] = outcome{status: resp.StatusCode, body: body}
+			results[i] = fetchPackument(srv, nil)
 		}(i)
 	}
 	wg.Wait()
 
 	for _, res := range results {
+		require.NoError(t, res.err)
 		assert.Equal(t, http.StatusOK, res.status)
 		assert.NotContains(t, versionsOf(t, res.body), "1.3.0")
 	}
 
-	assert.Less(t, reg.bodyCount(), clients,
-		"8 simultaneous clients should not each fetch the document")
+	// assert.Less alone would pass at 7 of 8 fetches, which would not notice
+	// coalescing degrading to nearly nothing. Every one of the 8 identical,
+	// simultaneous requests belongs to one flight, so this allows a little
+	// timing slop (a fetch that lands just before the delayed leader responds
+	// could miss the flight and start its own) without accepting "coalescing
+	// barely happened" as a pass.
+	assert.LessOrEqual(t, reg.bodyCount(), 2,
+		"8 simultaneous, identical clients should collapse onto (at most) one upstream fetch")
+}
+
+// Concurrent callers whose forwarded validators differ must not share a
+// flight: the flight's result is handed to every caller verbatim, so if the
+// leader's validator earns a 304 from upstream, a follower coalesced into the
+// same flight would be handed that same bodyless 304 — including a follower
+// that sent no validator at all and has nothing to revalidate against. This is
+// the axis the coalescing key exists to separate.
+func TestIntegration_NPMMetadataFilter_MixedValidatorsDoNotShareAFlight(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{
+		OldHours: 240, FreshHours: 1, HonourConditional: true, Delay: 150 * time.Millisecond,
+	})
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	var unconditional, conditional packumentResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		unconditional = fetchPackument(srv, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		conditional = fetchPackument(srv, map[string]string{"If-None-Match": `"upstream-v1"`})
+	}()
+	wg.Wait()
+
+	require.NoError(t, unconditional.err)
+	require.NoError(t, conditional.err)
+
+	// The request that sent no validator has no cached copy to revalidate, so
+	// it must always get a real document back — never a 304, coalesced with
+	// the conditional caller's flight or not.
+	assert.Equal(t, http.StatusOK, unconditional.status,
+		"a request with no validator must never be answered 304")
+	assert.NotContains(t, versionsOf(t, unconditional.body), "1.3.0")
+
+	// The conditional caller sent a validator the mock honours, and it is on
+	// its own flight — the coalescing key differs by the forwarded validator,
+	// so it is never coalesced with the unconditional request above — so it
+	// deterministically gets upstream's own 304 regardless of which goroutine
+	// the scheduler happens to run first.
+	assert.Equal(t, http.StatusNotModified, conditional.status)
 }
