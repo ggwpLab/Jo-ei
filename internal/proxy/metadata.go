@@ -46,6 +46,18 @@ func holdsSyntheticETag(ifNoneMatch string) bool {
 	return false
 }
 
+// etagMatches reports whether an If-None-Match list contains tag exactly. The
+// tags this proxy mints are strong validators, so a weak comparison would be
+// wrong here.
+func etagMatches(ifNoneMatch, tag string) bool {
+	for _, candidate := range strings.Split(ifNoneMatch, ",") {
+		if strings.TrimSpace(candidate) == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // metadataFilterRef reports the package a filterable metadata request describes.
 // It is false unless filtering is enabled and this registry's adapter can
 // rewrite documents at all, which keeps the cost off every other ecosystem.
@@ -74,12 +86,34 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 
 	log := h.cfg.Logger.With().Str("ecosystem", mref.Ecosystem).Str("package", mref.Name).Logger()
 
-	resp, atts, err := h.forwardUpstream(r)
+	// The whole cost model rests on this branch, and it is decided from the
+	// request alone: a client holding one of our tags needs a fresh body to
+	// filter, so its validators must not reach upstream. Everyone else keeps
+	// their conditional request, and with it the chance of a cheap 304.
+	clientTag := r.Header.Get("If-None-Match")
+	ourTag := holdsSyntheticETag(clientTag)
+
+	outbound := r
+	if ourTag {
+		outbound = r.Clone(r.Context())
+		outbound.Header.Del("If-None-Match")
+		outbound.Header.Del("If-Modified-Since")
+	}
+
+	resp, atts, err := h.forwardUpstream(outbound)
 	if resp == nil {
 		h.writeForwardError(w, r, atts, err)
 		return
 	}
 	defer resp.Body.Close()
+
+	// Upstream says the document is unchanged, and the client is holding an
+	// upstream tag for it. There is no body to filter and none is needed.
+	if resp.StatusCode == http.StatusNotModified {
+		copyProxyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
 	doc, rest, err := readMetadataDocument(resp, int64(h.cfg.MetadataFilterMaxMB)<<20)
 	if err != nil {
@@ -138,6 +172,17 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 
 	rewritten := len(filtered.Removed) > 0 && !filtered.AllRejected
+	if rewritten {
+		tag := syntheticETag(filtered.Body)
+		if ourTag && etagMatches(clientTag, tag) {
+			// Same document, same policy, same rewrite: the copy the client
+			// already has is current.
+			w.Header().Set("ETag", tag)
+			w.Header().Set("Cache-Control", resp.Header.Get("Cache-Control"))
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
 	writeMetadataDocument(w, r, resp, filtered.Body, rewritten, log)
 }
 

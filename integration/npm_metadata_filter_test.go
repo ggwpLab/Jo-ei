@@ -34,6 +34,10 @@ type npmRegistry struct {
 	etag string
 	gzip bool
 
+	// honourConditional makes the mock answer 304 to a matching If-None-Match,
+	// the way a real registry does.
+	honourConditional bool
+
 	mu                sync.Mutex
 	packumentRequests []http.Header
 	bodiesServed      int
@@ -45,14 +49,14 @@ type npmRegistry struct {
 // newNPMRegistry, which returns a plain *httptest.Server for a different
 // fixture shape and lives in the same package.
 //
-// gzipResponse is taken as a constructor parameter, set on reg before
-// httptest.NewServer starts serving, rather than assigned afterwards: the
-// server handler reads reg.gzip from its own goroutine, and every other
-// mutable field on npmRegistry is guarded by reg.mu, so writing this one late
-// without a lock would be the odd one out.
-func newNPMMetadataRegistry(t *testing.T, oldHours, freshHours int, gzipResponse bool) *npmRegistry {
+// gzipResponse and honourConditional are taken as constructor parameters, set
+// on reg before httptest.NewServer starts serving, rather than assigned
+// afterwards: the server handler reads both from its own goroutine, and every
+// other mutable field on npmRegistry is guarded by reg.mu, so writing either
+// one late without a lock would be the odd one out.
+func newNPMMetadataRegistry(t *testing.T, oldHours, freshHours int, gzipResponse, honourConditional bool) *npmRegistry {
 	t.Helper()
-	reg := &npmRegistry{etag: `"upstream-v1"`, gzip: gzipResponse}
+	reg := &npmRegistry{etag: `"upstream-v1"`, gzip: gzipResponse, honourConditional: honourConditional}
 
 	packument := func() []byte {
 		old := time.Now().UTC().Add(-time.Duration(oldHours) * time.Hour)
@@ -84,6 +88,12 @@ func newNPMMetadataRegistry(t *testing.T, oldHours, freshHours int, gzipResponse
 			reg.mu.Lock()
 			reg.packumentRequests = append(reg.packumentRequests, r.Header.Clone())
 			reg.mu.Unlock()
+
+			if reg.honourConditional && r.Header.Get("If-None-Match") == reg.etag {
+				w.Header().Set("ETag", reg.etag)
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
 
 			w.Header().Set("ETag", reg.etag)
 			w.Header().Set("Last-Modified", "Tue, 16 Apr 2024 05:01:58 GMT")
@@ -117,6 +127,12 @@ func (reg *npmRegistry) lastPackumentRequest(t *testing.T) http.Header {
 	defer reg.mu.Unlock()
 	require.NotEmpty(t, reg.packumentRequests, "upstream saw no packument request")
 	return reg.packumentRequests[len(reg.packumentRequests)-1]
+}
+
+func (reg *npmRegistry) bodyCount() int {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.bodiesServed
 }
 
 // newNPMProxy wires a proxy in front of reg. minAgeHours and mode drive the
@@ -182,7 +198,7 @@ func versionsOf(t *testing.T, body []byte) map[string]json.RawMessage {
 // Scenario A: the fresh version is hidden, and the response carries our own
 // validator instead of upstream's.
 func TestIntegration_NPMMetadataFilter_HidesFreshVersion(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1, false)
+	reg := newNPMMetadataRegistry(t, 240, 1, false, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, nil)
@@ -201,7 +217,7 @@ func TestIntegration_NPMMetadataFilter_HidesFreshVersion(t *testing.T) {
 // Scenario G: hiding every version would break every install of the package, so
 // the original document is served and the tarball still answers 423.
 func TestIntegration_NPMMetadataFilter_AllVersionsBlockedServesOriginal(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 2, 1, false)
+	reg := newNPMMetadataRegistry(t, 2, 1, false, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, nil)
@@ -220,7 +236,7 @@ func TestIntegration_NPMMetadataFilter_AllVersionsBlockedServesOriginal(t *testi
 
 // Scenario I: the cap doubles as a kill switch.
 func TestIntegration_NPMMetadataFilter_ZeroCapDisablesFiltering(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1, false)
+	reg := newNPMMetadataRegistry(t, 240, 1, false, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 0)
 
 	resp, body := getPackument(t, srv, nil)
@@ -236,7 +252,7 @@ func TestIntegration_NPMMetadataFilter_ZeroCapDisablesFiltering(t *testing.T) {
 // Content-Encoding happened to come back) is what would catch a silent
 // fallback to identity encoding on a compression failure.
 func TestIntegration_NPMMetadataFilter_GzippedUpstream(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1, true)
+	reg := newNPMMetadataRegistry(t, 240, 1, true, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, map[string]string{"Accept-Encoding": "gzip"})
@@ -251,4 +267,72 @@ func TestIntegration_NPMMetadataFilter_GzippedUpstream(t *testing.T) {
 	plain, err := io.ReadAll(zr)
 	require.NoError(t, err)
 	assert.NotContains(t, versionsOf(t, plain), "1.3.0")
+}
+
+// Scenario B: a client revalidating with our tag gets a 304, and its
+// If-None-Match must not reach upstream — a 304 from upstream would leave us
+// with no body to filter.
+func TestIntegration_NPMMetadataFilter_RevalidateWithOurTag(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, 240, 1, false, false)
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	first, _ := getPackument(t, srv, nil)
+	ourTag := first.Header.Get("ETag")
+	require.True(t, strings.HasPrefix(ourTag, `"joei.`))
+
+	second, body := getPackument(t, srv, map[string]string{"If-None-Match": ourTag})
+
+	assert.Equal(t, http.StatusNotModified, second.StatusCode)
+	assert.Empty(t, body)
+	assert.Equal(t, ourTag, second.Header.Get("ETag"))
+	assert.Empty(t, reg.lastPackumentRequest(t).Get("If-None-Match"),
+		"our own tag must never be forwarded upstream")
+}
+
+// Scenario C: once nothing needs hiding, the client is handed upstream's own
+// validator and the untouched bytes, which puts it back on the fast path.
+func TestIntegration_NPMMetadataFilter_RecoversToUpstreamTag(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, 240, 1, false, false)
+	blocking := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	first, _ := getPackument(t, blocking, nil)
+	ourTag := first.Header.Get("ETag")
+	require.True(t, strings.HasPrefix(ourTag, `"joei.`))
+
+	// min_age_hours lowered below the fresh version's age: nothing is blocked.
+	allowing := newNPMProxy(t, reg, 0, "enforce", 32)
+	second, body := getPackument(t, allowing, map[string]string{"If-None-Match": ourTag})
+
+	assert.Equal(t, http.StatusOK, second.StatusCode)
+	assert.Contains(t, versionsOf(t, body), "1.3.0")
+	assert.Equal(t, `"upstream-v1"`, second.Header.Get("ETag"))
+	assert.NotEmpty(t, second.Header.Get("Last-Modified"), "an untouched document keeps upstream's date too")
+}
+
+// Scenario D: a client holding an upstream tag is revalidated against upstream,
+// and an upstream 304 is relayed without a body being read at all.
+func TestIntegration_NPMMetadataFilter_RelaysUpstream304(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, 240, 1, false, true)
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	before := reg.bodyCount()
+	resp, body := getPackument(t, srv, map[string]string{"If-None-Match": `"upstream-v1"`})
+
+	assert.Equal(t, http.StatusNotModified, resp.StatusCode)
+	assert.Empty(t, body)
+	assert.Equal(t, `"upstream-v1"`, reg.lastPackumentRequest(t).Get("If-None-Match"),
+		"an upstream tag must be forwarded so upstream can answer 304")
+	assert.Equal(t, before, reg.bodyCount(), "no document body should have been served or parsed")
+}
+
+// Scenario F: dry_run reports but never blocks, so it must never hide either.
+func TestIntegration_NPMMetadataFilter_DryRunHidesNothing(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, 240, 1, false, false)
+	srv := newNPMProxy(t, reg, 24, "dry_run", 32)
+
+	resp, body := getPackument(t, srv, nil)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, versionsOf(t, body), "1.3.0")
+	assert.Equal(t, `"upstream-v1"`, resp.Header.Get("ETag"))
 }

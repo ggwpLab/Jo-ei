@@ -53,6 +53,16 @@ func TestHoldsSyntheticETag(t *testing.T) {
 	}
 }
 
+func TestETagMatches(t *testing.T) {
+	ours := syntheticETag([]byte(`{}`))
+
+	assert.True(t, etagMatches(ours, ours))
+	assert.True(t, etagMatches(`"other", `+ours, ours))
+	assert.False(t, etagMatches(`"other"`, ours))
+	assert.False(t, etagMatches("", ours))
+	assert.False(t, etagMatches(`W/`+ours, ours), "a weak tag is not a match for a strong one")
+}
+
 func TestClientAcceptsGzip(t *testing.T) {
 	tests := []struct {
 		name   string
