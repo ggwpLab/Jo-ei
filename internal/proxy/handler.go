@@ -61,6 +61,10 @@ type Handler struct {
 	// recheckGroup coalesces concurrent lazy re-checks of the same cache
 	// entry: one flight scans, every waiter shares the outcome.
 	recheckGroup singleflight.Group
+	// metadataGroup coalesces concurrent fetches of one metadata document, so a
+	// CI fleet resolving the same dependency tree costs one upstream request
+	// rather than one per worker.
+	metadataGroup singleflight.Group
 }
 
 // NewHandler creates a new ProxyHandler.

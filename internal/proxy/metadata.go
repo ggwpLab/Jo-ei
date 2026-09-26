@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // syntheticETagPrefix marks an ETag this proxy minted for a rewritten metadata
@@ -105,25 +106,27 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		outbound.Header.Del("If-Modified-Since")
 	}
 
-	resp, atts, err := h.forwardUpstream(outbound)
-	if resp == nil {
+	// Requests that would get different answers must not be coalesced: the
+	// path picks the package, Accept picks the document shape, and a client
+	// holding one of our tags needs a body while others may be given a 304.
+	key := fmt.Sprintf("%s\x00%s\x00%t", r.URL.Path, r.Header.Get("Accept"), clientHoldsOurTag)
+
+	fetch, oversized, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)
+	switch {
+	case oversized:
+		// Not shareable across callers: its remainder is a live reader that
+		// belongs to one request, so this caller fetches it alone.
+		h.streamOversizedMetadata(w, r, outbound, &log)
+		return
+	case fetch == nil && (err == nil || errors.Is(err, errNoUpstreams) || errors.Is(err, errUnreadableRequestBody)):
+		// forwardUpstream itself never produced a usable response — every
+		// mirror failed, or none is configured — and writeForwardError already
+		// knows how to report that precisely (404 vs 502 vs 500). A document-read
+		// failure never lands here: forwardUpstream returns no error but these
+		// two sentinels, so any other non-nil err below is readMetadataDocument's.
 		h.writeForwardError(w, r, atts, err)
 		return
-	}
-	defer resp.Body.Close()
-
-	// Upstream answered 304, which it can only do for a validator we
-	// forwarded — a client holding one of our tags never reaches this branch,
-	// because its validators were stripped above. There is no body to filter
-	// and none is needed.
-	if resp.StatusCode == http.StatusNotModified {
-		copyProxyHeaders(w.Header(), resp.Header)
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	doc, rest, err := readMetadataDocument(resp, int64(h.cfg.MetadataFilterMaxMB)<<20)
-	if err != nil {
+	case err != nil:
 		// A cancelled context means the client hung up mid-fetch, not a genuine
 		// upstream or read failure; logging that at error level would flood the
 		// logs every time an npm install aborts a large packument early. The 502
@@ -136,30 +139,22 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
-	if rest != nil {
-		// Over the cap. Stream it through untouched rather than fail: the
-		// artifact gate still blocks the download, which is today's behaviour.
-		log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
-			Msg("metadata filter: document over cap, serving unfiltered")
-		copyProxyHeaders(w.Header(), resp.Header)
-		w.Header().Del("Content-Length") // length is unknown once decompressed
-		w.Header().Del("Content-Encoding")
-		w.WriteHeader(resp.StatusCode)
-		if _, err := w.Write(doc); err != nil {
-			log.Error().Err(err).Msg("metadata filter: writing oversized document")
-			return
-		}
-		if _, err := io.Copy(w, rest); err != nil {
-			log.Error().Err(err).Msg("metadata filter: streaming oversized document")
-		}
+
+	// Upstream answered 304, which it can only do for a validator we
+	// forwarded — a client holding one of our tags never reaches this branch,
+	// because its validators were stripped above. There is no body to filter
+	// and none is needed.
+	if fetch.status == http.StatusNotModified {
+		copyProxyHeaders(w.Header(), fetch.header)
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
 	var undated int
-	filtered, err := filterer.FilterVersions(doc, h.versionDecider(r.Context(), mref, &undated))
+	filtered, err := filterer.FilterVersions(fetch.doc, h.versionDecider(r.Context(), mref, &undated))
 	if err != nil {
 		log.Warn().Err(err).Msg("metadata filter: unparseable document, serving unfiltered")
-		filtered = gate.FilteredDocument{Body: doc}
+		filtered = gate.FilteredDocument{Body: fetch.doc}
 	}
 	if undated > 0 {
 		// The abbreviated packument has no publish dates at all, so min-age
@@ -185,17 +180,95 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 			// Same document, same policy, same rewrite: the copy the client
 			// already has is current.
 			w.Header().Set("ETag", tag)
-			if cc := resp.Header.Get("Cache-Control"); cc != "" {
+			if cc := fetch.header.Get("Cache-Control"); cc != "" {
 				w.Header().Set("Cache-Control", cc)
 			}
-			if vary := resp.Header.Get("Vary"); vary != "" {
+			if vary := fetch.header.Get("Vary"); vary != "" {
 				w.Header().Set("Vary", vary)
 			}
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 	}
-	writeMetadataDocument(w, r, resp, filtered.Body, rewritten, log)
+	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, rewritten, log)
+}
+
+// metadataFetch is one coalesced upstream document: the bytes, and the response
+// header and status they came with. A document over the cap is not shareable —
+// its remainder is a live reader belonging to one request — so oversized
+// fetches are reported and the caller retries alone.
+type metadataFetch struct {
+	doc    []byte
+	header http.Header
+	status int
+}
+
+// fetchMetadataDocument fetches and decompresses a metadata document, collapsing
+// concurrent callers for the same package onto one upstream request — the case
+// that matters is a CI fleet resolving the same dependency tree at once, which
+// would otherwise cost one upstream fetch per worker instead of one overall.
+// oversized is true when the document exceeded limit, in which case the caller
+// must fetch and stream it itself: the remainder of an oversized body is a live
+// reader that cannot be handed to more than one waiter.
+//
+// The upstream request is detached from the triggering caller's context before
+// the fetch runs, the same way recheckExpired detaches its own flight: a leader
+// whose client disconnects mid-flight must not cancel the fetch for every other
+// waiter sharing it.
+func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64) (f *metadataFetch, oversized bool, atts upstream.Attempts, err error) {
+	type result struct {
+		fetch     *metadataFetch
+		oversized bool
+		atts      upstream.Attempts
+		err       error
+	}
+	v, _, _ := h.metadataGroup.Do(key, func() (any, error) {
+		flightReq := r.Clone(context.WithoutCancel(r.Context()))
+		resp, atts, err := h.forwardUpstream(flightReq)
+		if resp == nil {
+			return result{atts: atts, err: err}, nil
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotModified {
+			return result{fetch: &metadataFetch{header: resp.Header.Clone(), status: resp.StatusCode}}, nil
+		}
+
+		doc, rest, err := readMetadataDocument(resp, limit)
+		if err != nil {
+			return result{err: err}, nil
+		}
+		if rest != nil {
+			return result{oversized: true}, nil
+		}
+		return result{fetch: &metadataFetch{doc: doc, header: resp.Header.Clone(), status: resp.StatusCode}}, nil
+	})
+	res := v.(result)
+	return res.fetch, res.oversized, res.atts, res.err
+}
+
+// streamOversizedMetadata serves a document too large to buffer: the artifact
+// gate blocks the download instead, which is the behaviour that predates
+// metadata filtering. It streams the upstream body verbatim, compression and
+// all, rather than resuming the partially-decompressed body from a coalesced
+// attempt — that body's remainder belongs to whichever request read it, not to
+// this one, so this caller fetches its own copy alone.
+func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, r *http.Request, outbound *http.Request, log *zerolog.Logger) {
+	log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
+		Msg("metadata filter: document over cap, serving unfiltered")
+
+	resp, atts, err := h.forwardUpstream(outbound)
+	if resp == nil {
+		h.writeForwardError(w, r, atts, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	copyProxyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Error().Err(err).Msg("metadata filter: streaming oversized document")
+	}
 }
 
 // versionDecider builds the per-version predicate the filter asks. It mirrors
@@ -253,8 +326,8 @@ func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io
 // way back into a stale rewrite; an untouched body keeps upstream's validators
 // and with them the cheap 304 that follows. The body is re-compressed when the
 // client asked for gzip, so rewriting costs the client hop nothing.
-func writeMetadataDocument(w http.ResponseWriter, r *http.Request, resp *http.Response, body []byte, rewritten bool, log zerolog.Logger) {
-	copyProxyHeaders(w.Header(), resp.Header)
+func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.Header, status int, body []byte, rewritten bool, log zerolog.Logger) {
+	copyProxyHeaders(w.Header(), header)
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
 	if rewritten {
@@ -276,7 +349,7 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, resp *http.Re
 		}
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(status)
 	if _, err := w.Write(payload); err != nil {
 		log.Error().Err(err).Msg("metadata filter: writing response")
 	}

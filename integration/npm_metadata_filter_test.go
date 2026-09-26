@@ -43,6 +43,11 @@ type npmRegistry struct {
 	// grow. Zero means "no padding" — the ordinary small document.
 	padBytes int
 
+	// delay widens the window a packument request spends upstream, so a test
+	// asserting that concurrent callers coalesce onto one fetch has room to
+	// launch all of them before the first one returns. Zero means no delay.
+	delay time.Duration
+
 	mu                sync.Mutex
 	packumentRequests []http.Header
 	bodiesServed      int
@@ -57,6 +62,7 @@ type npmRegistryOptions struct {
 	Gzip              bool
 	HonourConditional bool
 	PadBytes          int
+	Delay             time.Duration
 }
 
 // newNPMMetadataRegistry serves "left-pad" with 1.2.0 published OldHours ago
@@ -76,6 +82,7 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 		gzip:              opts.Gzip,
 		honourConditional: opts.HonourConditional,
 		padBytes:          opts.PadBytes,
+		delay:             opts.Delay,
 	}
 
 	packument := func() []byte {
@@ -120,6 +127,10 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 			reg.mu.Lock()
 			reg.packumentRequests = append(reg.packumentRequests, r.Header.Clone())
 			reg.mu.Unlock()
+
+			if reg.delay > 0 {
+				time.Sleep(reg.delay) // widen the window so coalescing is observable
+			}
 
 			if reg.honourConditional && r.Header.Get("If-None-Match") == reg.etag {
 				w.Header().Set("ETag", reg.etag)
@@ -446,4 +457,39 @@ func TestIntegration_NPMMetadataFilter_VersionManifestUntouched(t *testing.T) {
 	require.NoError(t, err)
 	defer tarball.Body.Close()
 	assert.Equal(t, http.StatusLocked, tarball.StatusCode)
+}
+
+// Concurrent clients asking for one packument must cost one upstream fetch.
+// Each goroutine only records its own outcome; every require/assert call that
+// could call t.FailNow runs afterwards on the test goroutine, because that
+// call is documented as illegal from any other goroutine.
+func TestIntegration_NPMMetadataFilter_CoalescesConcurrentFetches(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 1, Delay: 150 * time.Millisecond})
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	type outcome struct {
+		status int
+		body   []byte
+	}
+
+	const clients = 8
+	results := make([]outcome, clients)
+	var wg sync.WaitGroup
+	wg.Add(clients)
+	for i := 0; i < clients; i++ {
+		go func(i int) {
+			defer wg.Done()
+			resp, body := getPackument(t, srv, nil)
+			results[i] = outcome{status: resp.StatusCode, body: body}
+		}(i)
+	}
+	wg.Wait()
+
+	for _, res := range results {
+		assert.Equal(t, http.StatusOK, res.status)
+		assert.NotContains(t, versionsOf(t, res.body), "1.3.0")
+	}
+
+	assert.Less(t, reg.bodyCount(), clients,
+		"8 simultaneous clients should not each fetch the document")
 }
