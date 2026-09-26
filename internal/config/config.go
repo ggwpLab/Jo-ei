@@ -58,6 +58,9 @@ func (c *Config) Validate() error {
 	if c.Malware.MaxConcurrentScans < 0 {
 		return fmt.Errorf("malware.max_concurrent_scans must not be negative")
 	}
+	if c.Server.MetadataFilterMaxMB < 0 {
+		return fmt.Errorf("server.metadata_filter_max_mb must not be negative")
+	}
 	if c.Health.ProbeIntervalSeconds < 0 {
 		return fmt.Errorf("health.probe_interval_seconds must not be negative")
 	}
@@ -114,6 +117,16 @@ type ServerConfig struct {
 	// allowance is twice this value. Zero or negative selects the default
 	// (DefaultUpstreamRatePerSecond); set a large value to effectively disable.
 	UpstreamRatePerSecond int `mapstructure:"upstream_rate_per_second"`
+	// MetadataFilterMaxMB caps the decompressed size of a registry metadata
+	// document the proxy will buffer in order to hide versions policy blocks, so
+	// a client's own resolver picks an allowed version instead of failing on a
+	// blocked download. A document over the cap is streamed through unfiltered
+	// and the artifact gate blocks it at download time instead. Zero disables
+	// metadata filtering entirely; unlike UpstreamMaxConcurrent above, zero here
+	// is not "unset" — the default (32) comes from Load's SetDefault, so an
+	// explicit zero in YAML survives as the feature's kill switch rather than
+	// being replaced.
+	MetadataFilterMaxMB int `mapstructure:"metadata_filter_max_mb"`
 }
 
 // DefaultUpstreamMaxConcurrent is the per-host outbound concurrency cap applied
@@ -304,6 +317,7 @@ func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
+	v.SetDefault("server.metadata_filter_max_mb", 32)
 	v.SetConfigFile(path)
 	v.SetEnvPrefix("JOEI")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
