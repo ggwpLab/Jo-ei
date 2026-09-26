@@ -34,6 +34,12 @@ type HandlerConfig struct {
 	// failure serves the stale entry and leaves the timestamp untouched.
 	CVERecheckTTL     time.Duration
 	MalwareRecheckTTL time.Duration
+	// MetadataFilterMaxMB caps the decompressed size of a metadata document the
+	// handler will buffer in order to hide versions policy would block at
+	// download time. A larger document is streamed through unfiltered, and the
+	// artifact gate blocks it at download time instead. Zero disables metadata
+	// filtering entirely.
+	MetadataFilterMaxMB int
 	// HTTPClient downloads artifacts and serves transparent proxy requests.
 	// Optional; nil uses a private client with a 60s timeout. Pass a client whose
 	// transport caps per-host concurrency (shared with the adapters) so artifact
@@ -74,6 +80,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
+		if mref, ok := h.metadataFilterRef(r); ok {
+			h.proxyMetadata(w, r, mref)
+			return
+		}
 		// Metadata / simple API — proxy transparently, no interception
 		h.proxyTransparent(w, r)
 		return
