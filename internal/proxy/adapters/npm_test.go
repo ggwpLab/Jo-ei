@@ -302,6 +302,11 @@ func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
 		{name: "publish put", method: http.MethodPut, path: "/left-pad"},
 		{name: "publish post", method: http.MethodPost, path: "/left-pad"},
 
+		// The GET half of npm's read-modify-write cycle (`npm deprecate`, `npm
+		// owner add/rm`) carries "?write=true" and PUTs the whole document back;
+		// a rewritten GET here would carry hidden versions into that PUT.
+		{name: "write query", method: http.MethodGet, path: "/left-pad?write=true"},
+
 		{name: "root", method: http.MethodGet, path: "/"},
 	}
 

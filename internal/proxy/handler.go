@@ -490,7 +490,9 @@ func (h *Handler) forwardUpstream(r *http.Request) (*http.Response, upstream.Att
 }
 
 // writeForwardError answers a request that never got a usable upstream
-// response: 404 when every mirror said so, 502 otherwise.
+// response: 500 when no upstream is configured, 400 when the client's own
+// request body could not be read, 404 when every mirror said not-found, and
+// 502 for every other upstream failure.
 func (h *Handler) writeForwardError(w http.ResponseWriter, r *http.Request, atts upstream.Attempts, err error) {
 	switch {
 	case errors.Is(err, errNoUpstreams):

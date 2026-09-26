@@ -336,6 +336,19 @@ client resolves a blocked version and receives `423` at download:
 This invariant is what makes those trade-offs acceptable. It must hold in
 tests, not just in prose — see scenarios E, G and J under Testing.
 
+The coalescing key (§3) folds in the request URI, `Accept`, and whichever
+validators actually get forwarded — deliberately not `Authorization` or
+`Cookie`. Two clients with different tokens asking for the same private scoped
+packument concurrently share one flight, and both receive the document fetched
+with whichever client's request became the leader. This is not a new hole:
+`tryDownload` already builds its upstream request with no client headers at
+all, and the artifact cache is keyed on ecosystem/name/version with no
+credential in it either, so a cached tarball is already served to any client
+that asks. Coalescing packuments across credentials is consistent with that
+existing credential-blind model. Splitting flights per credential would be a
+deliberate change, not a fix, and it would cost this feature the coalescing it
+exists for.
+
 ### 8. Documents without publish dates
 
 The abbreviated packument (`Accept: application/vnd.npm.install-v1+json`) has
@@ -360,8 +373,12 @@ development machine.
 ### 9. Telemetry
 
 One structured log line per rewritten document, naming the package, the
-versions removed, the count, and the rule that removed each one. That log line
-is the whole mechanism, and it is what answers "why did an old version arrive".
+versions removed, and the count. It does **not** name the rule that removed
+each one: `gate.VersionDecider` returns a bare bool, so by the time the log
+line is written the per-version reason (denylist vs. min-age) is already
+gone. That log line is what answers "why did an old version arrive" — for
+"which rule hid it", an operator would need `VersionDecider` widened to
+return a reason alongside the bool, which this change does not do.
 
 Nothing enters `gate.Event`: `aggregate.record` increments `requests` for every
 event (`aggregate.go:42`), so a filtering event would inflate the request count
@@ -403,6 +420,14 @@ Each is named here so it is not re-derived later:
    any counter added by this change would be unreadable (§9). Exposing counters
    properly is worth doing, for far more than this feature, and belongs in its
    own change.
+6. **The over-cap path's N+1-fetch cost.** The coalesced flight reads up to
+   `metadata_filter_max_mb`, discovers the document is oversized, and discards
+   that buffer; the caller then re-fetches the whole document from scratch to
+   stream it (§5). So every request for an over-cap packument transfers
+   roughly one cap's worth of bytes it throws away, and N concurrent waiters on
+   one flight cost N+1 upstream fetches instead of 1. Fixing it means deciding
+   whether an oversized result can be shared at all — its "rest" is a live
+   reader tied to one response, not a byte slice every waiter can read from.
 
 ## Testing
 

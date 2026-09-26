@@ -56,7 +56,8 @@ once the artifact is in hand. Set `metadata_filter_max_mb` to `0` to disable
 the feature entirely; a document larger than the configured cap is also
 streamed through untouched rather than buffered. This applies to npm only —
 every other registry's metadata is proxied untouched regardless of this
-setting.
+setting. It cannot help a lockfile-pinned install (`npm ci`): there is no
+range left to resolve, so a blocked exact version still fails with `423`.
 
 ## `tls`
 

@@ -75,9 +75,10 @@ func (h *Handler) metadataFilterRef(r *http.Request) (*gate.MetadataRef, bool) {
 
 // proxyMetadata serves a metadata document with the versions policy would block
 // at download time hidden from it, so the client's own resolver never picks one.
-// Every path that cannot filter — an oversized document, an unparseable one, a
-// policy that rejects everything — serves the document untouched, because the
-// artifact gate remains the enforcement boundary.
+// Every path that cannot filter — an oversized document, a coding this proxy
+// does not decode, a non-200 response, an unparseable document, a policy that
+// rejects everything — serves the document untouched, because the artifact
+// gate remains the enforcement boundary.
 func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *gate.MetadataRef) {
 	filterer, ok := h.cfg.Adapter.(gate.MetadataFilterer)
 	if !ok { // unreachable: metadataFilterRef already asserted the capability
@@ -125,19 +126,20 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		outbound.Header.Get("If-Modified-Since"),
 	)
 
-	fetch, oversized, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)
+	fetch, relay, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)
 	switch {
-	case oversized:
-		// Not shareable across callers: its remainder is a live reader that
-		// belongs to one request, so this caller fetches it alone. outbound's
-		// body was already drained and closed by the flight's own attempt —
-		// Clone shares the Body field by reference rather than deep-copying it,
-		// so fetchMetadataDocument's internal clone consumed the same body this
-		// one would reuse — so this retry needs a fresh one. Metadata GETs never
-		// carry a request body, so NoBody is exact here, not just a stand-in.
+	case relay != "":
+		// Not shareable across callers: whatever the flight read (or chose not
+		// to read) belongs to that one attempt, so this caller fetches its own
+		// copy. outbound's body was already drained and closed by the flight's
+		// own attempt — Clone shares the Body field by reference rather than
+		// deep-copying it, so fetchMetadataDocument's internal clone consumed
+		// the same body this one would reuse — so this retry needs a fresh one.
+		// Metadata GETs never carry a request body, so NoBody is exact here,
+		// not just a stand-in.
 		retry := outbound.Clone(outbound.Context())
 		retry.Body = http.NoBody
-		h.streamOversizedMetadata(w, r, retry, &log)
+		h.streamOversizedMetadata(w, r, retry, &log, relay)
 		return
 	case fetch == nil && (err == nil || errors.Is(err, errNoUpstreams) || errors.Is(err, errUnreadableRequestBody)):
 		// forwardUpstream itself never produced a usable response — every
@@ -231,24 +233,37 @@ type metadataFetch struct {
 	status int
 }
 
+// relayReason names why a fetched response cannot be filtered and must instead
+// be relayed verbatim by streamOversizedMetadata. The empty value means the
+// document is filterable.
+type relayReason string
+
+const (
+	relayOversized   relayReason = "oversized" // exceeded the configured cap
+	relayEncoding    relayReason = "encoding"  // a Content-Encoding this proxy does not decode
+	relayNonOKStatus relayReason = "status"    // not a 200 document (redirect, 204, ...); 304 is handled separately
+)
+
 // fetchMetadataDocument fetches and decompresses a metadata document, collapsing
 // concurrent callers for the same package onto one upstream request — the case
 // that matters is a CI fleet resolving the same dependency tree at once, which
 // would otherwise cost one upstream fetch per worker instead of one overall.
-// oversized is true when the document exceeded limit, in which case the caller
-// must fetch and stream it itself: the remainder of an oversized body is a live
-// reader that cannot be handed to more than one waiter.
+// A non-empty relay reason means the caller must fetch and stream the document
+// itself instead of filtering it: an oversized body's remainder is a live
+// reader that cannot be handed to more than one waiter, an unsupported coding
+// was left untouched precisely so it could still be relayed, and a non-200
+// status is not a document to filter at all.
 //
 // The upstream request is detached from the triggering caller's context before
 // the fetch runs, the same way recheckExpired detaches its own flight: a leader
 // whose client disconnects mid-flight must not cancel the fetch for every other
 // waiter sharing it.
-func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64) (f *metadataFetch, oversized bool, atts upstream.Attempts, err error) {
+func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64) (f *metadataFetch, relay relayReason, atts upstream.Attempts, err error) {
 	type result struct {
-		fetch     *metadataFetch
-		oversized bool
-		atts      upstream.Attempts
-		err       error
+		fetch *metadataFetch
+		relay relayReason
+		atts  upstream.Attempts
+		err   error
 	}
 	v, _, _ := h.metadataGroup.Do(key, func() (any, error) {
 		flightReq := r.Clone(context.WithoutCancel(r.Context()))
@@ -261,29 +276,52 @@ func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64
 		if resp.StatusCode == http.StatusNotModified {
 			return result{fetch: &metadataFetch{header: resp.Header.Clone(), status: resp.StatusCode}}, nil
 		}
+		if resp.StatusCode != http.StatusOK {
+			// A mirror answering with a redirect, 204, or similar sub-400 status
+			// (forwardUpstream accepts anything under 400) has no document to
+			// filter. Relay it exactly as proxyTransparent would have, rather
+			// than buffering it, failing to parse it, and relaying it anyway
+			// with a Content-Length that no longer matches nothing consumed.
+			return result{relay: relayNonOKStatus}, nil
+		}
 
-		doc, rest, err := readMetadataDocument(resp, limit)
+		doc, rest, unsupportedEncoding, err := readMetadataDocument(resp, limit)
 		if err != nil {
 			return result{err: err}, nil
 		}
 		if rest != nil {
-			return result{oversized: true}, nil
+			reason := relayOversized
+			if unsupportedEncoding {
+				reason = relayEncoding
+			}
+			return result{relay: reason}, nil
 		}
 		return result{fetch: &metadataFetch{doc: doc, header: resp.Header.Clone(), status: resp.StatusCode}}, nil
 	})
 	res := v.(result)
-	return res.fetch, res.oversized, res.atts, res.err
+	return res.fetch, res.relay, res.atts, res.err
 }
 
-// streamOversizedMetadata serves a document too large to buffer: the artifact
-// gate blocks the download instead, which is the behaviour that predates
-// metadata filtering. It streams the upstream body verbatim, compression and
-// all, rather than resuming the partially-decompressed body from a coalesced
-// attempt — that body's remainder belongs to whichever request read it, not to
-// this one, so this caller fetches its own copy alone.
-func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, r *http.Request, outbound *http.Request, log *zerolog.Logger) {
-	log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
-		Msg("metadata filter: document over cap, serving unfiltered")
+// streamOversizedMetadata serves a document this proxy cannot filter: too
+// large to buffer, compressed with a coding it does not decode, or not a 200
+// document at all. In every case the artifact gate blocks the download
+// instead, which is the behaviour that predates metadata filtering. It streams
+// the upstream body verbatim, compression (and status) and all, rather than
+// resuming a partially-read body from a coalesced attempt — that body's
+// remainder belongs to whichever request read it, not to this one, so this
+// caller fetches its own copy alone.
+func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, r *http.Request, outbound *http.Request, log *zerolog.Logger, relay relayReason) {
+	switch relay {
+	case relayOversized:
+		log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
+			Msg("metadata filter: document over cap, serving unfiltered")
+	case relayEncoding:
+		log.Warn().Msg("metadata filter: content-encoding not supported, serving unfiltered")
+	default:
+		// A non-200 sub-400 status is not a filtering degradation — there was
+		// never a document to filter — so it does not earn a Warn.
+		log.Debug().Msg("metadata filter: non-200 upstream response, relaying unfiltered")
+	}
 
 	resp, atts, err := h.forwardUpstream(outbound)
 	if resp == nil {
@@ -327,26 +365,43 @@ func (h *Handler) versionDecider(ctx context.Context, mref *gate.MetadataRef, un
 }
 
 // readMetadataDocument reads a decompressed metadata document, at most limit
-// bytes of it. A non-nil rest means the document is larger than the limit and is
-// positioned at the remainder, so the caller can stream what it did not buffer
-// instead of failing.
-func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io.Reader, err error) {
+// bytes of it. A non-nil rest means the document cannot be filtered and must be
+// streamed instead: either it is larger than limit, in which case rest is
+// positioned at the remainder, or its Content-Encoding is a coding this proxy
+// does not decode, in which case rest is resp.Body itself, still untouched.
+// unsupportedEncoding distinguishes the two so the caller can log accurately;
+// both route to the same verbatim relay.
+//
+// Only a bare "gzip" is decoded. Anything else this proxy might see —
+// "deflate", "br", "zstd", or a coding list such as "gzip, identity" — is left
+// alone deliberately: decoding here happens before anything has been read from
+// resp.Body, so an unsupported coding can still be relayed byte-for-byte. The
+// alternative — reading it as if it were plain JSON — is silent corruption:
+// FilterVersions fails to unmarshal the still-compressed bytes, "unfiltered"
+// serving then strips the Content-Encoding that described them and ships a
+// body the client is told is plain JSON but cannot decode.
+func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io.Reader, unsupportedEncoding bool, err error) {
 	src := io.Reader(resp.Body)
-	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-		zr, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, nil, fmt.Errorf("decompressing metadata document: %w", err)
+	switch coding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); {
+	case coding == "" || strings.EqualFold(coding, "identity"):
+		// Already plain; nothing to decode.
+	case strings.EqualFold(coding, "gzip"):
+		zr, zerr := gzip.NewReader(resp.Body)
+		if zerr != nil {
+			return nil, nil, false, fmt.Errorf("decompressing metadata document: %w", zerr)
 		}
 		src = zr
+	default:
+		return nil, resp.Body, true, nil
 	}
 	buf, err := io.ReadAll(io.LimitReader(src, limit+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading metadata document: %w", err)
+		return nil, nil, false, fmt.Errorf("reading metadata document: %w", err)
 	}
 	if int64(len(buf)) <= limit {
-		return buf, nil, nil
+		return buf, nil, false, nil
 	}
-	return buf, src, nil
+	return buf, src, false, nil
 }
 
 // writeMetadataDocument serves a buffered document. A rewritten body gets this

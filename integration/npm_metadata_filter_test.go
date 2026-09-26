@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -31,8 +32,9 @@ import (
 // several assertions are about the request it received rather than the body.
 type npmRegistry struct {
 	*httptest.Server
-	etag string
-	gzip bool
+	etag    string
+	gzip    bool
+	deflate bool // serves a coding this proxy does not decode, to exercise the verbatim relay (B2)
 
 	// honourConditional makes the mock answer 304 to a matching If-None-Match,
 	// the way a real registry does.
@@ -60,6 +62,7 @@ type npmRegistryOptions struct {
 	OldHours          int
 	FreshHours        int
 	Gzip              bool
+	Deflate           bool
 	HonourConditional bool
 	PadBytes          int
 	Delay             time.Duration
@@ -80,6 +83,7 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 	reg := &npmRegistry{
 		etag:              `"upstream-v1"`,
 		gzip:              opts.Gzip,
+		deflate:           opts.Deflate,
 		honourConditional: opts.HonourConditional,
 		padBytes:          opts.PadBytes,
 		delay:             opts.Delay,
@@ -151,6 +155,21 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 			if reg.gzip {
 				w.Header().Set("Content-Encoding", "gzip")
 				zw := gzip.NewWriter(w)
+				defer zw.Close()
+				zw.Write(packument())
+				return
+			}
+			if reg.deflate && strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "deflate") {
+				// A coding this proxy does not decode (B2): the fix must relay
+				// it byte-for-byte rather than misreading the compressed bytes
+				// as plain JSON. Gated on the client actually asking for it
+				// (unlike the unconditional reg.gzip above) so it does not also
+				// corrupt NPMAdapter.FetchMetadata's own plain GET to this same
+				// endpoint on the download-time gate path — Go's Transport
+				// auto-decodes gzip for a request that never asked for it, but
+				// it does not do the same for deflate.
+				w.Header().Set("Content-Encoding", "deflate")
+				zw, _ := flate.NewWriter(w, flate.DefaultCompression)
 				defer zw.Close()
 				zw.Write(packument())
 				return
@@ -471,6 +490,75 @@ func TestIntegration_NPMMetadataFilter_OverCapFallsBackToTheGate(t *testing.T) {
 	assert.Greater(t, len(body), 1<<20, "the served body must itself cross the cap, or this proves nothing about the streaming path")
 	assert.Contains(t, versionsOf(t, body), "1.3.0", "an oversized document is not rewritten")
 	assert.Empty(t, resp.Header.Get("Content-Length"), "the length is unknown once streamed")
+
+	tarball, err := http.Get(srv.URL + "/left-pad/-/left-pad-1.3.0.tgz")
+	require.NoError(t, err)
+	defer tarball.Body.Close()
+	assert.Equal(t, http.StatusLocked, tarball.StatusCode)
+}
+
+// Scenario E, gzip variant: a gzip-accepting client against a gzip-compressed
+// over-cap document. Nothing else in the suite combines the two, and it covers
+// two things that matter directly to B2: readMetadataDocument's
+// gunzip-then-overflow interaction (the cap is detected on the *decompressed*
+// stream, while the retry that follows re-fetches and streams the *compressed*
+// one from scratch — see fetchMetadataDocument), and streamOversizedMetadata
+// relaying a gzip body verbatim. That second one is exactly where a wrong
+// Content-Encoding on the relay would surface, so this test also guards the
+// B2 fix: if the relay ever stripped or mismatched the encoding, the gzip
+// decode below would fail instead of silently passing.
+func TestIntegration_NPMMetadataFilter_OverCapGzipFallsBackToTheGate(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 1, PadBytes: 2 << 20, Gzip: true})
+	srv := newNPMProxy(t, reg, 24, "enforce", 1)
+
+	resp, body := getPackument(t, srv, map[string]string{"Accept-Encoding": "gzip"})
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"),
+		"the compressed body must be relayed as-is, not stripped of its encoding")
+	assert.Empty(t, resp.Header.Get("Content-Length"), "the length is unknown once streamed")
+
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err)
+	defer zr.Close()
+	plain, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	assert.Greater(t, len(plain), 1<<20, "the decompressed body must itself cross the cap")
+	assert.Contains(t, versionsOf(t, plain), "1.3.0", "an oversized document is not rewritten")
+
+	tarball, err := http.Get(srv.URL + "/left-pad/-/left-pad-1.3.0.tgz")
+	require.NoError(t, err)
+	defer tarball.Body.Close()
+	assert.Equal(t, http.StatusLocked, tarball.StatusCode)
+}
+
+// B2 regression: a Content-Encoding this proxy does not decode must never be
+// read as if it were plain JSON. Before the fix, readMetadataDocument decoded
+// only literal "gzip" and left everything else — deflate, br, zstd, a
+// comma-list — on the raw (still-compressed) reader; FilterVersions then
+// failed to unmarshal those bytes, the "unparseable document" fallback logged
+// a warning and served fetch.doc unchanged, and writeMetadataDocument stripped
+// the very Content-Encoding that described those bytes and set a
+// Content-Length for them — corrupting the body while labeling it plain JSON.
+// The fix decides from the header before consuming anything and routes an
+// unsupported coding to the same verbatim relay path streamOversizedMetadata
+// already provides for "cannot filter", so this asserts the coding survives
+// untouched and the document underneath is provably unfiltered.
+func TestIntegration_NPMMetadataFilter_UnsupportedEncodingFallsBackToTheGate(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 1, Deflate: true})
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	resp, body := getPackument(t, srv, map[string]string{"Accept-Encoding": "deflate"})
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "deflate", resp.Header.Get("Content-Encoding"),
+		"a coding this proxy cannot decode must be relayed untouched, not stripped or mislabeled")
+
+	zr := flate.NewReader(bytes.NewReader(body))
+	defer zr.Close()
+	plain, err := io.ReadAll(zr)
+	require.NoError(t, err, "the relayed body must still be valid deflate, not corrupted")
+	assert.Contains(t, versionsOf(t, plain), "1.3.0", "cannot filter what it cannot decode; the artifact gate takes over instead")
 
 	tarball, err := http.Get(srv.URL + "/left-pad/-/left-pad-1.3.0.tgz")
 	require.NoError(t, err)
