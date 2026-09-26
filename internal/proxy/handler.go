@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -414,15 +415,22 @@ func (h *Handler) evictRechecked(ref *gate.PackageRef, log zerolog.Logger) {
 	}
 }
 
-// proxyTransparent forwards a non-intercepted request to each configured
-// upstream in order, streaming back the first response with status < 400.
-// If all fail, returns 404 (all were 404/410) or 502.
-func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
+// errNoUpstreams and errUnreadableRequestBody are local failures — nothing was
+// attempted upstream — so callers answer them directly instead of reporting an
+// upstream outage.
+var (
+	errNoUpstreams           = errors.New("no upstream configured")
+	errUnreadableRequestBody = errors.New("unreadable request body")
+)
+
+// forwardUpstream replays r against each configured upstream in priority order
+// and returns the first response with status < 400; the caller closes its body.
+// A nil response with a nil error means every upstream failed and atts carries
+// each mirror's own outcome.
+func (h *Handler) forwardUpstream(r *http.Request) (*http.Response, upstream.Attempts, error) {
 	urls := h.cfg.Adapter.UpstreamURLs(r)
 	if len(urls) == 0 {
-		h.cfg.Logger.Error().Msg("adapter returned no upstream URLs for transparent request")
-		http.Error(w, "no upstream configured", http.StatusInternalServerError)
-		return
+		return nil, nil, errNoUpstreams
 	}
 
 	// Buffer the request body once so it can be replayed across attempts.
@@ -431,8 +439,7 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 		b, err := io.ReadAll(r.Body)
 		r.Body.Close()
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
+			return nil, nil, errUnreadableRequestBody
 		}
 		body = b
 	}
@@ -460,34 +467,63 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if resp.StatusCode < 400 {
-			for _, hop := range hopByHopHeaders {
-				resp.Header.Del(hop)
-			}
-			for key, vals := range resp.Header {
-				for _, v := range vals {
-					w.Header().Add(key, v)
-				}
-			}
-			w.WriteHeader(resp.StatusCode)
-			if _, err := io.Copy(w, resp.Body); err != nil {
-				h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
-			}
-			resp.Body.Close()
-			return
+			return resp, atts, nil
 		}
 		atts.Add(url, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d", resp.StatusCode), time.Since(start))
 		resp.Body.Close()
 	}
+	return nil, atts, nil
+}
 
-	if atts.AllNotFound() {
+// writeForwardError answers a request that never got a usable upstream
+// response: 404 when every mirror said so, 502 otherwise.
+func (h *Handler) writeForwardError(w http.ResponseWriter, r *http.Request, atts upstream.Attempts, err error) {
+	switch {
+	case errors.Is(err, errNoUpstreams):
+		h.cfg.Logger.Error().Msg("adapter returned no upstream URLs for transparent request")
+		http.Error(w, "no upstream configured", http.StatusInternalServerError)
+	case errors.Is(err, errUnreadableRequestBody):
+		http.Error(w, "bad request", http.StatusBadRequest)
+	case atts.AllNotFound():
 		h.cfg.Logger.Warn().Array("upstream_attempts", atts).
 			Str("path", r.URL.Path).Msg("transparent proxy: not found on any upstream")
 		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		h.cfg.Logger.Error().Array("upstream_attempts", atts).
+			Str("path", r.URL.Path).Msg("transparent proxy: no upstream available")
+		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	}
+}
+
+// copyProxyHeaders copies src onto dst minus the hop-by-hop headers, which are
+// connection-specific and must not cross a proxy.
+func copyProxyHeaders(dst http.Header, src http.Header) {
+	for key, vals := range src {
+		for _, v := range vals {
+			dst.Add(key, v)
+		}
+	}
+	for _, hop := range hopByHopHeaders {
+		dst.Del(hop)
+	}
+}
+
+// proxyTransparent forwards a non-intercepted request to each configured
+// upstream in order, streaming back the first response with status < 400.
+// If all fail, returns 404 (all were 404/410) or 502.
+func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
+	resp, atts, err := h.forwardUpstream(r)
+	if resp == nil {
+		h.writeForwardError(w, r, atts, err)
 		return
 	}
-	h.cfg.Logger.Error().Array("upstream_attempts", atts).
-		Str("path", r.URL.Path).Msg("transparent proxy: no upstream available")
-	http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	defer resp.Body.Close()
+
+	copyProxyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
+	}
 }
 
 // tryDownload downloads url to a temp file. Returns the temp path and the
