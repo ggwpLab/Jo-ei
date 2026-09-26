@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,35 @@ func TestHoldsSyntheticETag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, holdsSyntheticETag(tt.inm))
+		})
+	}
+}
+
+func TestClientAcceptsGzip(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		want   bool
+	}{
+		{name: "empty", header: "", want: false},
+		{name: "plain gzip", header: "gzip", want: true},
+		{name: "uppercase", header: "GZIP", want: true},
+		{name: "other encoding only", header: "deflate", want: false},
+		{name: "identity only", header: "identity", want: false},
+		{name: "explicit refusal", header: "gzip;q=0", want: false},
+		{name: "explicit refusal with decimal", header: "gzip;q=0.0", want: false},
+		{name: "explicit refusal with a space before the qvalue", header: "gzip; q=0", want: false},
+		{name: "explicit refusal with three decimal places", header: "gzip;q=0.000", want: false},
+		{name: "low but nonzero preference is still acceptance", header: "gzip;q=0.5", want: true},
+		{name: "gzip listed among several encodings", header: "deflate, gzip", want: true},
+		{name: "gzip refused among several encodings", header: "deflate, gzip;q=0", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
+			r.Header.Set("Accept-Encoding", tt.header)
+			assert.Equal(t, tt.want, clientAcceptsGzip(r))
 		})
 	}
 }

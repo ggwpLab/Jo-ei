@@ -6,12 +6,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
@@ -80,7 +83,15 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 
 	doc, rest, err := readMetadataDocument(resp, int64(h.cfg.MetadataFilterMaxMB)<<20)
 	if err != nil {
-		log.Error().Err(err).Msg("metadata filter: reading upstream document")
+		// A cancelled context means the client hung up mid-fetch, not a genuine
+		// upstream or read failure; logging that at error level would flood the
+		// logs every time an npm install aborts a large packument early. The 502
+		// itself is still correct either way — the client gets nothing usable.
+		event := log.Error()
+		if errors.Is(err, context.Canceled) {
+			event = log.Debug()
+		}
+		event.Err(err).Msg("metadata filter: reading upstream document")
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -127,7 +138,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 
 	rewritten := len(filtered.Removed) > 0 && !filtered.AllRejected
-	writeMetadataDocument(w, r, resp, filtered.Body, rewritten)
+	writeMetadataDocument(w, r, resp, filtered.Body, rewritten, log)
 }
 
 // versionDecider builds the per-version predicate the filter asks. It mirrors
@@ -185,7 +196,7 @@ func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io
 // way back into a stale rewrite; an untouched body keeps upstream's validators
 // and with them the cheap 304 that follows. The body is re-compressed when the
 // client asked for gzip, so rewriting costs the client hop nothing.
-func writeMetadataDocument(w http.ResponseWriter, r *http.Request, resp *http.Response, body []byte, rewritten bool) {
+func writeMetadataDocument(w http.ResponseWriter, r *http.Request, resp *http.Response, body []byte, rewritten bool, log zerolog.Logger) {
 	copyProxyHeaders(w.Header(), resp.Header)
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
@@ -199,17 +210,26 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, resp *http.Re
 		if gzipped, err := gzipBytes(body); err == nil {
 			payload = gzipped
 			w.Header().Set("Content-Encoding", "gzip")
+		} else {
+			// Fall back to identity: a client that asked for gzip can still
+			// decode plain bytes, so this must not fail the response. But a
+			// silent fallback is undiagnosable, so it gets a log line same as
+			// every other write failure in this file.
+			log.Error().Err(err).Msg("metadata filter: compressing response, serving identity")
 		}
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(payload); err != nil {
-		return
+		log.Error().Err(err).Msg("metadata filter: writing response")
 	}
 }
 
 // clientAcceptsGzip reports whether the client listed gzip in Accept-Encoding.
-// A "gzip;q=0" is a refusal, so the encoding must not be offered then.
+// A zero qvalue ("q=0", "q=0.0", "q=0.000", …) is a refusal per RFC 7231 §5.3.4,
+// so it is parsed as a float rather than matched against the single literal
+// "q=0" — a client sending "q=0.0" refused gzip exactly as much as one sending
+// "q=0", and both must not receive a gzipped body they said they cannot decode.
 func clientAcceptsGzip(r *http.Request) bool {
 	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
 		fields := strings.Split(strings.TrimSpace(part), ";")
@@ -217,7 +237,11 @@ func clientAcceptsGzip(r *http.Request) bool {
 			continue
 		}
 		for _, param := range fields[1:] {
-			if strings.EqualFold(strings.ReplaceAll(strings.TrimSpace(param), " ", ""), "q=0") {
+			name, value, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
+				continue
+			}
+			if q, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && q == 0 {
 				return false
 			}
 		}

@@ -44,9 +44,15 @@ type npmRegistry struct {
 // blocks exactly one version. Named distinctly from phase3_test.go's
 // newNPMRegistry, which returns a plain *httptest.Server for a different
 // fixture shape and lives in the same package.
-func newNPMMetadataRegistry(t *testing.T, oldHours, freshHours int) *npmRegistry {
+//
+// gzipResponse is taken as a constructor parameter, set on reg before
+// httptest.NewServer starts serving, rather than assigned afterwards: the
+// server handler reads reg.gzip from its own goroutine, and every other
+// mutable field on npmRegistry is guarded by reg.mu, so writing this one late
+// without a lock would be the odd one out.
+func newNPMMetadataRegistry(t *testing.T, oldHours, freshHours int, gzipResponse bool) *npmRegistry {
 	t.Helper()
-	reg := &npmRegistry{etag: `"upstream-v1"`}
+	reg := &npmRegistry{etag: `"upstream-v1"`, gzip: gzipResponse}
 
 	packument := func() []byte {
 		old := time.Now().UTC().Add(-time.Duration(oldHours) * time.Hour)
@@ -176,7 +182,7 @@ func versionsOf(t *testing.T, body []byte) map[string]json.RawMessage {
 // Scenario A: the fresh version is hidden, and the response carries our own
 // validator instead of upstream's.
 func TestIntegration_NPMMetadataFilter_HidesFreshVersion(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1)
+	reg := newNPMMetadataRegistry(t, 240, 1, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, nil)
@@ -195,7 +201,7 @@ func TestIntegration_NPMMetadataFilter_HidesFreshVersion(t *testing.T) {
 // Scenario G: hiding every version would break every install of the package, so
 // the original document is served and the tarball still answers 423.
 func TestIntegration_NPMMetadataFilter_AllVersionsBlockedServesOriginal(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 2, 1)
+	reg := newNPMMetadataRegistry(t, 2, 1, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, nil)
@@ -214,7 +220,7 @@ func TestIntegration_NPMMetadataFilter_AllVersionsBlockedServesOriginal(t *testi
 
 // Scenario I: the cap doubles as a kill switch.
 func TestIntegration_NPMMetadataFilter_ZeroCapDisablesFiltering(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1)
+	reg := newNPMMetadataRegistry(t, 240, 1, false)
 	srv := newNPMProxy(t, reg, 24, "enforce", 0)
 
 	resp, body := getPackument(t, srv, nil)
@@ -225,23 +231,24 @@ func TestIntegration_NPMMetadataFilter_ZeroCapDisablesFiltering(t *testing.T) {
 }
 
 // Scenario H: upstream may answer gzipped, and the client must still get a
-// document it can parse.
+// document it can parse. The client asked for gzip, so the response must
+// actually be gzip — asserting that (rather than branching on whatever
+// Content-Encoding happened to come back) is what would catch a silent
+// fallback to identity encoding on a compression failure.
 func TestIntegration_NPMMetadataFilter_GzippedUpstream(t *testing.T) {
-	reg := newNPMMetadataRegistry(t, 240, 1)
-	reg.gzip = true
+	reg := newNPMMetadataRegistry(t, 240, 1, true)
 	srv := newNPMProxy(t, reg, 24, "enforce", 32)
 
 	resp, body := getPackument(t, srv, map[string]string{"Accept-Encoding": "gzip"})
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	reader := io.Reader(bytes.NewReader(body))
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		zr, err := gzip.NewReader(reader)
-		require.NoError(t, err)
-		defer zr.Close()
-		reader = zr
-	}
-	plain, err := io.ReadAll(reader)
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "the client asked for gzip and must get it")
+	assert.Equal(t, fmt.Sprint(len(body)), resp.Header.Get("Content-Length"))
+
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err)
+	defer zr.Close()
+	plain, err := io.ReadAll(zr)
 	require.NoError(t, err)
 	assert.NotContains(t, versionsOf(t, plain), "1.3.0")
 }
