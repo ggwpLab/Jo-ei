@@ -40,9 +40,24 @@ process exits non-zero.
 | `listen` | — | Listen address, e.g. `":8080"`. |
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
+| `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`).
+
+npm resolves a version range from a package's metadata document before it ever
+requests a tarball, so a version blocked at download time gives it nowhere to
+go — it has already committed to that version and does not backtrack. Metadata
+filtering hides blocked versions from the document itself, so npm's resolver
+lands on a version the policy allows instead. Only the checks that need no
+network round-trip take part: the minimum-age rule and the denylist. CVE and
+malware verdicts still block at download time, since they can only be decided
+once the artifact is in hand. Set `metadata_filter_max_mb` to `0` to disable
+the feature entirely; a document larger than the configured cap is also
+streamed through untouched rather than buffered. This applies to npm only —
+every other registry's metadata is proxied untouched regardless of this
+setting. It cannot help a lockfile-pinned install (`npm ci`): there is no
+range left to resolve, so a blocked exact version still fails with `423`.
 
 ## `tls`
 

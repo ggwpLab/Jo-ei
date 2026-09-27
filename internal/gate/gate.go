@@ -75,6 +75,47 @@ type DownloadMetadataExtractor interface {
 	MetadataFromHeader(h http.Header) *PackageMetadata
 }
 
+// MetadataRef names the package a metadata document describes. It is a
+// PackageRef without a version, because the document covers every version.
+type MetadataRef struct {
+	Ecosystem string
+	Name      string
+}
+
+// VersionDecider reports whether one version of a package may be served.
+// publishedAt is the zero time when the document carries no publish date for
+// that version, which leaves any age-based rule mute.
+type VersionDecider func(version string, publishedAt time.Time) bool
+
+// FilteredDocument is the result of rewriting a metadata document.
+type FilteredDocument struct {
+	// Body is the document to serve. It is the input document itself, byte for
+	// byte, when nothing was removed — which lets the caller forward the
+	// upstream validators along with it.
+	Body []byte
+	// Removed lists the versions hidden from Body, sorted.
+	Removed []string
+	// AllRejected reports that policy rejected every version in the document.
+	// Body is then the original: an empty version list would turn every install
+	// of that package into a resolution error instead of a gate verdict, so the
+	// artifact gate is left to state the real reason at download time.
+	AllRejected bool
+}
+
+// MetadataFilterer is an optional RegistryAdapter capability: rewriting a
+// metadata document so that versions policy will not serve are absent from it,
+// letting the client's own resolver pick an allowed version instead of failing
+// on a blocked download. npm implements it; adapters whose clients resolve
+// server-side do not.
+type MetadataFilterer interface {
+	// NormalizeMetadataRequest reports whether r asks for a filterable metadata
+	// document, and names the package it describes.
+	NormalizeMetadataRequest(r *http.Request) (*MetadataRef, bool)
+
+	// FilterVersions rewrites doc, dropping every version decide rejects.
+	FilterVersions(doc []byte, decide VersionDecider) (FilteredDocument, error)
+}
+
 // ── CVE / scan types ────────────────────────────────────────────────────────
 
 // Severity represents a CVE severity level.

@@ -614,3 +614,34 @@ func TestLoad_TLSSectionIsOptional(t *testing.T) {
 		t.Fatalf("TLS.CAFiles = %v, want empty when the section is absent", cfg.TLS.CAFiles)
 	}
 }
+
+func TestLoad_MetadataFilterMaxMB_DefaultsTo32(t *testing.T) {
+	path := writeTempConfig(t, `server:
+  listen: ":8080"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 32, cfg.Server.MetadataFilterMaxMB)
+}
+
+func TestLoad_MetadataFilterMaxMB_ZeroDisables(t *testing.T) {
+	path := writeTempConfig(t, `server:
+  listen: ":8080"
+  metadata_filter_max_mb: 0
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cfg.Server.MetadataFilterMaxMB, "an explicit zero is the kill switch, not a request for the default")
+}
+
+func TestValidate_RejectsNegativeMetadataFilterMaxMB(t *testing.T) {
+	c := &config.Config{}
+	c.Server.MetadataFilterMaxMB = -1
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata_filter_max_mb")
+}

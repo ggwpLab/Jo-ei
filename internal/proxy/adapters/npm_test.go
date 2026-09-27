@@ -273,3 +273,201 @@ func TestNPMAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
 		"https://mirror.example.org/lodash/-/lodash-1.0.0.tgz",
 	}, urls)
 }
+
+func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		wantOK   bool
+		wantName string
+	}{
+		{name: "bare package", method: http.MethodGet, path: "/left-pad", wantOK: true, wantName: "left-pad"},
+		{name: "scoped encoded", method: http.MethodGet, path: "/@types%2fnode", wantOK: true, wantName: "@types/node"},
+		{name: "scoped plain", method: http.MethodGet, path: "/@types/node", wantOK: true, wantName: "@types/node"},
+
+		// A single-version manifest has no version list to rewrite.
+		{name: "version manifest", method: http.MethodGet, path: "/left-pad/1.3.0"},
+		{name: "scoped version manifest", method: http.MethodGet, path: "/@types/node/20.0.0"},
+
+		// Tarballs belong to NormalizeRequest, service endpoints to nobody.
+		{name: "tarball", method: http.MethodGet, path: "/left-pad/-/left-pad-1.3.0.tgz"},
+		{name: "search", method: http.MethodGet, path: "/-/v1/search"},
+		{name: "npm api", method: http.MethodGet, path: "/-/npm/v1/user"},
+		{name: "whoami", method: http.MethodGet, path: "/-/whoami"},
+
+		// Publishes must never be rewritten.
+		{name: "publish put", method: http.MethodPut, path: "/left-pad"},
+		{name: "publish post", method: http.MethodPost, path: "/left-pad"},
+
+		// The GET half of npm's read-modify-write cycle (`npm deprecate`, `npm
+		// owner add/rm`) carries "?write=true" and PUTs the whole document back;
+		// a rewritten GET here would carry hidden versions into that PUT.
+		{name: "write query", method: http.MethodGet, path: "/left-pad?write=true"},
+
+		{name: "root", method: http.MethodGet, path: "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(tt.method, tt.path, nil)
+			ref, ok := a.NormalizeMetadataRequest(r)
+			require.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				assert.Nil(t, ref)
+				return
+			}
+			require.NotNil(t, ref)
+			assert.Equal(t, "npm", ref.Ecosystem)
+			assert.Equal(t, tt.wantName, ref.Name)
+		})
+	}
+}
+
+// fullPackument is a miniature of the real thing: unknown top-level fields that
+// must survive, a time map that includes the non-version "created"/"modified"
+// keys, and a dist-tags entry pointing at the newest version.
+const fullPackument = `{
+  "_id": "left-pad",
+  "name": "left-pad",
+  "readme": "# left-pad",
+  "dist-tags": {"latest": "1.3.0"},
+  "time": {
+    "created": "2014-01-01T00:00:00.000Z",
+    "modified": "2018-01-01T00:00:00.000Z",
+    "1.2.0": "2017-01-01T00:00:00.000Z",
+    "1.3.0": "2018-01-01T00:00:00.000Z"
+  },
+  "versions": {
+    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa"}},
+    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb"}}
+  }
+}`
+
+// abbreviatedPackument is what Accept: application/vnd.npm.install-v1+json
+// returns: no "time" map anywhere, so no age rule can speak.
+const abbreviatedPackument = `{
+  "name": "left-pad",
+  "dist-tags": {"latest": "1.3.0"},
+  "modified": "2018-01-01T00:00:00.000Z",
+  "versions": {
+    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa"}},
+    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb"}}
+  }
+}`
+
+// rejectVersions builds a decider that hides exactly the named versions.
+func rejectVersions(names ...string) gate.VersionDecider {
+	bad := make(map[string]bool, len(names))
+	for _, n := range names {
+		bad[n] = true
+	}
+	return func(version string, _ time.Time) bool { return !bad[version] }
+}
+
+func TestNPMAdapter_FilterVersions_RemovesVersionAndItsTimeEntry(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	got, err := a.FilterVersions([]byte(fullPackument), rejectVersions("1.3.0"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1.3.0"}, got.Removed)
+	assert.False(t, got.AllRejected)
+
+	var doc struct {
+		Versions map[string]json.RawMessage `json:"versions"`
+		Time     map[string]string          `json:"time"`
+		DistTags map[string]string          `json:"dist-tags"`
+		Readme   string                     `json:"readme"`
+	}
+	require.NoError(t, json.Unmarshal(got.Body, &doc))
+
+	assert.NotContains(t, doc.Versions, "1.3.0")
+	assert.Contains(t, doc.Versions, "1.2.0")
+	assert.NotContains(t, doc.Time, "1.3.0", "the removed version's publish date must go with it")
+	assert.Contains(t, doc.Time, "created", "non-version time keys must survive")
+	assert.Equal(t, "# left-pad", doc.Readme, "unknown top-level fields must survive")
+
+	// npm tolerates a tag naming a version that is no longer listed and falls
+	// back to the highest one that is. Leaving tags alone is what spares this
+	// project a semver comparator; do not "fix" this assertion.
+	assert.Equal(t, "1.3.0", doc.DistTags["latest"])
+}
+
+func TestNPMAdapter_FilterVersions_NothingRemovedReturnsOriginalBytes(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := []byte(fullPackument)
+
+	got, err := a.FilterVersions(doc, rejectVersions())
+	require.NoError(t, err)
+	assert.Empty(t, got.Removed)
+	assert.False(t, got.AllRejected)
+	// Byte identity, not just equality: the caller forwards the upstream ETag
+	// with this body, and Go marshals maps with sorted keys, so a re-marshal
+	// would silently reorder the document the ETag describes.
+	assert.Same(t, &doc[0], &got.Body[0])
+	assert.Equal(t, doc, got.Body)
+}
+
+func TestNPMAdapter_FilterVersions_AllRejectedKeepsOriginal(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := []byte(fullPackument)
+
+	got, err := a.FilterVersions(doc, rejectVersions("1.2.0", "1.3.0"))
+	require.NoError(t, err)
+	assert.True(t, got.AllRejected)
+	assert.Equal(t, []string{"1.2.0", "1.3.0"}, got.Removed)
+	assert.Equal(t, doc, got.Body, "an empty version list would break every install of this package")
+}
+
+func TestNPMAdapter_FilterVersions_AbbreviatedHasNoDates(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	var seen map[string]time.Time
+	decide := func(version string, publishedAt time.Time) bool {
+		if seen == nil {
+			seen = map[string]time.Time{}
+		}
+		seen[version] = publishedAt
+		return true
+	}
+
+	got, err := a.FilterVersions([]byte(abbreviatedPackument), decide)
+	require.NoError(t, err)
+	assert.Empty(t, got.Removed)
+	assert.True(t, seen["1.2.0"].IsZero(), "no time map means no publish date to judge")
+	assert.True(t, seen["1.3.0"].IsZero())
+}
+
+func TestNPMAdapter_FilterVersions_PassesPublishDates(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	seen := map[string]time.Time{}
+	decide := func(version string, publishedAt time.Time) bool {
+		seen[version] = publishedAt
+		return true
+	}
+
+	_, err := a.FilterVersions([]byte(fullPackument), decide)
+	require.NoError(t, err)
+	assert.Equal(t, "2018-01-01T00:00:00Z", seen["1.3.0"].Format(time.RFC3339))
+	assert.Equal(t, "2017-01-01T00:00:00Z", seen["1.2.0"].Format(time.RFC3339))
+}
+
+func TestNPMAdapter_FilterVersions_MalformedDocument(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	_, err := a.FilterVersions([]byte(`{"versions": [`), rejectVersions("1.0.0"))
+	require.Error(t, err)
+}
+
+func TestNPMAdapter_FilterVersions_DocumentWithoutVersions(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := []byte(`{"name": "left-pad"}`)
+
+	got, err := a.FilterVersions(doc, rejectVersions("1.3.0"))
+	require.NoError(t, err)
+	assert.Equal(t, doc, got.Body)
+	assert.Empty(t, got.Removed)
+}

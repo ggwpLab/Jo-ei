@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **npm installs now fall back to an allowed version instead of failing.**
+  npm resolves a version range from a package's metadata document before it
+  requests any tarball, so a version blocked by the minimum-age rule or the
+  denylist used to kill the whole install: it had already committed to that
+  version, and `423` gave it nowhere to go. The proxy now hides blocked
+  versions from the metadata document itself, so `^1.0.0` resolves to the
+  newest version your policy allows and the install simply succeeds. Rewritten
+  documents carry the proxy's own `ETag`, so a client cannot revalidate its way
+  back into a stale copy once a version matures; documents that were not
+  rewritten keep the registry's own validators and the cheap `304` that
+  follows. A lockfile-pinned install (`npm ci`) still fails with `423` — there
+  is no range left to resolve — and so does a document larger than
+  `server.metadata_filter_max_mb` (default 32). Set that to `0` to switch
+  filtering off.
+
 ### Fixed
 
 - **`docker-compose` now passes the whole `.env` to the proxy.** The compose
