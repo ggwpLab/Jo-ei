@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
 ### Added
 
 - **npm installs now fall back to an allowed version instead of failing.**
@@ -24,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `server.metadata_filter_max_mb` (default 32). Set that to `0` to switch
   filtering off.
 
+### Changed
+
+- **Console overview totals now read on a single time base.** The 7d/30d
+  toggle is gone and every KPI card — requests, cache hit rate, blocked, and
+  the supply-chain/CVE/malware/denylist breakdown — shows the all-time
+  counter, which is exactly what the proxy persists. The sparklines stay, now
+  captioned "30d trend" so they read as a trend beside the value rather than a
+  breakdown of it (daily rows are pruned on their own retention, the counters
+  are not). The quarantine card is labelled as the live gauge it always was —
+  how many packages are held right now — and no longer carries a sparkline of
+  daily supply-chain blocks, a different quantity than the number above it.
+
 ### Fixed
 
 - **`docker-compose` now passes the whole `.env` to the proxy.** The compose
@@ -39,18 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for blocks (the gate that blocked) and errors (the stage that failed);
   passes and cache hits leave it empty. Docker image-scan errors are labelled
   instead of showing a bare dash.
-
-### Changed
-
-- **Console overview totals now read on a single time base.** The 7d/30d
-  toggle is gone and every KPI card — requests, cache hit rate, blocked, and
-  the supply-chain/CVE/malware/denylist breakdown — shows the all-time
-  counter, which is exactly what the proxy persists. The sparklines stay, now
-  captioned "30d trend" so they read as a trend beside the value rather than a
-  breakdown of it (daily rows are pruned on their own retention, the counters
-  are not). The quarantine card is labelled as the live gauge it always was —
-  how many packages are held right now — and no longer carries a sparkline of
-  daily supply-chain blocks, a different quantity than the number above it.
 
 ## [0.4.0] - 2026-09-06
 
@@ -213,7 +215,8 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.1.0...v0.2.0
