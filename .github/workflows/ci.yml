@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Every job here only reads the repository: it builds, tests, lints and scans.
+# Declaring the floor once denies the write scopes the default token would
+# otherwise carry, and any job added later inherits the same restriction.
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
