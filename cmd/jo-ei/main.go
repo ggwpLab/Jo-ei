@@ -96,8 +96,9 @@ type sharedDeps struct {
 	adapterClient  *http.Client
 	downloadClient *http.Client
 
-	cveRecheckTTL     time.Duration
-	malwareRecheckTTL time.Duration
+	cveRecheckTTL       time.Duration
+	malwareRecheckTTL   time.Duration
+	metadataFilterMaxMB int
 }
 
 func runProxy(_ *cobra.Command, _ []string) error {
@@ -235,8 +236,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		adapterClient:  adapterClient,
 		downloadClient: downloadClient,
 
-		cveRecheckTTL:     time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
-		malwareRecheckTTL: time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
+		cveRecheckTTL:       time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
+		malwareRecheckTTL:   time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
+		metadataFilterMaxMB: cfg.Server.MetadataFilterMaxMB,
 	}
 
 	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
@@ -494,17 +496,18 @@ func minEnabledTTL(a, b time.Duration) time.Duration {
 // shared dependency set.
 func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handler {
 	return proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:           adapter,
-		Filter:            shared.filter,
-		Cache:             shared.cache,
-		Logger:            shared.logger,
-		CVEScanner:        shared.cveScanner,
-		Policy:            shared.policy,
-		AVScanner:         shared.avScanner,
-		Recorder:          shared.recorder,
-		CVERecheckTTL:     shared.cveRecheckTTL,
-		MalwareRecheckTTL: shared.malwareRecheckTTL,
-		HTTPClient:        shared.downloadClient,
+		Adapter:             adapter,
+		Filter:              shared.filter,
+		Cache:               shared.cache,
+		Logger:              shared.logger,
+		CVEScanner:          shared.cveScanner,
+		Policy:              shared.policy,
+		AVScanner:           shared.avScanner,
+		Recorder:            shared.recorder,
+		CVERecheckTTL:       shared.cveRecheckTTL,
+		MalwareRecheckTTL:   shared.malwareRecheckTTL,
+		HTTPClient:          shared.downloadClient,
+		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
 	})
 }
 

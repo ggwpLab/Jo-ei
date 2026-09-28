@@ -7,6 +7,11 @@ server:
   # Registries throttle by rate, not concurrency, so this is the primary defense
   # against HTTP 429. Default 10 when unset; raise for a large shared instance.
   upstream_rate_per_second: 10
+  # Max decompressed size (MB) of an npm metadata document the proxy will
+  # buffer to hide policy-blocked versions from it, so the resolver lands on
+  # one the policy allows instead of failing the whole install. Default 32
+  # when unset; set to 0 to disable metadata filtering entirely.
+  metadata_filter_max_mb: 32
 
 # Extra certificate authorities trusted when connecting to upstream registries.
 # Use this when a mirror presents a corporate or self-signed certificate: the
