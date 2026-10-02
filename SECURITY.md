@@ -36,8 +36,8 @@ will be revisited.
 
 Reports we consider in scope include (non-exhaustive):
 
-- Bypass of a gate (supply-chain min-age, CVE, malware, Trivy image scan,
-  denylist) that lets a blocked artifact reach a client
+- Bypass of a gate (supply-chain min-age, CVE — osv.dev for packages, Trivy
+  for images — malware, denylist) that lets a blocked artifact reach a client
 - Cache poisoning or serving an artifact different from the verified one
 - Authentication or authorization flaws in the admin console/API
 - Path traversal, SSRF, or injection in the proxy or console
