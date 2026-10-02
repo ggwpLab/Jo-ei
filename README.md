@@ -6,33 +6,34 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A transparent supply chain security proxy for package registries and Docker images.
-Supports PyPI, npm, Maven, and Docker Hub (Go support ships in a later phase).
+Supports PyPI, npm (and Yarn), Maven, RubyGems, Go modules, and Docker Hub.
 Point your package manager at Jōei instead of the upstream registry — it intercepts
 every download and enforces four layers of protection before serving the artifact.
-Docker images are additionally gated by Trivy vulnerability and secret scanning.
+Docker images pass the same gates; for images the CVE gate is backed by Trivy,
+which also scans image layers for embedded secrets.
 
 ```
-Developer (pip/npm/mvn/docker pull)
+Developer (pip/npm/mvn/bundle/go/docker pull)
         │
         ▼
   ┌──────────────────────────────────────────────────┐
   │                   Jōei :8080                     │
   │  1. Cache lookup (HIT served immediately)        │
   │  2. Supply Chain Filter (24h rule)               │
-  │  3. CVE Scanner (osv.dev)                        │
+  │  3. CVE Scanner (osv.dev; Trivy for images)      │
   │  4. Malware Scanner (ClamAV / ICAP)              │
-  │  5. Image Scanner (Trivy — Docker images only)   │
   └──────────────────────────────────────────────────┘
         │
         ▼
-   Upstream registry (PyPI / npm / Maven / Docker Hub)
+   Upstream registry (PyPI / npm / Maven / RubyGems / Go / Docker Hub)
 ```
 
 **What gets blocked:**
 - Packages published less than 24 hours ago (supply chain poisoning protection)
-- Packages with CVE severity ≥ configured threshold (`HIGH` by default)
+- Packages with CVE severity ≥ configured threshold (`HIGH` by default) — found by
+  osv.dev for packages and by Trivy for Docker images, which also reports embedded
+  secrets
 - Packages whose artifact matches a malware signature detected by any configured scanner
-- Docker images with vulnerabilities or embedded secrets detected by Trivy
 - Packages on the explicit `denylist`
 
 **What gets cached:** Approved artifacts are stored locally; repeat requests are served
@@ -152,6 +153,15 @@ bundle config mirror.https://rubygems.org http://localhost:8080/rubygems
 #   source "http://localhost:8080/rubygems"
 ```
 
+**Go modules** (enable `registries.go.enabled: true` first):
+```bash
+export GOPROXY=http://localhost:8080/go
+# No ",direct": a proxy miss is a 404 instead of an unscanned VCS fetch.
+go mod download
+```
+Jōei does not proxy the checksum database (`sum.golang.org`); see
+[`examples/go/`](examples/go/) for closed environments.
+
 **Docker (registry mirror):**
 
 Jōei can act as a pull-through proxy for Docker Hub. Point the Docker daemon at
@@ -177,9 +187,12 @@ docker pull library/alpine:3.21
   from the first upstream's host. Note that the Docker daemon applies
   `registry-mirrors` only to Docker Hub images; images from another upstream
   registry must be pulled explicitly as `docker pull <proxy-host>/<repo>:<tag>`.
-- Images are gated by Trivy (vulnerability + secret scanning) and by every
-  configured malware engine in `malware.scanners[]` (ClamAV and/or ICAP), which
-  scan the image config blob and each layer. The verdict is returned on the
+- Images pass the same gates as packages: the min-age rule (dated by the image
+  config's `created` timestamp), the CVE gate — whose engine for images is
+  Trivy, scanning for vulnerabilities and embedded secrets under the same
+  severity threshold and denylist as packages — and every configured malware
+  engine in `malware.scanners[]` (ClamAV and/or ICAP), which scan the image
+  config blob and each layer. The verdict is returned on the
   **manifest** request, so a rejected image is never served to the client.
 - Enable the Docker registry in `config.yaml` by setting
   `registries.docker.enabled: true` and `image_scan.enabled: true`.
@@ -329,7 +342,7 @@ The console overview shows live health for each scan engine:
 
 - **ClamAV / ICAP** are actively probed (clamd `PING`, ICAP `OPTIONS`) every
   `health.probe_interval_seconds` (default 30s).
-- **Trivy** (Docker image scanner) is actively probed via its `/healthz`
+- **Trivy** (the CVE engine for Docker images) is actively probed via its `/healthz`
   endpoint on the same interval.
 - **osv.dev** health is derived passively from real scan traffic — no extra
   requests are sent to the public API.
@@ -438,9 +451,11 @@ key, default, and the environment-variable override rules — is in
 [`docs/configuration.md`](docs/configuration.md); the full commented default
 configuration is in [`config.yaml`](./config.yaml).
 
-Ready-made client configs (pip, npm, Yarn, Maven, Gradle, Bundler, Docker)
+Ready-made client configs (pip, npm, Yarn, Maven, Gradle, Bundler, Go, Docker)
 live in [`examples/`](examples/), and the package/dependency layout is
-documented in [`docs/architecture.md`](docs/architecture.md).
+documented in [`docs/architecture.md`](docs/architecture.md). For a narrative
+introduction to the project, read the overview article
+([English](docs/overview.md) · [Русский](docs/overview.ru.md)).
 
 ## Understanding Block Responses
 
