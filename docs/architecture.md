@@ -50,7 +50,7 @@ that is what makes the graph acyclic.
 | `internal/proxy` | The package-registry HTTP data path: gate pipeline orchestration (`Handler`), path-prefix routing (`Mux`), transparent proxying of metadata requests. |
 | `internal/proxy/adapters` | One `RegistryAdapter` per ecosystem: PyPI, npm (+ Yarn alias), Maven, RubyGems. Adapters normalize download URLs to a `PackageRef`, fetch publish metadata, and enumerate upstream URLs (multi-upstream failover). |
 | `internal/proxy/dockerproxy` | Docker Registry v2 pull-through proxy: manifest gate (Trivy + malware engines over config blob and layers), blob cache, tag index, quarantine. Verdicts are decided on the manifest request. Trivy here is the CVE gate's engine for images (policy shared with package CVE decisions). |
-| `internal/supplychain` | Min-age filter (24h rule) with per-gate allowlist. |
+| `internal/supplychain` | Min-age filter (configurable `min_age_hours`, 24 h by default) with per-gate allowlist. |
 | `internal/scanner` | `CVEScanner` (osv.dev with TTL cache), `AVScanner`s (ClamAV clamd protocol, ICAP RFC 3507), `MultiScanner` fan-out, `LimitedScanner` concurrency semaphore, health probes. |
 | `internal/policy` | Policy engine (`PolicyDecider`): severity threshold, per-gate allowlists, denylist; `Runtime` holds the mutable snapshot, seeded from YAML on first boot and persisted via the settings store. |
 | `internal/cache` | Artifact cache: SQLite index + files on disk, LRU eviction to `max_size_gb`, per-gate check timestamps for lazy re-validation. Satisfies `gate.ArtifactCache`. |

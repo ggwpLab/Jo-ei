@@ -42,7 +42,7 @@ Developer (pip / npm / mvn / go / bundle / docker pull)
   ┌──────────────────────────────────────────────┐
   │                 Jōei :8080                   │
   │  1. Cache (a hit is served immediately)      │
-  │  2. Supply-chain filter (24-hour rule)       │
+  │  2. Supply-chain filter (min package age)    │
   │  3. CVE scanner (osv.dev; Trivy for images)  │
   │  4. Malware scanner (ClamAV / ICAP)          │
   └──────────────────────────────────────────────┘
@@ -65,10 +65,13 @@ the engine behind an individual check.
 The proxy fetches the version's publish time from the registry. If the version
 is younger than `supply_chain.min_age_hours` (24 hours by default), the client
 gets **HTTP 423 Locked** with a `block_until` field. For Docker images, the
-`created` field of the image config serves as the publish time.
+`created` field of the image config serves as the publish time. Like the CVE
+severity threshold, the minimum age is a setting: it lives in `config.yaml` (or
+`JOEI_SUPPLY_CHAIN_MIN_AGE_HOURS`) and can be changed at runtime from the
+console's policy editor.
 
 The rule is simple but effective: most poisoned releases are spotted and
-removed within the first few hours. A one-day delay cuts off a whole class of
+removed within the first few hours. Even a one-day delay cuts off a whole class of
 attacks without any signatures.
 
 Since v0.5.0, npm gets **metadata filtering**. npm resolves a version range

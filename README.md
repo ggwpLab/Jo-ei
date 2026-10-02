@@ -19,7 +19,7 @@ Developer (pip/npm/mvn/bundle/go/docker pull)
   ┌──────────────────────────────────────────────────┐
   │                   Jōei :8080                     │
   │  1. Cache lookup (HIT served immediately)        │
-  │  2. Supply Chain Filter (24h rule)               │
+  │  2. Supply Chain Filter (min package age)        │
   │  3. CVE Scanner (osv.dev; Trivy for images)      │
   │  4. Malware Scanner (ClamAV / ICAP)              │
   └──────────────────────────────────────────────────┘
@@ -29,7 +29,8 @@ Developer (pip/npm/mvn/bundle/go/docker pull)
 ```
 
 **What gets blocked:**
-- Packages published less than 24 hours ago (supply chain poisoning protection)
+- Packages younger than the configured minimum age (`supply_chain.min_age_hours`,
+  24 hours by default) — supply chain poisoning protection
 - Packages with CVE severity ≥ configured threshold (`HIGH` by default) — found by
   osv.dev for packages and by Trivy for Docker images, which also reports embedded
   secrets
@@ -469,7 +470,7 @@ The package was published too recently.
 ```json
 {
   "error": "package_blocked",
-  "reason": "package_version_newer_than_24h",
+  "reason": "package_younger_than_min_age",
   "package": "requests",
   "version": "2.32.0",
   "published_at": "2026-05-31T10:00:00Z",
