@@ -1,5 +1,9 @@
 services:
   jo-ei:
+    # Released image from GHCR by default. Pin a version (e.g. :0.5.0) for
+    # reproducible deployments. `docker-compose up --build` builds this
+    # checkout from source instead and tags the result with the same name.
+    image: ghcr.io/ggwplab/jo-ei:latest
     build: .
     ports:
       - "8080:8080"

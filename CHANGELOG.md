@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`docker-compose` runs the released image by default.** The compose file
+  used to build the proxy from the checkout on every fresh start, so the quick
+  start needed a full Go build even though every release is published to
+  `ghcr.io/ggwplab/jo-ei`. It now pulls `ghcr.io/ggwplab/jo-ei:latest`; pin a
+  release tag for reproducible deployments. To run your checkout — unreleased
+  changes or local modifications — use `docker-compose up -d --build`.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added

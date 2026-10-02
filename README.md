@@ -46,6 +46,11 @@ from cache without contacting the upstream registry.
 
 **1. Start the proxy**
 
+The compose file runs the released image
+[`ghcr.io/ggwplab/jo-ei`](https://github.com/ggwpLab/Jo-ei/pkgs/container/jo-ei)
+by default; the clone only supplies `docker-compose.yaml`, `config.yaml` and
+`.env.example`.
+
 ```bash
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
 ```
@@ -67,6 +72,20 @@ HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
 echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
 ```
+
+**Prebuilt image or source build.** By default Compose pulls
+`ghcr.io/ggwplab/jo-ei:latest`. For a reproducible deployment, pin a release
+tag in `docker-compose.yaml` (e.g. `ghcr.io/ggwplab/jo-ei:0.5.0`) and check
+out the matching tag (`git checkout v0.5.0`) so `config.yaml` fits the image.
+To run your checkout instead — unreleased changes or local modifications —
+build it from source:
+
+```bash
+docker-compose up -d --build
+```
+
+The source build is tagged with the same image name, so it shadows the pulled
+image until you `docker-compose pull` again.
 
 Every variable in `.env` is passed into the container, so any `JOEI_*` override
 belongs there and nowhere else. `.env` is gitignored — your secrets stay out of

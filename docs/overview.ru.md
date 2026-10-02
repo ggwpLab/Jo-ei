@@ -237,6 +237,10 @@ bcrypt-хеши (встроенная команда `jo-ei hashpw`), польз
 
 ## Быстрый старт
 
+Compose-файл запускает готовый образ `ghcr.io/ggwplab/jo-ei` из GHCR, ничего
+компилировать не нужно: клон репозитория нужен только ради
+`docker-compose.yaml`, `config.yaml` и `.env.example`.
+
 ```bash
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
 cp .env.example .env
@@ -248,9 +252,11 @@ docker-compose up -d
 pip install requests --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```
 
-ClamAV поднимается сайдкаром в compose-файле. Готовые бинарники для Linux,
-macOS и Windows (amd64/arm64) публикуются на странице релизов, образ доступен
-как `ghcr.io/ggwplab/jo-ei`.
+ClamAV и Trivy поднимаются сайдкарами в compose-файле. Для воспроизводимого
+развёртывания стоит закрепить тег релиза образа (например `:0.5.0`). Чтобы
+запустить локальную копию кода, соберите её из исходников:
+`docker-compose up -d --build`. Готовые бинарники для Linux, macOS и Windows
+(amd64/arm64) публикуются на странице релизов.
 
 ## История развития
 

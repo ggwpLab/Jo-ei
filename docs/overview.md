@@ -238,6 +238,10 @@ pipeline, around 500 lines) and `cmd/jo-ei/main.go` (the wiring).
 
 ## Quick start
 
+The compose file runs the released image `ghcr.io/ggwplab/jo-ei` from GHCR, so
+nothing is compiled: the clone only provides `docker-compose.yaml`,
+`config.yaml` and `.env.example`.
+
 ```bash
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
 cp .env.example .env
@@ -249,9 +253,11 @@ docker-compose up -d
 pip install requests --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```
 
-ClamAV runs as a sidecar in the compose file. Prebuilt binaries for Linux,
-macOS and Windows (amd64/arm64) are published on the releases page, and the
-image is available as `ghcr.io/ggwplab/jo-ei`.
+ClamAV and Trivy run as sidecars in the compose file. For a reproducible
+deployment, pin a release tag of the image (for example `:0.5.0`). To run a
+local checkout instead, build it from source with `docker-compose up -d --build`.
+Prebuilt binaries for Linux, macOS and Windows (amd64/arm64) are published on
+the releases page.
 
 ## Release history
 

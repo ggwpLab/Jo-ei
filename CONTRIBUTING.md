@@ -17,7 +17,9 @@ go test ./...            # unit tests
 ```
 
 Optional, for exercising the full stack locally: Docker + Docker Compose
-(ClamAV and Trivy sidecars). See the [README quick start](README.md#quick-start).
+(ClamAV and Trivy sidecars). Compose runs the released GHCR image by default;
+use `docker-compose up -d --build` to run your checkout. See the
+[README quick start](README.md#quick-start).
 
 ### Line endings
 
