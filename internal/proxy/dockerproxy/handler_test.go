@@ -1,6 +1,7 @@
 package dockerproxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,6 +41,10 @@ type recspy struct{ events []gate.Event }
 func (r *recspy) Record(e gate.Event) { r.events = append(r.events, e) }
 
 func newTestHandler(t *testing.T, sc ImageScanner, av gate.AVScanner, rec gate.Recorder) (*Handler, string, string) {
+	return newTestHandlerWithLogger(t, sc, av, rec, zerolog.Nop())
+}
+
+func newTestHandlerWithLogger(t *testing.T, sc ImageScanner, av gate.AVScanner, rec gate.Recorder, logger zerolog.Logger) (*Handler, string, string) {
 	srvURL, repo, ref := newGateTestServer(t)
 	adapter := NewAdapter([]string{srvURL}, nil)
 	store := newVerdictStore(newFakeCache())
@@ -48,7 +53,7 @@ func newTestHandler(t *testing.T, sc ImageScanner, av gate.AVScanner, rec gate.R
 		filter: allowFilter{}, policy: findingPolicy{},
 		store: store, logger: zerolog.Nop(),
 	})
-	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Recorder: rec, Logger: zerolog.Nop()})
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Recorder: rec, Logger: logger})
 	return h, repo, ref
 }
 
@@ -274,5 +279,68 @@ func TestHandlerSupplyChainBlockRecordsBlockUntil(t *testing.T) {
 		if ev.BlockUntil.IsZero() {
 			t.Errorf("event %d: BlockUntil is zero — image will not appear in quarantine", i)
 		}
+	}
+}
+
+// logLines decodes zerolog JSON output into one map per line.
+func logLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("decoding log line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func TestHandlerManifestAllowLogsVerdict(t *testing.T) {
+	var buf bytes.Buffer
+	h, repo, ref := newTestHandlerWithLogger(t, stubScanner{}, stubAV{}, &recspy{}, zerolog.New(&buf))
+
+	for i := range 2 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("pull %d status = %d, body=%s", i, w.Code, w.Body.String())
+		}
+	}
+
+	var verdicts []string
+	for _, l := range logLines(t, &buf) {
+		if l["message"] == "docker image allowed" {
+			if l["level"] != "info" {
+				t.Errorf("allow log level = %v, want info", l["level"])
+			}
+			if l["digest"] == nil || l["repo"] != repo {
+				t.Errorf("allow log missing repo/digest: %v", l)
+			}
+			verdicts = append(verdicts, fmt.Sprint(l["verdict"]))
+		}
+	}
+	if strings.Join(verdicts, ",") != gate.VerdictPass+","+gate.VerdictCache {
+		t.Fatalf("logged verdicts = %v, want [PASS CACHE]; log:\n%s", verdicts, buf.String())
+	}
+}
+
+func TestHandlerManifestUnknownReturns404(t *testing.T) {
+	rec := &recspy{}
+	h, repo, _ := newTestHandler(t, stubScanner{}, stubAV{}, rec)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/sha256-deadbeef", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "MANIFEST_UNKNOWN") {
+		t.Errorf("body = %s, want MANIFEST_UNKNOWN error code", w.Body.String())
+	}
+	if len(rec.events) != 1 || rec.events[0].HTTPStatus != http.StatusNotFound || rec.events[0].Reason != "manifest_not_found" {
+		t.Errorf("events = %+v, want one 404 manifest_not_found event", rec.events)
 	}
 }
