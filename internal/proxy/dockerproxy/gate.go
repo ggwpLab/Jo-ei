@@ -3,6 +3,7 @@ package dockerproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,11 @@ const (
 	reasonIndexPassthrough       = "index_passthrough" // #nosec G101 -- verdict reason labels, not credentials
 	reasonAttestationPassthrough = "attestation_passthrough"
 )
+
+// errManifestNotFound marks an Evaluate failure where every upstream answered
+// 404/410 for the manifest itself. Only the manifest fetch wraps it: a missing
+// config or layer blob of an existing manifest stays a plain gate failure.
+var errManifestNotFound = errors.New("manifest not found on any upstream")
 
 // isPassthroughReason reports whether a cached verdict reason denotes an
 // un-gated passthrough (index or attestation) rather than a real gate decision.
@@ -136,6 +142,9 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 			}
 			ev.Msg("upstream unreachable; serving stale cached verdict for by-digest pull")
 			return ref, *offlineStale, nil
+		}
+		if atts, ok := upstream.AttemptsFrom(err); ok && atts.AllNotFound() {
+			return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w: %w", repo, ref, errManifestNotFound, err)
 		}
 		return "", GateVerdict{}, fmt.Errorf("resolving manifest %s:%s: %w", repo, ref, err)
 	}

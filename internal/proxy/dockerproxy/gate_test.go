@@ -3,9 +3,13 @@ package dockerproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,5 +362,48 @@ func TestGateSupplyChainBlockCarriesTimesAndIsNotCached(t *testing.T) {
 	}
 	if _, _, _, found := store.GetImageVerdict(repo, digest); found {
 		t.Error("time-based supply-chain block must NOT be cached")
+	}
+}
+
+func TestGateMissingManifestIsManifestNotFound(t *testing.T) {
+	srvURL, repo, _ := newGateTestServer(t)
+	d := gateDeps{
+		adapter: NewAdapter([]string{srvURL}, nil),
+		scanner: stubScanner{}, av: stubAV{},
+		filter: allowFilter{}, policy: findingPolicy{},
+		store: newVerdictStore(newFakeCache()), logger: zerolog.Nop(),
+	}
+	_, _, err := newManifestGate(d).Evaluate(context.Background(), repo, "no-such-tag")
+	if !errors.Is(err, errManifestNotFound) {
+		t.Fatalf("err = %v, want errManifestNotFound", err)
+	}
+}
+
+// A 404 on a layer blob is an upstream inconsistency, not a missing manifest:
+// it must stay a gate failure (502), never turn into MANIFEST_UNKNOWN.
+func TestGateMissingLayerIsNotManifestNotFound(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	target, _ := url.Parse(srvURL)
+	rp := httputil.NewSingleHostReverseProxy(target)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/blobs/sha256:layer1") {
+			http.NotFound(w, r)
+			return
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	d := gateDeps{
+		adapter: NewAdapter([]string{srv.URL}, nil),
+		scanner: stubScanner{}, av: stubAV{},
+		filter: allowFilter{}, policy: findingPolicy{},
+		store: newVerdictStore(newFakeCache()), logger: zerolog.Nop(),
+	}
+	_, _, err := newManifestGate(d).Evaluate(context.Background(), repo, ref)
+	if err == nil {
+		t.Fatal("want an error for a missing layer blob")
+	}
+	if errors.Is(err, errManifestNotFound) {
+		t.Fatalf("missing layer reported as errManifestNotFound: %v", err)
 	}
 }

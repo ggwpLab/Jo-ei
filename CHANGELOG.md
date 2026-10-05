@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release tag for reproducible deployments. To run your checkout — unreleased
   changes or local modifications — use `docker-compose up -d --build`.
 
+### Fixed
+
+- **Docker pulls now log their verdict.** An allowed image manifest — a fresh
+  `PASS` or a `CACHE` re-pull — wrote nothing to the proxy log; only blocks
+  did. Each gated manifest now logs `docker image allowed` at info level with
+  the verdict, reason, digest and tag, matching the package ecosystems.
+- **A missing Docker manifest returns 404, not 502.** When every upstream
+  answered 404 for a manifest (a mistyped tag, or a client's OCI referrers
+  fallback probe), the proxy reported a gate error and answered
+  `502 UNAVAILABLE`. It now answers `404 MANIFEST_UNKNOWN` and logs a warning.
+  A missing layer of an existing manifest is still a gate failure.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added
