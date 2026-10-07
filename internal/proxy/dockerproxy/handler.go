@@ -2,6 +2,7 @@ package dockerproxy
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -55,8 +56,18 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 
 	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
 	if err != nil {
+		atts, hasAtts := upstream.AttemptsFrom(err)
+		// Every mirror answered 404/410 for the manifest: it does not exist (a
+		// typo'd tag, or a client's OCI referrers tag-schema fallback probe).
+		// Answer with the registry's own MANIFEST_UNKNOWN, not a 502 gate failure.
+		if errors.Is(err, errManifestNotFound) {
+			log.Warn().Array("upstream_attempts", atts).Msg("docker manifest not found on any upstream")
+			h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "manifest_not_found", http.StatusNotFound, start, nil)
+			h.writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
+			return
+		}
 		ev := log.Error().Err(err)
-		if atts, ok := upstream.AttemptsFrom(err); ok {
+		if hasAtts {
 			ev = ev.Array("upstream_attempts", atts)
 		}
 		ev.Msg("docker gate error")
@@ -101,6 +112,10 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	passVerdict, passGate, passReason := gate.VerdictPass, gate.GateImageScan, v.Reason
 	if v.FromCache {
 		passVerdict, passGate, passReason = gate.VerdictCache, gate.GateCache, "cache_hit"
+	}
+	if recordPass {
+		log.Info().Str("verdict", passVerdict).Str("reason", v.Reason).Str("digest", digest).
+			Str("version", displayVer).Msg("docker image allowed")
 	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
