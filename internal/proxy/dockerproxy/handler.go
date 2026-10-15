@@ -8,11 +8,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
@@ -29,10 +29,16 @@ type Config struct {
 // Handler implements the Docker Registry V2 pull-through flow.
 type Handler struct {
 	cfg Config
+	log zerolog.Logger // cfg.Logger tagged component=docker, ecosystem=docker
 }
 
 // NewHandler creates a Docker proxy handler.
-func NewHandler(cfg Config) *Handler { return &Handler{cfg: cfg} }
+func NewHandler(cfg Config) *Handler {
+	return &Handler{
+		cfg: cfg,
+		log: cfg.Logger.With().Str("component", "docker").Str("ecosystem", "docker").Logger(),
+	}
+}
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pp := ParsePath(r.URL.Path)
@@ -50,9 +56,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp ParsedPath) {
-	requestID := uuid.New().String()
+	r, requestID := logx.Ensure(r)
 	start := time.Now()
-	log := h.cfg.Logger.With().Str("request_id", requestID).Str("repo", pp.Repo).Str("ref", pp.Reference).Logger()
+	log := logx.Logger(r.Context(), h.log).With().Str("package", pp.Repo).Str("version", pp.Reference).Logger()
 
 	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
 	if err != nil {
@@ -61,8 +67,8 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		// typo'd tag, or a client's OCI referrers tag-schema fallback probe).
 		// Answer with the registry's own MANIFEST_UNKNOWN, not a 502 gate failure.
 		if errors.Is(err, errManifestNotFound) {
-			log.Warn().Array("upstream_attempts", atts).Msg("docker manifest not found on any upstream")
-			h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "manifest_not_found", http.StatusNotFound, start, nil)
+			log.Warn().Array("upstream_attempts", atts).Msg("manifest not found on any upstream")
+			h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "manifest_not_found", http.StatusNotFound, start, nil)
 			h.writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
 			return
 		}
@@ -70,8 +76,8 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		if hasAtts {
 			ev = ev.Array("upstream_attempts", atts)
 		}
-		ev.Msg("docker gate error")
-		h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
+		ev.Msg("gate error")
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
 		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream or scan failure")
 		return
 	}
@@ -79,10 +85,10 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	// already carries the tag in pp.Reference; a multi-arch platform child is
 	// requested by digest, so recover its tag from the index seen earlier.
 	displayVer := h.displayVersion(pp, digest)
+	log = log.With().Str("digest", digest).Logger()
 
 	if !v.Allowed {
-		log.Warn().Str("reason", v.Reason).Str("blocked_by", v.BlockedBy).Msg("docker image blocked")
-		h.record(requestID, pp, gate.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *gate.Event) {
+		h.record(log, requestID, pp, gate.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *gate.Event) {
 			ev.BlockedBy = []string{v.BlockedBy}
 			ev.CVEs = v.Findings
 			ev.Version = displayVer
@@ -105,7 +111,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	// request feed so a pull shows a single, meaningful entry.
 	recordPass := !v.Passthrough
 	if v.Passthrough {
-		log.Debug().Str("digest", digest).Str("reason", v.Reason).Msg("serving manifest passthrough (not gated)")
+		log.Debug().Str("reason", v.Reason).Msg("serving manifest passthrough (not gated)")
 	}
 	// A repeat pull served from the cached gate decision is a CACHE event, not a
 	// fresh PASS, so the feed distinguishes re-pulls from first-time evaluations.
@@ -113,14 +119,10 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.FromCache {
 		passVerdict, passGate, passReason = gate.VerdictCache, gate.GateCache, "cache_hit"
 	}
-	if recordPass {
-		log.Info().Str("verdict", passVerdict).Str("reason", v.Reason).Str("digest", digest).
-			Str("version", displayVer).Msg("docker image allowed")
-	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		if recordPass {
-			h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
+			h.record(log, requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
 		}
 		return
 	}
@@ -129,7 +131,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	f, err := os.Open(v.ManifestPath)
 	if err != nil {
 		log.Error().Err(err).Msg("opening cached manifest")
-		h.record(requestID, pp, gate.VerdictError, gate.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *gate.Event) { ev.Version = displayVer })
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "cache_read_error", http.StatusInternalServerError, start, func(ev *gate.Event) { ev.Version = displayVer })
 		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
 		return
 	}
@@ -141,7 +143,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 		return
 	}
 	if recordPass {
-		h.record(requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
+		h.record(log, requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
 	}
 }
 
@@ -160,7 +162,8 @@ func (h *Handler) displayVersion(pp ParsedPath, digest string) string {
 	return digest
 }
 
-func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPath) {
+func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, pp ParsedPath) {
+	log := logx.Logger(r.Context(), h.log).With().Str("package", pp.Repo).Str("digest", pp.Reference).Logger()
 	path, clean, found := h.cfg.Store.GetBlob(pp.Reference)
 	if !found || !clean {
 		h.writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not available")
@@ -170,7 +173,7 @@ func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPat
 	// error envelope rather than a half-written 200.
 	f, err := os.Open(path) // #nosec G304 -- path comes from the verdict store, always inside the cache root
 	if err != nil {
-		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("opening cached blob")
+		log.Error().Err(err).Msg("opening cached blob")
 		h.writeError(w, http.StatusInternalServerError, "UNAVAILABLE", "cache read error")
 		return
 	}
@@ -182,7 +185,7 @@ func (h *Handler) serveBlob(w http.ResponseWriter, _ *http.Request, pp ParsedPat
 	// pull fetches many blobs, and one event per blob would inflate the console
 	// request metrics. The manifest gate already records the per-image outcome.
 	if _, err := io.Copy(w, f); err != nil {
-		h.cfg.Logger.Error().Err(err).Str("digest", pp.Reference).Msg("serving cached blob")
+		log.Error().Err(err).Msg("serving cached blob")
 	}
 }
 
@@ -194,10 +197,9 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, code, msg string
 	})
 }
 
-func (h *Handler) record(requestID string, pp ParsedPath, verdict, gateName, reason string, status int, start time.Time, mod func(*gate.Event)) {
-	if h.cfg.Recorder == nil {
-		return
-	}
+// record ends a manifest request: one telemetry event and the matching
+// outcome log line. A nil Recorder disables only the event.
+func (h *Handler) record(log zerolog.Logger, requestID string, pp ParsedPath, verdict, gateName, reason string, status int, start time.Time, mod func(*gate.Event)) {
 	ev := gate.Event{
 		RequestID: requestID, Time: time.Now(),
 		Ecosystem: "docker", Package: pp.Repo, Version: pp.Reference,
@@ -207,7 +209,10 @@ func (h *Handler) record(requestID string, pp ParsedPath, verdict, gateName, rea
 	if mod != nil {
 		mod(&ev)
 	}
-	h.cfg.Recorder.Record(ev)
+	logx.Outcome(log, ev)
+	if h.cfg.Recorder != nil {
+		h.cfg.Recorder.Record(ev)
+	}
 }
 
 func gateForBlockedBy(by string) string {

@@ -30,6 +30,7 @@ const jwtSecretSettingKey = "auth.jwt_secret"
 // JOEI_CONSOLE_AUTH_USERS is: viper's AutomaticEnv only overrides keys that are
 // present in the config file, so an env-only secret would silently not apply.
 func resolveJWTSecret(fileValue string, st *settings.Store, logger zerolog.Logger) ([]byte, error) {
+	logger = logger.With().Str("component", "auth").Logger()
 	if v := strings.TrimSpace(os.Getenv("JOEI_CONSOLE_JWT_SECRET")); v != "" {
 		return []byte(v), nil
 	}
@@ -52,7 +53,7 @@ func resolveJWTSecret(fileValue string, st *settings.Store, logger zerolog.Logge
 		if len(secret) >= auth.MinSecretLen {
 			return secret, nil
 		}
-		logger.Warn().Msg("console auth: the stored signing key is too short; generating a new one (existing sessions end)")
+		logger.Warn().Msg("the stored console signing key is too short; generating a new one (existing sessions end)")
 	}
 	secret := make([]byte, auth.MinSecretLen)
 	if _, err := rand.Read(secret); err != nil {
@@ -65,7 +66,7 @@ func resolveJWTSecret(fileValue string, st *settings.Store, logger zerolog.Logge
 	if err := st.Put(jwtSecretSettingKey, value); err != nil {
 		return nil, fmt.Errorf("storing the console signing key: %w", err)
 	}
-	logger.Info().Msg("console auth: generated a session signing key and stored it in the database (set console.auth.jwt_secret or JOEI_CONSOLE_JWT_SECRET to share one across replicas)")
+	logger.Info().Msg("generated a console session signing key and stored it in the database (set console.auth.jwt_secret or JOEI_CONSOLE_JWT_SECRET to share one across replicas)")
 	return secret, nil
 }
 

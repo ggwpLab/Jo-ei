@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
@@ -80,7 +81,16 @@ type manifestGate struct {
 	flights singleflight.Group
 }
 
-func newManifestGate(d gateDeps) *manifestGate { return &manifestGate{gateDeps: d} }
+func newManifestGate(d gateDeps) *manifestGate {
+	d.logger = d.logger.With().Str("component", "docker").Str("ecosystem", "docker").Logger()
+	return &manifestGate{gateDeps: d}
+}
+
+// log returns the gate's logger carrying the request ID of ctx, if any.
+func (g *manifestGate) log(ctx context.Context) *zerolog.Logger {
+	l := logx.Logger(ctx, g.logger)
+	return &l
+}
 
 // Evaluate runs the gate for repo:ref. It returns the canonical manifest
 // digest and the verdict. A multi-arch index is passed through un-gated (it has
@@ -136,7 +146,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	manifestBody, contentType, digest, err := g.adapter.FetchManifest(ctx, repo, ref)
 	if err != nil {
 		if offlineStale != nil {
-			ev := g.logger.Warn().Err(err).Str("repo", repo).Str("digest", ref)
+			ev := g.log(ctx).Warn().Err(err).Str("package", repo).Str("digest", ref)
 			if atts, ok := upstream.AttemptsFrom(err); ok {
 				ev = ev.Array("upstream_attempts", atts)
 			}
@@ -181,7 +191,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 			return digest, v, nil
 		}
 		staleVerdict = &v
-		g.logger.Debug().Str("repo", repo).Str("digest", digest).
+		g.log(ctx).Debug().Str("package", repo).Str("digest", digest).
 			Msg("cached verdict expired; re-running the gate")
 	}
 
@@ -217,7 +227,7 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		return v, nil
 	})
 	if err != nil {
-		return g.staleOr(digest, staleVerdict, err)
+		return g.staleOr(ctx, digest, staleVerdict, err)
 	}
 	return digest, res.(GateVerdict), nil
 }
@@ -269,7 +279,7 @@ func (g *manifestGate) runPipeline(ctx context.Context, repo, ref, digest string
 			v := GateVerdict{Allowed: false, Reason: decision.Reason, BlockedBy: by, Findings: decision.Findings}
 			_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
 			if cascadeOnBlock {
-				g.evictBlobs(manifestBody)
+				g.evictBlobs(ctx, manifestBody)
 			}
 			return v, nil
 		}
@@ -294,7 +304,7 @@ func (g *manifestGate) runPipeline(ctx context.Context, repo, ref, digest string
 				v := GateVerdict{Allowed: false, Reason: "malware_found", BlockedBy: "malware"}
 				_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
 				if cascadeOnBlock {
-					g.evictBlobs(manifestBody)
+					g.evictBlobs(ctx, manifestBody)
 				}
 				return v, nil
 			}
@@ -407,9 +417,9 @@ func (g *manifestGate) imageRef(repo, digest string) string {
 // infrastructure error, so a scanner outage serves the last known verdict
 // instead of failing the pull; without one it propagates the error (the
 // handler fails closed with 5xx, unchanged first-pull behavior).
-func (g *manifestGate) staleOr(digest string, stale *GateVerdict, err error) (string, GateVerdict, error) {
+func (g *manifestGate) staleOr(ctx context.Context, digest string, stale *GateVerdict, err error) (string, GateVerdict, error) {
 	if stale != nil {
-		g.logger.Warn().Err(err).Str("digest", digest).
+		g.log(ctx).Warn().Err(err).Str("digest", digest).
 			Msg("gate re-evaluation failed; serving stale cached verdict")
 		return digest, *stale, nil
 	}
@@ -419,7 +429,7 @@ func (g *manifestGate) staleOr(digest string, stale *GateVerdict, err error) (st
 // evictBlobs removes the config/layer blob entries listed in manifestBody so a
 // re-checked image that turned bad does not keep serving its bytes on direct
 // blob requests. Best-effort: parse failures evict nothing.
-func (g *manifestGate) evictBlobs(manifestBody []byte) {
+func (g *manifestGate) evictBlobs(ctx context.Context, manifestBody []byte) {
 	var m struct {
 		Config struct {
 			Digest string `json:"digest"`
@@ -442,7 +452,7 @@ func (g *manifestGate) evictBlobs(manifestBody []byte) {
 	}
 	for _, d := range digests {
 		if err := g.store.InvalidateBlob(d); err != nil {
-			g.logger.Warn().Err(err).Str("digest", d).Msg("cascade-evicting blob")
+			g.log(ctx).Warn().Err(err).Str("digest", d).Msg("cascade-evicting blob")
 		}
 	}
 }

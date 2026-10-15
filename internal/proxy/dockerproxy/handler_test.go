@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 )
 
 func TestNewAssemblesHandler(t *testing.T) {
@@ -313,12 +314,15 @@ func TestHandlerManifestAllowLogsVerdict(t *testing.T) {
 
 	var verdicts []string
 	for _, l := range logLines(t, &buf) {
-		if l["message"] == "docker image allowed" {
+		if l["component"] != "docker" || l["request_id"] == nil {
+			t.Errorf("line lacks component/request_id: %v", l)
+		}
+		if l["message"] == logx.MsgOutcome {
 			if l["level"] != "info" {
-				t.Errorf("allow log level = %v, want info", l["level"])
+				t.Errorf("outcome log level = %v, want info", l["level"])
 			}
-			if l["digest"] == nil || l["repo"] != repo {
-				t.Errorf("allow log missing repo/digest: %v", l)
+			if l["digest"] == nil || l["ecosystem"] != "docker" || l["package"] != repo || l["version"] != ref {
+				t.Errorf("outcome log missing identity fields: %v", l)
 			}
 			verdicts = append(verdicts, fmt.Sprint(l["verdict"]))
 		}
