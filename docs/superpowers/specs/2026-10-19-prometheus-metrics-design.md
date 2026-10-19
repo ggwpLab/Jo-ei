@@ -187,11 +187,11 @@ Middleware wraps `root` in `cmd/jo-ei/main.go` (inside `logx.Middleware`).
   but still counted in `requests_total` and `in_flight`.
 - **Aborted**: incremented when the request context is done
   (`r.Context().Err() != nil`) by the time the handler returns. In Go this
-  means the client went away (disconnect, client-side timeout); the server's
-  `WriteTimeout` does **not** cancel `r.Context()`, so it is not claimed to be
-  covered. Timeouts Jō-ei itself hits are measured where they happen:
+  means the client went away, or writing the response failed — including the
+  server's own write timeout (a failed write cancels the connection context).
+  Timeouts Jō-ei itself hits are measured where they happen:
   `jo_ei_upstream_errors_total{reason="timeout"}` and
-  `jo_ei_scans_total{result="timeout"}`. Help text says "client aborted".
+  `jo_ei_scans_total{result="timeout"}`.
 - Error ratio is derived in PromQL (`code=~"5.."`); 403/423 blocks are policy
   outcomes, not errors.
 

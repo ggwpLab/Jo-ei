@@ -24,7 +24,7 @@ The metrics port has **no authentication, by design**: Prometheus scrapes are
 expected to stay on an internal network. The metrics expose package-registry
 traffic shape, scanner health and cache size, not package contents.
 
-- The provided `docker-compose.yml` does **not** publish port 9464; reach it from
+- The provided `docker-compose.yaml` does **not** publish port 9464; reach it from
   other containers on the compose network (`jo-ei:9464`).
 - Outside compose, bind to loopback (`127.0.0.1:9464`) or an internal interface
   address instead of `:9464` unless a firewall already restricts the port.
@@ -43,8 +43,11 @@ The full minimal config is
 [`examples/monitoring/prometheus.yml`](../examples/monitoring/prometheus.yml).
 The example alert rules `JoEiDown` and `JoEiFileDescriptorsHigh` hardcode
 `job="jo-ei"`: if your scrape job has a different name, edit those two
-expressions. Alerts need the OpenMetrics-capable scrape of a recent Prometheus;
-duration histograms are also exposed as native histograms (bucket factor 1.1).
+expressions. Duration histograms are exposed both as classic
+`_bucket` series and as native histograms (bucket factor 1.1). When Prometheus
+has native-histogram scraping enabled it drops the classic buckets by default,
+which would silence every `histogram_quantile` panel and `JoEiHighLatency`; the
+example scrape job therefore sets `always_scrape_classic_histograms: true`.
 
 ## Metric catalogue
 
@@ -58,7 +61,7 @@ Every label value comes from a closed set; anything unexpected is reported as
 | `jo_ei_http_requests_total` | counter | `route`, `method`, `code` | Inbound requests. |
 | `jo_ei_http_request_duration_seconds` | histogram | `route`, `method` | Request duration; the SSE stream (`/api/events`) is excluded. |
 | `jo_ei_http_requests_in_flight` | gauge | `route` | Requests currently being served. |
-| `jo_ei_http_requests_aborted_total` | counter | `route` | The client went away before the handler finished. |
+| `jo_ei_http_requests_aborted_total` | counter | `route` | The client went away, or writing the response failed (including the server's own write timeout). |
 
 `route` is one of the enabled registry prefixes (`pypi`, `npm`, `yarn`,
 `maven`, `rubygems`, `go`), `docker` (the `/v2/` API), `console`, `auth`, `api`,
@@ -66,8 +69,11 @@ Every label value comes from a closed set; anything unexpected is reported as
 `npm`, unlike `ecosystem` on `jo_ei_verdicts_total`, where yarn is reported as
 `npm`. `method` is a standard HTTP method or `other`.
 
-"Aborted" means the **client** disconnected or cancelled. The server's own
-`WriteTimeout` is not counted. Jō-ei's own timeouts are visible as
+"Aborted" means the client went away, or writing the response failed,
+including the server's own write timeout (Go cancels the request context once a
+write fails). Each open console tab's SSE stream (`/api/events`) counts as one
+permanent in-flight `api` request and adds one aborted `api` request when the
+tab closes. Jō-ei's own upstream and scan timeouts are visible as
 `jo_ei_upstream_errors_total{reason="timeout"}` and
 `jo_ei_scans_total{result="timeout"}`.
 
@@ -81,7 +87,7 @@ Every label value comes from a closed set; anything unexpected is reported as
 | `jo_ei_upstream_errors_total` | counter | `host`, `reason` | Requests that failed without a response. |
 | `jo_ei_upstream_circuit_open` | gauge | `host` | 1 when the circuit breaker for the host is open, else 0. |
 
-`host` is one of the configured upstream hosts; everything else (for example
+`host` is one of the configured upstream hosts, as `host[:port]` exactly as written in the configured upstream URL; everything else (for example
 the CDN hosts Docker blob redirects point to) is `other`. `reason` is
 `circuit_open`, `canceled`, `timeout`, `dns`, `tls`, `connection` or `other`.
 Calls to osv.dev and the Trivy server are not part of the upstream metrics;
@@ -95,13 +101,15 @@ see the scanner metrics below.
 | `jo_ei_scan_duration_seconds` | histogram | `scanner` | Scan duration. |
 | `jo_ei_scans_in_flight` | gauge | `scanner` | Scans currently running. |
 | `jo_ei_scan_queue_wait_seconds` | histogram | none | Time an antivirus scan waited for a concurrency slot. |
-| `jo_ei_scan_concurrency_limit` | gauge | none | Configured maximum concurrent antivirus scans (0 = unlimited). |
+| `jo_ei_scan_concurrency_limit` | gauge | none | Configured maximum concurrent antivirus scans; 0 only when no antivirus engine is attached. |
 | `jo_ei_scanner_up` | gauge | `scanner` | 1 when the last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled. |
 
 `scanner` is `clamav`, `icap`, `osv` or `trivy`; `result` is `clean`,
 `detected`, `timeout` or `error`. The concurrency limit and queue-wait metrics
 apply to the antivirus engines (`clamav`, `icap`) only, see
-`malware.max_concurrent_scans`.
+`malware.max_concurrent_scans`. The `osv` scan metrics include in-memory TTL-cache
+hits (the instrumented wrapper sits outside OSV's cache), so the `osv` rate is
+inflated and its p95 is low.
 
 ### Verdicts and cache
 

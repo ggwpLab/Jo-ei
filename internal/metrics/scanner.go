@@ -44,7 +44,7 @@ func newScannerMetrics(reg prometheus.Registerer) *scannerMetrics {
 			"Time an antivirus scan waited for a concurrency slot.")),
 		limit: f.NewGauge(prometheus.GaugeOpts{
 			Name: "jo_ei_scan_concurrency_limit",
-			Help: "Configured maximum concurrent antivirus scans (0 = unlimited).",
+			Help: "Configured maximum concurrent antivirus scans (0 when no antivirus engine is attached).",
 		}),
 	}
 }

@@ -11,5 +11,7 @@ rule_files:
 scrape_configs:
   - job_name: jo-ei
     metrics_path: /metrics
+    # Keep classic _bucket series when native-histogram scraping is enabled; dashboards and alerts use them.
+    always_scrape_classic_histograms: true
     static_configs:
       - targets: ["jo-ei:9464"]

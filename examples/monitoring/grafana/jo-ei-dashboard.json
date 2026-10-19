@@ -431,7 +431,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count(up{job=~\"$job\", instance=~\"$instance\"} == 1)",
+          "expr": "sum(up{job=~\"$job\", instance=~\"$instance\"})",
           "legendFormat": "up",
           "datasource": {
             "type": "prometheus",

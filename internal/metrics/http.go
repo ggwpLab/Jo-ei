@@ -81,7 +81,7 @@ func newHTTPMetrics(reg prometheus.Registerer) *httpMetrics {
 		}, []string{"route"}),
 		aborted: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "jo_ei_http_requests_aborted_total",
-			Help: "Inbound requests whose client went away before the handler finished.",
+			Help: "Inbound requests whose client went away or whose response write failed (including the server write timeout).",
 		}, []string{"route"}),
 	}
 }

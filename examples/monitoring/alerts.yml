@@ -48,11 +48,11 @@ groups:
           severity: info
         annotations:
           summary: "Many clients aborting requests on {{ $labels.instance }}"
-          description: "{{ $value | humanize }} requests/s on {{ $labels.instance }} ended with the client gone. Often build tools cancelling; check for slow responses."
+          description: "{{ $value | humanize }} requests/s on {{ $labels.instance }} ended with the client gone or a failed response write (including write timeouts). Often build tools cancelling; check for slow responses."
 
       - alert: JoEiUpstreamErrors
         expr: |
-          sum by (instance, host) (rate(jo_ei_upstream_errors_total[5m]))
+          sum by (instance, host) (rate(jo_ei_upstream_errors_total{reason!="canceled"}[5m]))
             /
           sum by (instance, host) (rate(jo_ei_upstream_requests_total[5m]))
           > 0.1

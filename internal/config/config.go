@@ -72,6 +72,11 @@ func (c *Config) Validate() error {
 		if !strings.HasPrefix(c.Metrics.Path, "/") {
 			return fmt.Errorf("metrics.path must start with \"/\" (got %q)", c.Metrics.Path)
 		}
+		// ServeMux.Handle panics on method prefixes, wildcards and the like, so
+		// accept only a plain path.
+		if strings.ContainsAny(c.Metrics.Path, " \t\r\n{}?#") {
+			return fmt.Errorf("metrics.path must be a plain URL path without spaces, braces, \"?\" or \"#\" (got %q)", c.Metrics.Path)
+		}
 	}
 	if c.Health.ProbeIntervalSeconds < 0 {
 		return fmt.Errorf("health.probe_interval_seconds must not be negative")
@@ -111,6 +116,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Console.Auth.RefreshTTLHours < 0 {
 		return fmt.Errorf("console.auth.refresh_ttl_hours must not be negative")
+	}
+	if c.Server.Listen == "" {
+		return fmt.Errorf("server.listen is required")
 	}
 	return nil
 }
@@ -337,6 +345,7 @@ func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
+	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.metadata_filter_max_mb", 32)
 	v.SetDefault("metrics.enabled", true)
 	v.SetDefault("metrics.listen", ":9464")
