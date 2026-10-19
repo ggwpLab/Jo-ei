@@ -63,6 +63,7 @@ type Metrics struct {
 	Registry *prometheus.Registry
 	log      zerolog.Logger
 	http     *httpMetrics
+	upstream *upstreamMetrics
 }
 
 // New builds a private registry with Go runtime, process and build-info
@@ -86,6 +87,7 @@ func New(info BuildInfo, log zerolog.Logger) *Metrics {
 		Registry: reg,
 		log:      log.With().Str("component", "metrics").Logger(),
 		http:     newHTTPMetrics(reg),
+		upstream: newUpstreamMetrics(reg),
 	}
 }
 

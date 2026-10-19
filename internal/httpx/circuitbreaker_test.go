@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,5 +102,41 @@ func TestCircuitBreaker_PassesThroughHealthyHost(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
+	}
+}
+
+type throttlingRT struct{}
+
+func (throttlingRT) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"1"}},
+		Body:       http.NoBody,
+	}, nil
+}
+
+// OpenHosts lists hosts whose circuit is currently open, and drops them once
+// the cooldown has elapsed.
+func TestCircuitBreaker_OpenHosts(t *testing.T) {
+	const cooldown = 80 * time.Millisecond
+	cb := httpx.NewCircuitBreaker(throttlingRT{}, time.Millisecond, cooldown) // maxDelay caps the 1s Retry-After
+	if got := cb.OpenHosts(); len(got) != 0 {
+		t.Fatalf("OpenHosts() before any request = %v, want empty", got)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "https://a:443/x", nil)
+	resp, err := cb.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := cb.OpenHosts(); !reflect.DeepEqual(got, []string{"a:443"}) {
+		t.Fatalf("OpenHosts() = %v, want [a:443]", got)
+	}
+
+	time.Sleep(cooldown + 40*time.Millisecond)
+	if got := cb.OpenHosts(); len(got) != 0 {
+		t.Fatalf("OpenHosts() after cooldown = %v, want empty", got)
 	}
 }

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,14 @@ func newFullyWired(t *testing.T) *Metrics {
 	m := New(BuildInfo{Version: "1.2.3", Commit: "abc"}, zerolog.Nop())
 	m.WrapHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), NewRouteFunc([]string{"pypi"})).
 		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/pypi/x", nil))
+	failing := m.WrapTransport(rtFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	}), []string{"pypi.org"})
+	req, _ := http.NewRequest(http.MethodGet, "https://pypi.org/x", nil)
+	_, _ = failing.RoundTrip(req)
+	req, _ = http.NewRequest(http.MethodGet, "https://pypi.org/y", nil)
+	_, _ = m.WrapTransport(okRT(), []string{"pypi.org"}).RoundTrip(req)
+	m.RegisterCircuitBreaker(fakeReporter{open: []string{"pypi.org"}}, []string{"pypi.org"})
 	return m
 }
 
