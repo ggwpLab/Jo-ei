@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
 )
@@ -43,6 +44,8 @@ func newFullyWired(t *testing.T) *Metrics {
 	m.RegisterScannerHealth(func() []health.ScannerHealth {
 		return []health.ScannerHealth{{Name: "clamav", Status: health.StatusOK, Enabled: true}}
 	})
+	m.WrapRecorder(&fakeRecorder{}).Record(gate.Event{Ecosystem: "npm", Verdict: gate.VerdictPass, Gate: gate.GateCVE})
+	m.RegisterCache(fakeStatter{stats: cache.CacheStats{SizeBytes: 1024}}, 4096)
 	return m
 }
 
