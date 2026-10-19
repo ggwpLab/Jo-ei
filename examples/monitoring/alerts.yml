@@ -92,7 +92,7 @@ groups:
 
       - alert: JoEiScanQueueSaturated
         expr: |
-          sum by (instance) (jo_ei_scans_in_flight)
+          sum by (instance) (jo_ei_scans_in_flight{scanner=~"clamav|icap"})
             >= on (instance)
           jo_ei_scan_concurrency_limit
         for: 10m
@@ -100,10 +100,10 @@ groups:
           severity: warning
         annotations:
           summary: "Scan concurrency saturated on {{ $labels.instance }}"
-          description: "In-flight scans have been at the configured limit (malware.max_concurrent_scans) for 10 minutes; new scans are queueing."
+          description: "In-flight AV scans (clamav, icap) have been at the configured limit (malware.max_concurrent_scans) for 10 minutes; new scans are queueing."
 
       - alert: JoEiFileDescriptorsHigh
-        expr: process_open_fds / process_max_fds > 0.8
+        expr: process_open_fds{job="jo-ei"} / process_max_fds{job="jo-ei"} > 0.8
         for: 10m
         labels:
           severity: warning

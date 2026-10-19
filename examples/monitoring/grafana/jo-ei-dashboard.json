@@ -1012,7 +1012,7 @@
     {
       "id": 22,
       "type": "timeseries",
-      "title": "In-flight vs limit",
+      "title": "AV scans in flight vs limit (clamav, icap)",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1026,7 +1026,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance) (jo_ei_scans_in_flight{job=~\"$job\", instance=~\"$instance\"})",
+          "expr": "sum by (instance) (jo_ei_scans_in_flight{job=~\"$job\", instance=~\"$instance\", scanner=~\"clamav|icap\"})",
           "legendFormat": "in flight {{instance}}",
           "datasource": {
             "type": "prometheus",
