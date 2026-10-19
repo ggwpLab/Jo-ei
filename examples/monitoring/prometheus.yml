@@ -1,0 +1,15 @@
+# Minimal Prometheus config that scrapes Jō-ei and loads the example alerts.
+# The metrics listener (metrics.listen, default :9464) is separate from the
+# proxy port; keep it on an internal network.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: jo-ei
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["jo-ei:9464"]

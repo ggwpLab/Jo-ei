@@ -28,6 +28,11 @@ func newFullyWired(t *testing.T) *Metrics {
 	m := New(BuildInfo{Version: "1.2.3", Commit: "abc"}, zerolog.Nop())
 	m.WrapHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), NewRouteFunc([]string{"pypi"})).
 		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/pypi/x", nil))
+	// A cancelled client touches the aborted counter so it appears in Gather.
+	abortedCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.WrapHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), NewRouteFunc([]string{"pypi"})).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/pypi/x", nil).WithContext(abortedCtx))
 	failing := m.WrapTransport(rtFunc(func(*http.Request) (*http.Response, error) {
 		return nil, context.DeadlineExceeded
 	}), []string{"pypi.org"})
