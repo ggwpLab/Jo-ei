@@ -5,6 +5,8 @@ services:
     # checkout from source instead and tags the result with the same name.
     image: ghcr.io/ggwplab/jo-ei:latest
     build: .
+    # Prometheus metrics listen on 9464 (metrics.listen). Not published on
+    # purpose: attach Prometheus to this compose network and scrape jo-ei:9464.
     ports:
       - "8080:8080"
     volumes:

@@ -23,5 +23,5 @@ COPY config.yaml /etc/jo-ei/config.yaml
 # proxy fails to start (telemetry persistence is required).
 COPY --from=builder --chown=65532:65532 /cache /var/cache/jo-ei
 COPY --from=builder --chown=65532:65532 /db /var/lib/jo-ei
-EXPOSE 8080
+EXPOSE 8080 9464
 ENTRYPOINT ["/jo-ei", "--config", "/etc/jo-ei/config.yaml"]
