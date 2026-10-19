@@ -60,9 +60,11 @@ Every label value comes from a closed set; anything unexpected is reported as
 | `jo_ei_http_requests_in_flight` | gauge | `route` | Requests currently being served. |
 | `jo_ei_http_requests_aborted_total` | counter | `route` | The client went away before the handler finished. |
 
-`route` is one of the enabled registry prefixes (`pypi`, `npm`, `maven`,
-`rubygems`, `go`), `docker` (the `/v2/` API), `console`, `auth`, `api`,
-`health`, `favicon` or `other`. `method` is a standard HTTP method or `other`.
+`route` is one of the enabled registry prefixes (`pypi`, `npm`, `yarn`,
+`maven`, `rubygems`, `go`), `docker` (the `/v2/` API), `console`, `auth`, `api`,
+`health`, `favicon` or `other`. The `route` label keeps `yarn` separate from
+`npm`, unlike `ecosystem` on `jo_ei_verdicts_total`, where yarn is reported as
+`npm`. `method` is a standard HTTP method or `other`.
 
 "Aborted" means the **client** disconnected or cancelled. The server's own
 `WriteTimeout` is not counted. Jō-ei's own timeouts are visible as
