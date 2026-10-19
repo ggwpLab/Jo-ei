@@ -16,6 +16,7 @@ import (
 const (
 	alertsPath    = "../../examples/monitoring/alerts.yml"
 	dashboardPath = "../../examples/monitoring/grafana/jo-ei-dashboard.json"
+	docPath       = "../../docs/metrics.md"
 )
 
 // metricNameRe matches metric identifiers without matching inside longer ones.
@@ -58,7 +59,7 @@ func TestAssetsReferenceOnlyRegisteredMetrics(t *testing.T) {
 	} {
 		known[n] = true
 	}
-	for _, f := range []string{alertsPath, dashboardPath} {
+	for _, f := range []string{alertsPath, dashboardPath, docPath} {
 		names := metricNameRe.FindAllString(readAsset(t, f), -1)
 		assert.NotEmpty(t, names, f)
 		for _, name := range names {

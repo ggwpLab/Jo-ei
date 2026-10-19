@@ -22,5 +22,9 @@ metrics listener (`metrics.listen`, default `:9464`, path `/metrics`).
    `grafana/jo-ei-dashboard.json`, and pick your Prometheus data source for
    `DS_PROMETHEUS`. Use the `job`, `instance` and `route` variables to filter.
 
+If your scrape job is not named `jo-ei`, edit the `job="jo-ei"` selectors in
+`JoEiDown` and `JoEiFileDescriptorsHigh`; the other rules are not job-scoped.
+The metric catalogue is in [`docs/metrics.md`](../../docs/metrics.md).
+
 A drift test (`internal/metrics/assets_test.go`) fails if the alerts or
 dashboard reference a metric that Jō-ei does not register.
