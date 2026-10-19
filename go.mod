@@ -6,6 +6,7 @@ toolchain go1.26.9
 
 require (
 	github.com/evanw/esbuild v0.28.2
+	github.com/felixge/httpsnoop v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1

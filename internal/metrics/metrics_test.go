@@ -19,7 +19,10 @@ import (
 // registry-wide checks (lint, drift) see all series. Later tasks extend it.
 func newFullyWired(t *testing.T) *Metrics {
 	t.Helper()
-	return New(BuildInfo{Version: "1.2.3", Commit: "abc"}, zerolog.Nop())
+	m := New(BuildInfo{Version: "1.2.3", Commit: "abc"}, zerolog.Nop())
+	m.WrapHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), NewRouteFunc([]string{"pypi"})).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/pypi/x", nil))
+	return m
 }
 
 // filterJoEi keeps only lint problems for Jō-ei's own metrics; go_* and

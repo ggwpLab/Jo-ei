@@ -62,6 +62,7 @@ type BuildInfo struct{ Version, Commit string }
 type Metrics struct {
 	Registry *prometheus.Registry
 	log      zerolog.Logger
+	http     *httpMetrics
 }
 
 // New builds a private registry with Go runtime, process and build-info
@@ -81,7 +82,11 @@ func New(info BuildInfo, log zerolog.Logger) *Metrics {
 	reg.MustRegister(bi)
 	bi.WithLabelValues(info.Version, info.Commit, runtime.Version()).Set(1)
 
-	return &Metrics{Registry: reg, log: log.With().Str("component", "metrics").Logger()}
+	return &Metrics{
+		Registry: reg,
+		log:      log.With().Str("component", "metrics").Logger(),
+		http:     newHTTPMetrics(reg),
+	}
 }
 
 // Handler serves the registry in Prometheus/OpenMetrics text format.
