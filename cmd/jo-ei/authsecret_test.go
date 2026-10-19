@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -79,4 +80,17 @@ func TestAuthTTLDefaults(t *testing.T) {
 	access, refresh = authTTLs(config.AuthConfig{AccessTTLMinutes: 5, RefreshTTLHours: 24})
 	assert.Equal(t, 5*time.Minute, access)
 	assert.Equal(t, 24*time.Hour, refresh)
+}
+
+func TestResolveJWTSecretLogsUnderAuthComponent(t *testing.T) {
+	t.Setenv("JOEI_CONSOLE_JWT_SECRET", "")
+	var buf bytes.Buffer
+
+	_, err := resolveJWTSecret("", testSettings(t), zerolog.New(&buf))
+	require.NoError(t, err)
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line), buf.String())
+	assert.Equal(t, "auth", line["component"])
+	assert.NotContains(t, line["message"], "console auth:", "the component field replaces the message prefix")
 }

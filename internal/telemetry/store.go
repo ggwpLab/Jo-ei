@@ -68,7 +68,7 @@ type Store struct {
 func New(repo Repo, logger zerolog.Logger) *Store {
 	s := &Store{
 		repo:    repo,
-		logger:  logger,
+		logger:  logger.With().Str("component", "telemetry").Logger(),
 		started: time.Now(),
 		stop:    make(chan struct{}),
 	}
@@ -92,7 +92,7 @@ func Open(db *storage.DB, eventRetentionDays, dailyRetentionDays int, logger zer
 // losing at most this one event (not a flush window).
 func (s *Store) Record(ev gate.Event) {
 	if err := s.repo.RecordEvent(ev); err != nil {
-		s.logger.Warn().Err(err).Msg("telemetry: recording event")
+		s.logger.Warn().Err(err).Str("request_id", ev.RequestID).Msg("recording event")
 	}
 }
 
@@ -101,7 +101,7 @@ func (s *Store) Record(ev gate.Event) {
 func (s *Store) Snapshot() Snapshot {
 	snap, err := s.repo.Snapshot(s.started)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("telemetry: reading snapshot")
+		s.logger.Warn().Err(err).Msg("reading snapshot")
 		return Snapshot{StartedAt: s.started, Gates: map[string]GateCounts{}}
 	}
 	return snap
@@ -112,7 +112,7 @@ func (s *Store) Snapshot() Snapshot {
 func (s *Store) Recent(limit int) []gate.Event {
 	evs, err := s.repo.Recent(limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("telemetry: reading recent events")
+		s.logger.Warn().Err(err).Msg("reading recent events")
 		return nil
 	}
 	return evs
@@ -125,7 +125,7 @@ func (s *Store) Recent(limit int) []gate.Event {
 func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
 	evs, next, err := s.repo.Page(verdict, cursor, limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("telemetry: paging events")
+		s.logger.Warn().Err(err).Msg("paging events")
 		return nil, Cursor{}
 	}
 	return evs, next
@@ -136,7 +136,7 @@ func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cu
 func (s *Store) Quarantine(now time.Time) []gate.Event {
 	evs, err := s.repo.Quarantine(now)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("telemetry: reading quarantine")
+		s.logger.Warn().Err(err).Msg("reading quarantine")
 		return nil
 	}
 	return evs
@@ -157,7 +157,7 @@ func (s *Store) pruneLoop() {
 			return
 		case <-ticker.C:
 			if err := s.repo.Prune(); err != nil {
-				s.logger.Warn().Err(err).Msg("telemetry: pruning")
+				s.logger.Warn().Err(err).Msg("pruning")
 			}
 		}
 	}

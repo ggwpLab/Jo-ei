@@ -23,6 +23,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
@@ -566,4 +567,28 @@ func TestCacheCleanup_PurgeError(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestPutPolicyLogCarriesRequestIDAndComponent(t *testing.T) {
+	var logBuf bytes.Buffer
+	rt := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{}, config.PolicyProfile{}, nil,
+	)
+	h := console.NewHandler(console.Config{
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
+		Policy: rt, Logger: zerolog.New(&logBuf),
+	})
+
+	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(body))
+	req = req.WithContext(logx.WithRequestID(req.Context(), "rid-console"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logBuf.Bytes()), &line), logBuf.String())
+	assert.Equal(t, "rid-console", line["request_id"])
+	assert.Equal(t, "console", line["component"])
 }

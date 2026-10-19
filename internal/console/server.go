@@ -20,6 +20,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/health"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
@@ -91,7 +92,14 @@ type Config struct {
 }
 
 type server struct {
-	cfg Config
+	cfg    Config
+	logger zerolog.Logger // cfg.Logger tagged component=console
+}
+
+// log returns the console logger carrying r's request ID.
+func (s *server) log(r *http.Request) *zerolog.Logger {
+	l := logx.Logger(r.Context(), s.logger)
+	return &l
 }
 
 // NewHandler returns the console API handler; mount it at "/api/".
@@ -106,7 +114,7 @@ func NewHandler(cfg Config) http.Handler {
 			cfg.Registries[i].Upstreams = []string{}
 		}
 	}
-	s := &server{cfg: cfg}
+	s := &server{cfg: cfg, logger: cfg.Logger.With().Str("component", "console").Logger()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/overview", s.overview)
 	mux.HandleFunc("GET /api/requests", s.requests)
@@ -121,28 +129,28 @@ func NewHandler(cfg Config) http.Handler {
 	return mux
 }
 
-func (s *server) writeJSON(w http.ResponseWriter, status int, v any) {
+func (s *server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(v); err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: encoding JSON response")
+		s.log(r).Error().Err(err).Msg("encoding JSON response")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := buf.WriteTo(w); err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: writing JSON response")
+		s.log(r).Error().Err(err).Msg("writing JSON response")
 	}
 }
 
-func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
+func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	snap := s.cfg.Store.Snapshot()
 
 	var cs cache.CacheStats
 	if s.cfg.Cache != nil {
 		got, err := s.cfg.Cache.Stats()
 		if err != nil {
-			s.cfg.Logger.Error().Err(err).Msg("console: cache stats")
+			s.log(r).Error().Err(err).Msg("reading cache stats")
 		} else {
 			cs = got
 		}
@@ -158,7 +166,7 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 		scanners = s.cfg.Health.Snapshot()
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"started_at":     snap.StartedAt,
 		"uptime_seconds": int64(time.Since(snap.StartedAt).Seconds()),
 		"kpis": map[string]any{
@@ -190,19 +198,19 @@ func (s *server) overview(w http.ResponseWriter, _ *http.Request) {
 
 // cacheCleanup deletes stale cache entries (idle longer than the configured
 // threshold) and reports what was freed.
-func (s *server) cacheCleanup(w http.ResponseWriter, _ *http.Request) {
+func (s *server) cacheCleanup(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Purger == nil {
-		s.writeJSON(w, http.StatusNotFound, map[string]any{"error": "no_cache"})
+		s.writeJSON(w, r, http.StatusNotFound, map[string]any{"error": "no_cache"})
 		return
 	}
 	removed, freed, err := s.cfg.Purger.PurgeStale()
 	if err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: cache cleanup")
-		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "purge_failed"})
+		s.log(r).Error().Err(err).Msg("cache cleanup failed")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "purge_failed"})
 		return
 	}
-	s.cfg.Logger.Info().Int64("removed", removed).Int64("freed_bytes", freed).Msg("console: cache cleanup")
-	s.writeJSON(w, http.StatusOK, map[string]any{"removed": removed, "freed_bytes": freed})
+	s.log(r).Info().Int64("removed", removed).Int64("freed_bytes", freed).Msg("cache cleanup")
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"removed": removed, "freed_bytes": freed})
 }
 
 // dailyMetrics serves per-UTC-day telemetry tallies. ?days=N (default 30) limits
@@ -212,7 +220,7 @@ func (s *server) dailyMetrics(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query().Get("days"); q != "" {
 		n, err := strconv.Atoi(q)
 		if err != nil || n < 1 {
-			s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_days"})
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_days"})
 			return
 		}
 		if n > 365 {
@@ -222,14 +230,14 @@ func (s *server) dailyMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	daily, err := s.cfg.Store.DailyMetrics(days)
 	if err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: daily metrics")
-		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "metrics_unavailable"})
+		s.log(r).Error().Err(err).Msg("reading daily metrics")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "metrics_unavailable"})
 		return
 	}
 	if daily == nil {
 		daily = []telemetry.DailyMetric{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"daily": daily})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"daily": daily})
 }
 
 func (s *server) requests(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +245,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query().Get("limit"); q != "" {
 		n, err := strconv.Atoi(q)
 		if err != nil || n < 1 {
-			s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_limit"})
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_limit"})
 			return
 		}
 		limit = n
@@ -245,7 +253,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 
 	verdict := r.URL.Query().Get("verdict")
 	if verdict != "" && !validVerdict(verdict) {
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_verdict"})
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_verdict"})
 		return
 	}
 
@@ -253,7 +261,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query().Get("cursor"); q != "" {
 		c, ok := parseCursor(q)
 		if !ok {
-			s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_cursor"})
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_cursor"})
 			return
 		}
 		cursor = c
@@ -264,13 +272,13 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 	for _, ev := range events {
 		out = append(out, toEventJSON(ev))
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"requests":    out,
 		"next_cursor": encodeCursor(next),
 	})
 }
 
-func (s *server) quarantine(w http.ResponseWriter, _ *http.Request) {
+func (s *server) quarantine(w http.ResponseWriter, r *http.Request) {
 	type qJSON struct {
 		Eco         string    `json:"eco"`
 		Pkg         string    `json:"pkg"`
@@ -287,19 +295,19 @@ func (s *server) quarantine(w http.ResponseWriter, _ *http.Request) {
 			PublishedAt: ev.PublishedAt, BlockUntil: ev.BlockUntil, RequestID: ev.RequestID,
 		})
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"quarantine": out})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"quarantine": out})
 }
 
 // writePolicy renders the current runtime policy. "persistence" tells the UI
 // whether edits survive a restart: "database" when the runtime is backed by a
 // settings store, "runtime" when edits reset to the YAML config on restart.
-func (s *server) writePolicy(w http.ResponseWriter, status int) {
+func (s *server) writePolicy(w http.ResponseWriter, r *http.Request, status int) {
 	p := s.cfg.Policy.Current()
 	persistence := "runtime"
 	if s.cfg.Policy.Persistent() {
 		persistence = "database"
 	}
-	s.writeJSON(w, status, map[string]any{
+	s.writeJSON(w, r, status, map[string]any{
 		"mode":             p.Mode,
 		"min_age_hours":    p.MinAgeHours,
 		"cve_block_on":     p.CVEBlockOn,
@@ -310,8 +318,8 @@ func (s *server) writePolicy(w http.ResponseWriter, status int) {
 	})
 }
 
-func (s *server) getPolicy(w http.ResponseWriter, _ *http.Request) {
-	s.writePolicy(w, http.StatusOK)
+func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
+	s.writePolicy(w, r, http.StatusOK)
 }
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
@@ -325,12 +333,12 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&in); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			s.writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			s.writeJSON(w, r, http.StatusRequestEntityTooLarge, map[string]any{
 				"error": "invalid_policy", "field": "body", "message": "request body too large",
 			})
 			return
 		}
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_policy", "field": "body", "message": err.Error(),
 		})
 		return
@@ -339,42 +347,42 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	if err := s.cfg.Policy.Apply(p); err != nil {
 		var verr *policy.ValidationError
 		if errors.As(err, &verr) {
-			s.writeJSON(w, http.StatusBadRequest, map[string]any{
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 				"error": "invalid_policy", "field": verr.Field, "message": verr.Message,
 			})
 			return
 		}
 		var perr *policy.PersistError
 		if errors.As(err, &perr) {
-			s.cfg.Logger.Error().Err(err).Msg("console: policy persist")
-			s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+			s.log(r).Error().Err(err).Msg("persisting policy")
+			s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
 			return
 		}
-		s.cfg.Logger.Error().Err(err).Msg("console: policy apply")
-		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
+		s.log(r).Error().Err(err).Msg("applying policy")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
 		return
 	}
-	logEvent := s.cfg.Logger.Info().Interface("policy", s.cfg.Policy.Current())
+	logEvent := s.log(r).Info().Interface("policy", s.cfg.Policy.Current())
 	if user, ok := auth.UserFromContext(r.Context()); ok && user != "" {
 		logEvent = logEvent.Str("user", user)
 	}
-	logEvent.Msg("runtime policy updated via console")
-	s.writePolicy(w, http.StatusOK)
+	logEvent.Msg("runtime policy updated")
+	s.writePolicy(w, r, http.StatusOK)
 }
 
-func (s *server) registries(w http.ResponseWriter, _ *http.Request) {
+func (s *server) registries(w http.ResponseWriter, r *http.Request) {
 	regs, err := s.storedRegistries()
 	if err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: load registries")
-		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "registries_unavailable"})
+		s.log(r).Error().Err(err).Msg("loading registries")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "registries_unavailable"})
 		return
 	}
-	s.writeRegistries(w, http.StatusOK, regs)
+	s.writeRegistries(w, r, http.StatusOK, regs)
 }
 
 func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.RegistryStore == nil {
-		s.writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "registries_read_only"})
+		s.writeJSON(w, r, http.StatusServiceUnavailable, map[string]any{"error": "registries_read_only"})
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -384,13 +392,13 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_registries", "field": "body", "message": err.Error(),
 		})
 		return
 	}
 	if field, msg := validateRegistries(in.Registries); field != "" {
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_registries", "field": field, "message": msg,
 		})
 		return
@@ -401,11 +409,11 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.cfg.RegistryStore.SaveRegistries(in.Registries); err != nil {
-		s.cfg.Logger.Error().Err(err).Msg("console: save registries")
-		s.writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+		s.log(r).Error().Err(err).Msg("saving registries")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
 		return
 	}
-	s.writeRegistries(w, http.StatusOK, in.Registries)
+	s.writeRegistries(w, r, http.StatusOK, in.Registries)
 }
 
 // storedRegistries returns the persisted set when a store is configured,
@@ -423,7 +431,7 @@ func (s *server) storedRegistries() ([]RegistryInfo, error) {
 	return s.cfg.Registries, nil
 }
 
-func (s *server) writeRegistries(w http.ResponseWriter, status int, regs []RegistryInfo) {
+func (s *server) writeRegistries(w http.ResponseWriter, r *http.Request, status int, regs []RegistryInfo) {
 	// Defensive copy: normalising nil Upstreams must not mutate the caller's
 	// backing array (e.g. a store's internal slice or s.cfg.Registries).
 	out := make([]RegistryInfo, len(regs))
@@ -434,7 +442,7 @@ func (s *server) writeRegistries(w http.ResponseWriter, status int, regs []Regis
 		}
 	}
 	warnings := registryWarnings(out, s.cfg.ImageScanEnabled)
-	s.writeJSON(w, status, map[string]any{
+	s.writeJSON(w, r, status, map[string]any{
 		"registries":      out,
 		"pending_restart": s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries),
 		"warnings":        warnings,
