@@ -117,7 +117,6 @@ func (m *Metrics) WrapTransport(rt http.RoundTripper, hosts []string) http.Round
 func classifyUpstreamError(err error) string {
 	var (
 		dnsErr    *net.DNSError
-		netErr    net.Error
 		opErr     *net.OpError
 		certVerif *tls.CertificateVerificationError
 		unknownCA x509.UnknownAuthorityError
@@ -130,8 +129,7 @@ func classifyUpstreamError(err error) string {
 		return "circuit_open"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
-	case errors.Is(err, context.DeadlineExceeded),
-		errors.As(err, &netErr) && netErr.Timeout():
+	case isTimeout(err):
 		return "timeout"
 	case errors.As(err, &dnsErr):
 		return "dns"

@@ -116,3 +116,57 @@ func TestLimitedScanner_NonPositiveLimitDisablesLimiting(t *testing.T) {
 	lim := scanner.NewLimitedScanner(inner, 0)
 	assert.Equal(t, gate.AVScanner(inner), lim, "limit <= 0 should return the scanner unwrapped")
 }
+
+func TestLimitedScanner_WaitObserverCalled(t *testing.T) {
+	inner := &blockingScanner{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	var mu sync.Mutex
+	var waits []time.Duration
+	lim := scanner.NewLimitedScanner(inner, 1, scanner.WithWaitObserver(func(d time.Duration) {
+		mu.Lock()
+		waits = append(waits, d)
+		mu.Unlock()
+	}))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = lim.Scan(context.Background(), "a") }()
+	<-inner.entered
+	go func() { defer wg.Done(); _, _ = lim.Scan(context.Background(), "b") }()
+	time.Sleep(30 * time.Millisecond)
+	close(inner.release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, waits, 2)
+	assert.GreaterOrEqual(t, max(waits[0], waits[1]), 20*time.Millisecond)
+}
+
+func TestLimitedScanner_NoObserverWhenCtxCancelledWhileWaiting(t *testing.T) {
+	inner := &blockingScanner{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	var calls int32
+	lim := scanner.NewLimitedScanner(inner, 1, scanner.WithWaitObserver(func(time.Duration) {
+		atomic.AddInt32(&calls, 1)
+	}))
+	done := make(chan struct{})
+	go func() { _, _ = lim.Scan(context.Background(), "a"); close(done) }()
+	<-inner.entered
+	before := atomic.LoadInt32(&calls)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := lim.Scan(ctx, "b")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, before, atomic.LoadInt32(&calls))
+	close(inner.release)
+	<-done
+}
+
+func TestLimitedScanner_NilObserver(t *testing.T) {
+	inner := &blockingScanner{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	close(inner.release)
+	lim := scanner.NewLimitedScanner(inner, 1, scanner.WithWaitObserver(nil))
+	res, err := lim.Scan(context.Background(), "a")
+	require.NoError(t, err)
+	assert.True(t, res.Clean)
+}

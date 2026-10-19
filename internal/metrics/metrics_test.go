@@ -8,12 +8,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/client_golang/prometheus/testutil/promlint"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/health"
 )
 
 // newFullyWired returns a Metrics whose every metric has been touched so
@@ -31,6 +35,14 @@ func newFullyWired(t *testing.T) *Metrics {
 	req, _ = http.NewRequest(http.MethodGet, "https://pypi.org/y", nil)
 	_, _ = m.WrapTransport(okRT(), []string{"pypi.org"}).RoundTrip(req)
 	m.RegisterCircuitBreaker(fakeReporter{open: []string{"pypi.org"}}, []string{"pypi.org"})
+	for _, f := range []fakeAV{{res: &gate.AVResult{Clean: true}}, {res: &gate.AVResult{}}, {err: context.DeadlineExceeded}} {
+		_, _ = m.WrapAVScanner("clamav", f).Scan(context.Background(), "f")
+	}
+	m.SetScanConcurrencyLimit(8)
+	m.ScanWaitObserver()(time.Millisecond)
+	m.RegisterScannerHealth(func() []health.ScannerHealth {
+		return []health.ScannerHealth{{Name: "clamav", Status: health.StatusOK, Enabled: true}}
+	})
 	return m
 }
 

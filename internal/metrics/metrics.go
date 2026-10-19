@@ -64,6 +64,7 @@ type Metrics struct {
 	log      zerolog.Logger
 	http     *httpMetrics
 	upstream *upstreamMetrics
+	scanner  *scannerMetrics
 }
 
 // New builds a private registry with Go runtime, process and build-info
@@ -88,6 +89,7 @@ func New(info BuildInfo, log zerolog.Logger) *Metrics {
 		log:      log.With().Str("component", "metrics").Logger(),
 		http:     newHTTPMetrics(reg),
 		upstream: newUpstreamMetrics(reg),
+		scanner:  newScannerMetrics(reg),
 	}
 }
 
