@@ -21,6 +21,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
@@ -129,8 +130,11 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	} else {
 		logger = zerolog.New(logOut).With().Timestamp().Logger()
 	}
+	// logger is the base every subsystem tags with its own component;
+	// serverLog is the one for startup and wiring messages.
+	serverLog := logger.With().Str("component", "server").Logger()
 	if levelErr != nil {
-		logger.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
+		serverLog.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
 	sdb, err := storage.Open(cfg.Database.Path)
@@ -180,6 +184,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	serverLog.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
 	defer func() { _ = store.Close() }()
 	broadcaster := telemetry.NewBroadcaster()
 
@@ -206,10 +211,10 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("upstream TLS trust: %w", err)
 	}
 	if addedCAs > 0 {
-		logger.Info().
+		serverLog.Info().
 			Int("certificates", addedCAs).
 			Int("sources", len(cfg.TLS.CAFiles)).
-			Msg("tls: added CA certificates to the upstream trust pool")
+			Msg("added CA certificates to the upstream trust pool")
 	}
 
 	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
@@ -242,9 +247,9 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
-		logger.Warn().Msg("cache re-validation disabled: cached artifacts are never re-checked")
+		serverLog.Warn().Msg("cache re-validation disabled: cached artifacts are never re-checked")
 	} else {
-		logger.Info().Dur("cve_ttl", shared.cveRecheckTTL).Dur("malware_ttl", shared.malwareRecheckTTL).
+		serverLog.Info().Dur("cve_ttl", shared.cveRecheckTTL).Dur("malware_ttl", shared.malwareRecheckTTL).
 			Msg("lazy cache re-validation configured")
 	}
 
@@ -266,7 +271,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 
 	if !cfg.CVE.Enabled {
-		logger.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on, allowlist_cve and denylist have no effect (supply-chain mode/min-age/allowlist_supply still apply)")
+		serverLog.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on, allowlist_cve and denylist have no effect (supply-chain mode/min-age/allowlist_supply still apply)")
 	}
 
 	// Malware scanners (optional; attached only when the profile blocks malware).
@@ -290,7 +295,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		shared.avScanner = scanner.NewLimitedScanner(scanner.NewMultiScanner(avScanners...), limit)
 		engineCount = len(avScanners)
 	} else if len(cfg.Malware.Scanners) > 0 {
-		logger.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
+		serverLog.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
 			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
 	}
 
@@ -379,7 +384,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	if authUsers.Locked() {
-		logger.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+		serverLog.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
 	}
 	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
 	if err != nil {
@@ -431,7 +436,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	})))
 	root.Handle("/", mux)
 
-	logger.Info().
+	serverLog.Info().
 		Str("listen", cfg.Server.Listen).
 		Int("registries", registryCount).
 		Int("malware_engines", engineCount).
@@ -443,7 +448,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
-		Handler:      root,
+		Handler:      logx.Middleware(root),
 		ReadTimeout:  120 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
@@ -624,6 +629,5 @@ func buildTelemetryStore(sdb *storage.DB, cfg *config.Config, logger zerolog.Log
 	if err != nil {
 		return nil, fmt.Errorf("initialising telemetry store: %w", err)
 	}
-	logger.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
 	return store, nil
 }

@@ -1,6 +1,7 @@
 package dockerproxy
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 )
 
 // countingScanner wraps stubScanner and counts ScanImage calls so tests can
@@ -332,5 +334,28 @@ func TestFastPath_MissingMediaTypeFallsThroughToFetch(t *testing.T) {
 	_, v, err := liveG.Evaluate(context.Background(), repo, digest)
 	if err != nil || !v.Allowed {
 		t.Fatalf("v=%+v err=%v, want allowed via fetch fall-through", v, err)
+	}
+}
+
+func TestGateLogsCarryRequestIDFromContext(t *testing.T) {
+	c := newFakeCache()
+	calls := 0
+	g, _, repo := newRecheckGate(t, countingScanner{calls: &calls}, time.Hour, c)
+	var buf bytes.Buffer
+	deps := g.gateDeps
+	deps.logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	g = newManifestGate(deps)
+
+	digest, _, err := g.Evaluate(context.Background(), repo, "latest")
+	require.NoError(t, err)
+	rewindVerdict(c, repo, digest, 2*time.Hour)
+	_, _, err = g.Evaluate(logx.WithRequestID(context.Background(), "rid-gate"), repo, "latest")
+	require.NoError(t, err)
+
+	lines := logLines(t, &buf)
+	require.NotEmpty(t, lines, "expired verdict re-evaluation logs a line")
+	for _, l := range lines {
+		require.Equal(t, "rid-gate", l["request_id"], "line %v", l)
+		require.Equal(t, "docker", l["component"], "line %v", l)
 	}
 }
