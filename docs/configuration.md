@@ -279,6 +279,28 @@ applied atomically without restart).
 | `format` | `json` | `json` or `text` (human-readable console writer). |
 | `output` | `stderr` | `stdout`, `stderr`, or a file path (opened append). |
 
+**Log line shape.** Every line names the subsystem that wrote it in
+`component` (`server`, `proxy`, `metadata_filter`, `docker`, `console`,
+`telemetry`, `auth`), and every line written while serving a request carries
+that request's `request_id`. The same ID is returned to the client in the
+`X-Request-Id` response header, appears in JSON error bodies and in the
+console's request feed, so one ID finds everything a request left behind.
+Packages are identified by `ecosystem`, `package` and `version` (Docker:
+`ecosystem=docker`, `package` = repository, `version` = tag or digest as
+requested, plus `digest`).
+
+Each gated request — a package download or a Docker manifest — ends with exactly
+one `request gated` line mirroring its telemetry event: `verdict`
+(`PASS`/`CACHE`/`BLOCK`/`ERROR`), `gate`, `reason`, `status`, `duration_ms`, and
+for blocks `blocked_by`, `cves`, `engine`/`signature` or
+`published_at`/`block_until`. It logs at `info` for `PASS`/`CACHE`, `warn` for
+`BLOCK` and client-side (4xx) errors, `error` otherwise; diagnostic lines (scanner
+errors, per-mirror `upstream_attempts`) precede it.
+
+```json
+{"level":"warn","component":"proxy","request_id":"6f1c…","ecosystem":"npm","package":"left-pad","version":"1.3.0","verdict":"BLOCK","gate":"supply","reason":"package_younger_than_min_age","status":423,"duration_ms":41,"blocked_by":["supply_chain"],"published_at":"2026-10-15T09:00:00Z","block_until":"2026-10-16T09:00:00Z","message":"request gated"}
+```
+
 ## `console`
 
 | Key | Default | Description |

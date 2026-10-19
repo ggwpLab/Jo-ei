@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 )
 
 // Mux routes requests to per-registry handlers by URL path prefix.
@@ -20,7 +22,7 @@ type Mux struct {
 // NewMux creates a Mux. raw may be nil; it holds prefixes served by a plain
 // http.Handler (e.g. the Docker V2 proxy).
 func NewMux(handlers map[string]*Handler, raw map[string]http.Handler, logger zerolog.Logger) *Mux {
-	return &Mux{handlers: handlers, raw: raw, logger: logger}
+	return &Mux{handlers: handlers, raw: raw, logger: logger.With().Str("component", "proxy").Logger()}
 }
 
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,11 +56,12 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h, ok := m.handlers[prefix]
 	if !ok {
-		m.logger.Warn().Str("prefix", prefix).Str("path", r.URL.Path).Msg("request to unknown registry prefix")
+		log := logx.Logger(r.Context(), m.logger)
+		log.Warn().Str("prefix", prefix).Str("path", r.URL.Path).Msg("request to unknown registry prefix")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		if _, err := w.Write([]byte(`{"error":"unknown_registry"}`)); err != nil {
-			m.logger.Error().Err(err).Msg("writing not-found response")
+			log.Error().Err(err).Msg("writing not-found response")
 		}
 		return
 	}

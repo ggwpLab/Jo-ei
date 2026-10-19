@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One log format across the proxy.** Package downloads, metadata filtering,
+  transparent proxying, Docker, the console API, telemetry and startup used to
+  log with different field names, message prefixes and only some of them with
+  a request ID. Now:
+  - every request gets one ID at the server edge, returned in a new
+    `X-Request-Id` response header and carried as `request_id` on every log
+    line the request produces — including metadata filtering, transparent
+    proxying, Docker blobs, the Docker gate and the console API, which had none
+    — and in the console request feed and JSON error bodies;
+  - every line names its subsystem in a `component` field (`server`, `proxy`,
+    `metadata_filter`, `docker`, `console`, `telemetry`, `auth`); message
+    prefixes such as `console:`, `telemetry:` and `metadata filter:` are gone;
+  - packages are always `ecosystem` + `package` + `version` (the download log's
+    combined `package` key, e.g. `pypi/requests@2.32.0`, is split); Docker
+    logs `ecosystem=docker`, the repository as `package` and the requested
+    reference as `version` instead of `repo`/`ref`;
+  - each gated request ends with exactly one `request gated` line mirroring its
+    telemetry event (`verdict`, `gate`, `reason`, `status`, `duration_ms` and
+    block details). It replaces `serving artifact`, `supply chain filter
+    blocked package`, `CVE policy blocked package`, `malware detected`,
+    `docker image allowed` and `docker image blocked`, and package downloads now
+    log their verdict the way Docker did.
+
+  Log queries keyed on the old messages or fields need updating; see
+  [configuration › logging](docs/configuration.md#logging).
+
 ## [0.5.1] - 2026-10-05
 
 ### Changed

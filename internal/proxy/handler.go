@@ -11,11 +11,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
@@ -58,6 +58,10 @@ var hopByHopHeaders = []string{
 type Handler struct {
 	cfg        HandlerConfig
 	httpClient *http.Client
+	// log and metaLog are cfg.Logger tagged with this handler's components:
+	// artifact and transparent traffic, and metadata filtering respectively.
+	log     zerolog.Logger
+	metaLog zerolog.Logger
 	// recheckGroup coalesces concurrent lazy re-checks of the same cache
 	// entry: one flight scans, every waiter shares the outcome.
 	recheckGroup singleflight.Group
@@ -76,11 +80,13 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		httpClient: client,
+		log:        cfg.Logger.With().Str("component", "proxy").Logger(),
+		metaLog:    cfg.Logger.With().Str("component", "metadata_filter").Logger(),
 	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	requestID := uuid.New().String()
+	r, requestID := logx.Ensure(r)
 
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
@@ -93,13 +99,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Telemetry: exactly one event per intercepted request at its outcome.
-	// A nil Recorder makes record a no-op; telemetry can never fail a request.
+	logCtx := logx.Logger(r.Context(), h.log).With().
+		Str("ecosystem", ref.Ecosystem).
+		Str("package", ref.Name).
+		Str("version", ref.Version)
+	if ref.Classifier != "" {
+		logCtx = logCtx.Str("classifier", ref.Classifier)
+	}
+	log := logCtx.Logger()
+
+	// Exactly one outcome per intercepted request: a telemetry event and the
+	// matching log line. A nil Recorder disables only the event; telemetry can
+	// never fail a request.
 	start := time.Now()
 	record := func(verdict, gateName, reason string, status int, mod func(*gate.Event)) {
-		if h.cfg.Recorder == nil {
-			return
-		}
 		ev := gate.Event{
 			RequestID: requestID, Time: time.Now(),
 			Ecosystem: ref.Ecosystem, Package: ref.Name, Version: ref.Version,
@@ -109,13 +122,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if mod != nil {
 			mod(&ev)
 		}
-		h.cfg.Recorder.Record(ev)
+		logx.Outcome(log, ev)
+		if h.cfg.Recorder != nil {
+			h.cfg.Recorder.Record(ev)
+		}
 	}
-
-	log := h.cfg.Logger.With().
-		Str("request_id", requestID).
-		Str("package", ref.Key()).
-		Logger()
 
 	// Check cache first
 	if entry, found := h.cfg.Cache.Get(ref); found {
@@ -128,8 +139,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.recheckExpired(r.Context(), w, requestID, ref, entry, record, log) {
 			return // blocked and evicted; response already written
 		}
-		log.Debug().Msg("cache hit")
-		if err := h.serveFromCache(w, entry); err != nil {
+		if err := h.serveFromCache(w, entry, log); err != nil {
 			record(gate.VerdictError, gate.GateCache, "cache_read_error", http.StatusInternalServerError, nil)
 			return
 		}
@@ -152,11 +162,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	checkSupplyChain := func(meta *gate.PackageMetadata) bool {
 		scResult = h.cfg.Filter.Check(ctx, ref, meta)
 		if !scResult.Allowed {
-			log.Warn().
-				Str("reason", scResult.Reason).
-				Time("published_at", scResult.PublishedAt).
-				Time("block_until", scResult.BlockUntil).
-				Msg("supply chain filter blocked package")
 			record(gate.VerdictBlock, gate.GateSupply, scResult.Reason, http.StatusLocked, func(ev *gate.Event) {
 				ev.BlockedBy = []string{"supply_chain"}
 				ev.PublishedAt = scResult.PublishedAt
@@ -169,7 +174,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Warn().
 				Time("published_at", scResult.PublishedAt).
 				Time("block_until", scResult.BlockUntil).
-				Msg("dry_run: package would be blocked by supply chain filter")
+				Msg("dry run: supply chain filter would block package")
 		}
 		return true
 	}
@@ -195,7 +200,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.CVEScanner != nil {
 		scanResult, err := h.cfg.CVEScanner.Scan(ctx, ref)
 		if err != nil {
-			log.Error().Err(err).Msg("CVE scan failed")
+			log.Error().Err(err).Msg("cve scan failed")
 			record(gate.VerdictError, gate.GateCVE, "cve_scan_error", http.StatusServiceUnavailable, nil)
 			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "cve_scan_error")
 			return
@@ -203,10 +208,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.cfg.Policy != nil {
 			decision := h.cfg.Policy.Evaluate(ref, scanResult)
 			if !decision.Allowed {
-				log.Warn().
-					Str("reason", decision.Reason).
-					Int("findings", len(decision.Findings)).
-					Msg("CVE policy blocked package")
 				blockedBy := "cve"
 				if decision.Reason == gate.ReasonDenylisted {
 					blockedBy = "denylist"
@@ -256,13 +257,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.AVScanner != nil {
 		avResult, err := h.cfg.AVScanner.Scan(ctx, tmpPath)
 		if err != nil {
-			log.Error().Err(err).Msg("AV scan failed")
+			log.Error().Err(err).Msg("malware scan failed")
 			record(gate.VerdictError, gate.GateMalware, "av_scan_error", http.StatusServiceUnavailable, nil)
 			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "av_scan_error")
 			return
 		}
 		if !avResult.Clean {
-			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).Msg("malware detected")
 			record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
 				ev.BlockedBy = []string{"malware"}
 				ev.MalwareEngine = avResult.Engine
@@ -282,7 +282,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().Str("sc_reason", scResult.Reason).Msg("serving artifact")
 	entry, found := h.cfg.Cache.Get(ref)
 	if !found {
 		// Should not happen — we just Put it
@@ -298,7 +297,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.AVScanner != nil {
 		lastGate = gate.GateMalware
 	}
-	if err := h.serveFromCache(w, entry); err != nil {
+	if err := h.serveFromCache(w, entry, log); err != nil {
 		record(gate.VerdictError, gate.GateCache, "cache_read_error", http.StatusInternalServerError, nil)
 		return
 	}
@@ -355,16 +354,14 @@ func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, req
 	}
 	switch out.gate {
 	case gate.GateCVE:
-		log.Warn().Str("reason", out.decision.Reason).Int("findings", len(out.decision.Findings)).
-			Msg("re-check: CVE policy blocked cached package")
+		log.Warn().Str("gate", gate.GateCVE).Msg("cached artifact failed re-check; evicted")
 		record(gate.VerdictBlock, gate.GateCVE, out.decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
 			ev.BlockedBy = []string{out.blockedBy}
 			ev.CVEs = out.decision.Findings
 		})
 		h.writeCVEBlockedResponse(w, requestID, ref, out.decision)
 	case gate.GateMalware:
-		log.Warn().Str("engine", out.av.Engine).Str("signature", out.av.Signature).
-			Msg("re-check: malware detected in cached artifact")
+		log.Warn().Str("gate", gate.GateMalware).Msg("cached artifact failed re-check; evicted")
 		record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
 			ev.BlockedBy = []string{"malware"}
 			ev.MalwareEngine = out.av.Engine
@@ -387,7 +384,7 @@ func (h *Handler) runRechecks(ctx context.Context, ref *gate.PackageRef, entry *
 		res, err := h.cfg.CVEScanner.Scan(ctx, ref)
 		switch {
 		case err != nil:
-			log.Warn().Err(err).Msg("CVE re-check failed; serving cached artifact")
+			log.Warn().Err(err).Msg("cve re-check failed; serving cached artifact")
 		default:
 			if decision := h.cfg.Policy.Evaluate(ref, res); !decision.Allowed {
 				h.evictRechecked(ref, log)
@@ -425,7 +422,7 @@ func (h *Handler) runRechecks(ctx context.Context, ref *gate.PackageRef, entry *
 // failure is logged but never blocks the block response.
 func (h *Handler) evictRechecked(ref *gate.PackageRef, log zerolog.Logger) {
 	if err := h.cfg.Cache.Invalidate(ref); err != nil {
-		log.Error().Err(err).Str("package", ref.Key()).Msg("re-check: evicting cached artifact")
+		log.Error().Err(err).Msg("evicting re-checked artifact")
 	}
 }
 
@@ -493,20 +490,18 @@ func (h *Handler) forwardUpstream(r *http.Request) (*http.Response, upstream.Att
 // response: 500 when no upstream is configured, 400 when the client's own
 // request body could not be read, 404 when every mirror said not-found, and
 // 502 for every other upstream failure.
-func (h *Handler) writeForwardError(w http.ResponseWriter, r *http.Request, atts upstream.Attempts, err error) {
+func (h *Handler) writeForwardError(w http.ResponseWriter, atts upstream.Attempts, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, errNoUpstreams):
-		h.cfg.Logger.Error().Msg("adapter returned no upstream URLs for transparent request")
+		log.Error().Msg("adapter returned no upstream URLs")
 		http.Error(w, "no upstream configured", http.StatusInternalServerError)
 	case errors.Is(err, errUnreadableRequestBody):
 		http.Error(w, "bad request", http.StatusBadRequest)
 	case atts.AllNotFound():
-		h.cfg.Logger.Warn().Array("upstream_attempts", atts).
-			Str("path", r.URL.Path).Msg("transparent proxy: not found on any upstream")
+		log.Warn().Array("upstream_attempts", atts).Msg("not found on any upstream")
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
-		h.cfg.Logger.Error().Array("upstream_attempts", atts).
-			Str("path", r.URL.Path).Msg("transparent proxy: no upstream available")
+		log.Error().Array("upstream_attempts", atts).Msg("no upstream available")
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 	}
 }
@@ -528,9 +523,10 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 // upstream in order, streaming back the first response with status < 400.
 // If all fail, returns 404 (all were 404/410) or 502.
 func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
+	log := logx.Logger(r.Context(), h.log).With().Str("path", r.URL.Path).Logger()
 	resp, atts, err := h.forwardUpstream(r)
 	if resp == nil {
-		h.writeForwardError(w, r, atts, err)
+		h.writeForwardError(w, atts, err, log)
 		return
 	}
 	defer resp.Body.Close()
@@ -538,7 +534,7 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 	copyProxyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("error streaming proxy response")
+		log.Error().Err(err).Msg("streaming proxy response")
 	}
 }
 
@@ -593,7 +589,7 @@ func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmp
 // serveFromCache streams the cached artifact to the response writer. It
 // returns an error only when the artifact cannot be opened (a 500 is written
 // in that case); streaming errors after headers are sent are logged only.
-func (h *Handler) serveFromCache(w http.ResponseWriter, entry *gate.ArtifactEntry) error {
+func (h *Handler) serveFromCache(w http.ResponseWriter, entry *gate.ArtifactEntry, log zerolog.Logger) error {
 	f, err := os.Open(entry.ArtifactPath)
 	if err != nil {
 		http.Error(w, "cache read error", http.StatusInternalServerError)
@@ -605,7 +601,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *gate.ArtifactEntr
 	w.Header().Set("X-Joei-Cache", "HIT")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, f); err != nil {
-		h.cfg.Logger.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("error streaming cached artifact")
+		log.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("streaming cached artifact")
 	}
 	return nil
 }
@@ -626,11 +622,7 @@ func (h *Handler) writeBlockedResponse(w http.ResponseWriter, requestID string, 
 	if !scResult.BlockUntil.IsZero() {
 		body["block_until"] = scResult.BlockUntil.Format(time.RFC3339)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusLocked)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
-	}
+	h.writeJSON(w, requestID, http.StatusLocked, body)
 }
 
 // writeError sends a structured JSON error response.
@@ -644,11 +636,7 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *gate.
 		body["package"] = ref.Name
 		body["version"] = ref.Version
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
-	}
+	h.writeJSON(w, requestID, status, body)
 }
 
 // writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
@@ -663,11 +651,7 @@ func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID s
 		"blocked_by": []string{"malware_scanner"},
 		"request_id": requestID,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
-	}
+	h.writeJSON(w, requestID, http.StatusForbidden, body)
 }
 
 // writeCVEBlockedResponse sends a 403 Forbidden response with CVE details.
@@ -696,9 +680,14 @@ func (h *Handler) writeCVEBlockedResponse(w http.ResponseWriter, requestID strin
 		"blocked_by": []string{"cve_scanner"},
 		"request_id": requestID,
 	}
+	h.writeJSON(w, requestID, http.StatusForbidden, body)
+}
+
+// writeJSON sends body as a JSON response with the given status.
+func (h *Handler) writeJSON(w http.ResponseWriter, requestID string, status int, body map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		h.cfg.Logger.Error().Err(err).Msg("writing JSON response")
+		h.log.Error().Err(err).Str("request_id", requestID).Msg("writing JSON response")
 	}
 }

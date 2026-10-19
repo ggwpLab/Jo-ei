@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
@@ -86,7 +87,11 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		return
 	}
 
-	log := h.cfg.Logger.With().Str("ecosystem", mref.Ecosystem).Str("package", mref.Name).Logger()
+	log := logx.Logger(r.Context(), h.metaLog).With().
+		Str("ecosystem", mref.Ecosystem).
+		Str("package", mref.Name).
+		Str("path", r.URL.Path).
+		Logger()
 
 	// The whole cost model rests on this branch, and it is decided from the
 	// request alone: a client holding one of our tags needs a fresh body to
@@ -139,7 +144,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		// not just a stand-in.
 		retry := outbound.Clone(outbound.Context())
 		retry.Body = http.NoBody
-		h.streamOversizedMetadata(w, r, retry, &log, relay)
+		h.streamOversizedMetadata(w, retry, &log, relay)
 		return
 	case fetch == nil && (err == nil || errors.Is(err, errNoUpstreams) || errors.Is(err, errUnreadableRequestBody)):
 		// forwardUpstream itself never produced a usable response — every
@@ -147,7 +152,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		// knows how to report that precisely (404 vs 502 vs 500). A document-read
 		// failure never lands here: forwardUpstream returns no error but these
 		// two sentinels, so any other non-nil err below is readMetadataDocument's.
-		h.writeForwardError(w, r, atts, err)
+		h.writeForwardError(w, atts, err, log)
 		return
 	case err != nil:
 		// A cancelled context would mean the client hung up mid-fetch, not a
@@ -163,7 +168,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		if errors.Is(err, context.Canceled) {
 			event = log.Debug()
 		}
-		event.Err(err).Msg("metadata filter: reading upstream document")
+		event.Err(err).Msg("reading upstream document")
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -183,7 +188,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	var undated int
 	filtered, err := filterer.FilterVersions(fetch.doc, h.versionDecider(r.Context(), mref, &undated))
 	if err != nil {
-		log.Warn().Err(err).Msg("metadata filter: unparseable document, serving unfiltered")
+		log.Warn().Err(err).Msg("unparseable document, serving unfiltered")
 		filtered = gate.FilteredDocument{Body: fetch.doc}
 	}
 	if undated > 0 {
@@ -191,16 +196,16 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		// cannot speak for it. Say so once, or "why does pnpm still get 423"
 		// has no answer outside the source.
 		log.Debug().Int("versions", undated).
-			Msg("metadata filter: document carries no publish dates, so the age rule is mute here")
+			Msg("document carries no publish dates, so the age rule is mute here")
 	}
 
 	switch {
 	case filtered.AllRejected:
 		log.Info().Strs("versions", filtered.Removed).
-			Msg("metadata filter: every version is blocked, serving the document unchanged")
+			Msg("every version is blocked, serving the document unchanged")
 	case len(filtered.Removed) > 0:
 		log.Info().Strs("versions", filtered.Removed).Int("count", len(filtered.Removed)).
-			Msg("metadata filter: hid blocked versions")
+			Msg("hid blocked versions")
 	}
 
 	rewritten := len(filtered.Removed) > 0 && !filtered.AllRejected
@@ -310,22 +315,22 @@ func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64
 // resuming a partially-read body from a coalesced attempt — that body's
 // remainder belongs to whichever request read it, not to this one, so this
 // caller fetches its own copy alone.
-func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, r *http.Request, outbound *http.Request, log *zerolog.Logger, relay relayReason) {
+func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, outbound *http.Request, log *zerolog.Logger, relay relayReason) {
 	switch relay {
 	case relayOversized:
 		log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
-			Msg("metadata filter: document over cap, serving unfiltered")
+			Msg("document over cap, serving unfiltered")
 	case relayEncoding:
-		log.Warn().Msg("metadata filter: content-encoding not supported, serving unfiltered")
+		log.Warn().Msg("content-encoding not supported, serving unfiltered")
 	default:
 		// A non-200 sub-400 status is not a filtering degradation — there was
 		// never a document to filter — so it does not earn a Warn.
-		log.Debug().Msg("metadata filter: non-200 upstream response, relaying unfiltered")
+		log.Debug().Msg("non-200 upstream response, relaying unfiltered")
 	}
 
 	resp, atts, err := h.forwardUpstream(outbound)
 	if resp == nil {
-		h.writeForwardError(w, r, atts, err)
+		h.writeForwardError(w, atts, err, *log)
 		return
 	}
 	defer resp.Body.Close()
@@ -333,7 +338,7 @@ func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, r *http.Request
 	copyProxyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Error().Err(err).Msg("metadata filter: streaming oversized document")
+		log.Error().Err(err).Msg("streaming oversized document")
 	}
 }
 
@@ -428,7 +433,7 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 			// decode plain bytes, so this must not fail the response. But a
 			// silent fallback is undiagnosable, so it gets a log line same as
 			// every other write failure in this file.
-			log.Error().Err(err).Msg("metadata filter: compressing response, serving identity")
+			log.Error().Err(err).Msg("compressing response, serving identity")
 		}
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
@@ -444,7 +449,7 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 		if r.Context().Err() != nil {
 			event = log.Debug()
 		}
-		event.Err(err).Msg("metadata filter: writing response")
+		event.Err(err).Msg("writing response")
 	}
 }
 

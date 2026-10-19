@@ -2,7 +2,7 @@ module github.com/ggwpLab/Jo-ei
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.26.9
 
 require (
 	github.com/evanw/esbuild v0.28.2
