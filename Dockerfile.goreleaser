@@ -15,5 +15,5 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY config.yaml /etc/jo-ei/config.yaml
 COPY --from=dirs --chown=65532:65532 /cache /var/cache/jo-ei
 COPY --from=dirs --chown=65532:65532 /db /var/lib/jo-ei
-EXPOSE 8080
+EXPOSE 8080 9464
 ENTRYPOINT ["/jo-ei", "--config", "/etc/jo-ei/config.yaml"]

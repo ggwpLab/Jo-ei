@@ -477,6 +477,14 @@ documented in [`docs/architecture.md`](docs/architecture.md). For a narrative
 introduction to the project, read the overview article
 ([English](docs/overview.md) · [Русский](docs/overview.ru.md)).
 
+## Monitoring
+
+Jō-ei exposes Prometheus metrics (requests, upstreams, scanners, verdicts, cache)
+on a separate, unauthenticated listener, `:9464/metrics` by default. Keep that
+port on an internal network. A starter scrape config, alert rules and an
+importable Grafana dashboard are in [`examples/monitoring/`](examples/monitoring/);
+the metric catalogue is in [`docs/metrics.md`](docs/metrics.md).
+
 ## Understanding Block Responses
 
 When the proxy rejects a request, it returns a structured JSON body. The `reason` field

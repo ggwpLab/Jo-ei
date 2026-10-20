@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +83,22 @@ func (c *CircuitBreaker) isOpen(host string) bool {
 	defer c.mu.Unlock()
 	st := c.hosts[host]
 	return st != nil && c.now().Before(st.openUntil)
+}
+
+// OpenHosts returns the hosts (in req.URL.Host form) whose circuit is
+// currently open, sorted. It is safe for concurrent use.
+func (c *CircuitBreaker) OpenHosts() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	var open []string
+	for host, st := range c.hosts {
+		if now.Before(st.openUntil) {
+			open = append(open, host)
+		}
+	}
+	sort.Strings(open)
+	return open
 }
 
 // trip opens (or extends) the host circuit after a 429/503.

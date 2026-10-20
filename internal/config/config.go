@@ -22,6 +22,7 @@ type Config struct {
 	Console     ConsoleConfig     `mapstructure:"console"`
 	Health      HealthConfig      `mapstructure:"health"`
 	Database    DatabaseConfig    `mapstructure:"database"`
+	Metrics     MetricsConfig     `mapstructure:"metrics"`
 }
 
 // Validate checks cross-field invariants after loading.
@@ -61,6 +62,22 @@ func (c *Config) Validate() error {
 	if c.Server.MetadataFilterMaxMB < 0 {
 		return fmt.Errorf("server.metadata_filter_max_mb must not be negative")
 	}
+	if c.Metrics.Enabled {
+		if c.Metrics.Listen == "" {
+			return fmt.Errorf("metrics.listen is required when metrics are enabled")
+		}
+		if c.Metrics.Listen == c.Server.Listen {
+			return fmt.Errorf("metrics.listen must differ from server.listen (%q)", c.Server.Listen)
+		}
+		if !strings.HasPrefix(c.Metrics.Path, "/") {
+			return fmt.Errorf("metrics.path must start with \"/\" (got %q)", c.Metrics.Path)
+		}
+		// ServeMux.Handle panics on method prefixes, wildcards and the like, so
+		// accept only a plain path.
+		if strings.ContainsAny(c.Metrics.Path, " \t\r\n{}?#") {
+			return fmt.Errorf("metrics.path must be a plain URL path without spaces, braces, \"?\" or \"#\" (got %q)", c.Metrics.Path)
+		}
+	}
 	if c.Health.ProbeIntervalSeconds < 0 {
 		return fmt.Errorf("health.probe_interval_seconds must not be negative")
 	}
@@ -99,6 +116,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Console.Auth.RefreshTTLHours < 0 {
 		return fmt.Errorf("console.auth.refresh_ttl_hours must not be negative")
+	}
+	if c.Server.Listen == "" {
+		return fmt.Errorf("server.listen is required")
 	}
 	return nil
 }
@@ -302,6 +322,14 @@ type DatabaseConfig struct {
 	DailyRetentionDays int    `mapstructure:"daily_retention_days"`
 }
 
+// MetricsConfig configures the Prometheus /metrics endpoint, served on its own
+// listener so it is never reachable through the proxy port.
+type MetricsConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	Listen  string `mapstructure:"listen"`
+	Path    string `mapstructure:"path"`
+}
+
 type LoggingConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
@@ -317,7 +345,11 @@ func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
+	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.metadata_filter_max_mb", 32)
+	v.SetDefault("metrics.enabled", true)
+	v.SetDefault("metrics.listen", ":9464")
+	v.SetDefault("metrics.path", "/metrics")
 	v.SetConfigFile(path)
 	v.SetEnvPrefix("JOEI")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

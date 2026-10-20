@@ -1,0 +1,121 @@
+# Example Prometheus alert rules for Jō-ei. Thresholds are starting points;
+# tune them to your traffic.
+groups:
+  - name: jo-ei
+    rules:
+      - alert: JoEiDown
+        expr: up{job="jo-ei"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Jō-ei {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for 5 minutes."
+
+      - alert: JoEiHighErrorRatio
+        expr: |
+          sum by (instance) (rate(jo_ei_http_requests_total{code=~"5.."}[5m]))
+            /
+          sum by (instance) (rate(jo_ei_http_requests_total[5m]))
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jō-ei {{ $labels.instance }} 5xx ratio above 5%"
+          description: "{{ $value | humanizePercentage }} of requests on {{ $labels.instance }} returned 5xx over the last 5 minutes. Policy blocks (403/423) are not counted."
+
+      - alert: JoEiHighLatency
+        # Artifact downloads legitimately take seconds; the 10s threshold is
+        # tunable. Console, API and health routes are excluded.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, instance) (
+              rate(jo_ei_http_request_duration_seconds_bucket{route!~"console|api|auth|health|favicon"}[5m])
+            )
+          ) > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jō-ei {{ $labels.instance }} p95 latency above 10s"
+          description: "p95 proxy request latency on {{ $labels.instance }} is {{ $value | humanizeDuration }}."
+
+      - alert: JoEiRequestsAborted
+        expr: sum by (instance) (rate(jo_ei_http_requests_aborted_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Many clients aborting requests on {{ $labels.instance }}"
+          description: "{{ $value | humanize }} requests/s on {{ $labels.instance }} ended with the client gone or a failed response write (including write timeouts). Often build tools cancelling; check for slow responses."
+
+      - alert: JoEiUpstreamErrors
+        expr: |
+          sum by (instance, host) (rate(jo_ei_upstream_errors_total{reason!="canceled"}[5m]))
+            /
+          sum by (instance, host) (rate(jo_ei_upstream_requests_total[5m]))
+          > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Upstream {{ $labels.host }} failing for {{ $labels.instance }}"
+          description: "{{ $value | humanizePercentage }} of requests from {{ $labels.instance }} to {{ $labels.host }} fail at the transport level."
+
+      - alert: JoEiUpstreamCircuitOpen
+        expr: jo_ei_upstream_circuit_open == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit open for {{ $labels.host }} on {{ $labels.instance }}"
+          description: "The circuit breaker for upstream {{ $labels.host }} has been open for 5 minutes; requests to it are rejected."
+
+      - alert: JoEiScannerDown
+        expr: jo_ei_scanner_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scanner {{ $labels.scanner }} down on {{ $labels.instance }}"
+          description: "Health checks for scanner {{ $labels.scanner }} have failed for 5 minutes."
+
+      - alert: JoEiScanTimeouts
+        expr: sum by (instance, scanner) (rate(jo_ei_scans_total{result="timeout"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scans timing out: {{ $labels.scanner }} on {{ $labels.instance }}"
+          description: "Scanner {{ $labels.scanner }} on {{ $labels.instance }} has been hitting timeouts for 10 minutes."
+
+      - alert: JoEiScanQueueSaturated
+        expr: |
+          sum by (instance) (jo_ei_scans_in_flight{scanner=~"clamav|icap"})
+            >= on (instance)
+          jo_ei_scan_concurrency_limit
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scan concurrency saturated on {{ $labels.instance }}"
+          description: "In-flight AV scans (clamav, icap) have been at the configured limit (malware.max_concurrent_scans) for 10 minutes; new scans are queueing."
+
+      - alert: JoEiFileDescriptorsHigh
+        expr: process_open_fds{job="jo-ei"} / process_max_fds{job="jo-ei"} > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "File descriptors above 80% on {{ $labels.instance }}"
+          description: "{{ $value | humanizePercentage }} of the file descriptor limit is in use on {{ $labels.instance }}."
+
+      - alert: JoEiCacheNearlyFull
+        expr: jo_ei_cache_size_bytes / jo_ei_cache_max_bytes > 0.9
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cache above 90% full on {{ $labels.instance }}"
+          description: "The artifact cache on {{ $labels.instance }} is {{ $value | humanizePercentage }} of cache.local.max_size_gb."

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Prometheus metrics.** A dedicated listener (`metrics.listen`, default
+  `:9464`, path `/metrics`; on by default, `metrics.enabled: false` turns it
+  off) exposes inbound HTTP, upstream, scanner, verdict and cache metrics plus
+  Go runtime and process collectors, all prefixed `jo_ei_` with bounded label
+  sets. The port is unauthenticated by design and not published by the compose
+  file. `examples/monitoring/` ships a Prometheus scrape config, alert rules and
+  a Grafana dashboard; see [docs/metrics.md](docs/metrics.md).
+
 ### Changed
 
 - **One log format across the proxy.** Package downloads, metadata filtering,

@@ -301,6 +301,21 @@ errors, per-mirror `upstream_attempts`) precede it.
 {"level":"warn","component":"proxy","request_id":"6f1c…","ecosystem":"npm","package":"left-pad","version":"1.3.0","verdict":"BLOCK","gate":"supply","reason":"package_younger_than_min_age","status":423,"duration_ms":41,"blocked_by":["supply_chain"],"published_at":"2026-10-15T09:00:00Z","block_until":"2026-10-16T09:00:00Z","message":"request gated"}
 ```
 
+## `metrics`
+
+Prometheus metrics, served on their own listener. See
+[`docs/metrics.md`](metrics.md) for the catalogue and monitoring setup.
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Serve metrics (`JOEI_METRICS_ENABLED`). |
+| `listen` | `:9464` | Metrics listen address (`JOEI_METRICS_LISTEN`). Must differ from `server.listen`; a bind failure stops startup with an error naming `metrics.listen`. |
+| `path` | `/metrics` | URL path (`JOEI_METRICS_PATH`). |
+
+The metrics port is unauthenticated by design. Keep it on an internal network:
+the compose file does not publish it, and outside compose bind to `127.0.0.1` or
+an internal interface.
+
 ## `console`
 
 | Key | Default | Description |

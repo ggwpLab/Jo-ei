@@ -17,6 +17,8 @@ Also here:
 
 - [`allowlist.txt`](allowlist.txt) — supply-chain allowlist file format, wired
   via `supply_chain.allowlist_path`.
+- [`monitoring/`](monitoring/) — Prometheus scrape config, alert rules and a
+  Grafana dashboard for the `/metrics` endpoint.
 
 For running Jōei itself, start from the repository's
 [`docker-compose.yaml`](../docker-compose.yaml) and

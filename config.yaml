@@ -169,3 +169,10 @@ logging:
 #     jwt_secret: "REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES"
 #     access_ttl_minutes: 15  # access-token lifetime
 #     refresh_ttl_hours: 168  # refresh-token lifetime (7 days)
+
+# Prometheus metrics on a separate listener reachable only by monitoring.
+# Do not publish this port to proxy clients. See docs/metrics.md.
+metrics:
+  enabled: true
+  listen: ":9464"
+  path: "/metrics"

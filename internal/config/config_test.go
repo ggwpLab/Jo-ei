@@ -296,6 +296,7 @@ func TestValidate_AcceptsGoodScanners(t *testing.T) {
 		{Type: "icap", Address: "tcp:k:1344", Service: "avscan"},
 	}}}
 	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
 	assert.NoError(t, c.Validate())
 }
 
@@ -365,6 +366,7 @@ func TestValidate_RequiresDatabasePath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database.path")
 
+	c.Server.Listen = ":8080"
 	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
 	assert.NoError(t, c.Validate())
 }
@@ -573,6 +575,7 @@ func TestValidateRejectsShortJWTSecret(t *testing.T) {
 func TestValidateAcceptsA32ByteJWTSecret(t *testing.T) {
 	c := &config.Config{}
 	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
 	c.Console.Auth.JWTSecret = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, c.Validate())
 }
@@ -644,4 +647,96 @@ func TestValidate_RejectsNegativeMetadataFilterMaxMB(t *testing.T) {
 	err := c.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata_filter_max_mb")
+}
+
+func TestLoad_MetricsDefaults(t *testing.T) {
+	path := writeTempConfig(t, `server:
+  listen: ":8080"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Metrics.Enabled)
+	assert.Equal(t, ":9464", cfg.Metrics.Listen)
+	assert.Equal(t, "/metrics", cfg.Metrics.Path)
+}
+
+func TestLoad_MetricsEnvOverride(t *testing.T) {
+	path := writeTempConfig(t, `server:
+  listen: ":8080"
+database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	t.Setenv("JOEI_METRICS_LISTEN", "127.0.0.1:9999")
+	t.Setenv("JOEI_METRICS_ENABLED", "false")
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:9999", cfg.Metrics.Listen)
+	assert.False(t, cfg.Metrics.Enabled)
+}
+
+func TestValidate_MetricsListenEqualsServer(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
+	c.Metrics = config.MetricsConfig{Enabled: true, Listen: ":8080", Path: "/metrics"}
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metrics.listen")
+}
+
+func TestValidate_MetricsPathMustStartWithSlash(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
+	c.Metrics = config.MetricsConfig{Enabled: true, Listen: ":9464", Path: "metrics"}
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metrics.path")
+}
+
+func TestValidate_MetricsDisabledSkipsChecks(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
+	c.Metrics = config.MetricsConfig{Enabled: false, Listen: ":8080", Path: "metrics"}
+	require.NoError(t, c.Validate())
+}
+
+func TestValidate_MetricsPathRejectsNonPlainPaths(t *testing.T) {
+	for _, p := range []string{"GET /metrics", "/met rics", "/{x}", "/m?x=1", "/m#frag", "/a\tb"} {
+		c := &config.Config{}
+		c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+		c.Server.Listen = ":8080"
+		c.Metrics = config.MetricsConfig{Enabled: true, Listen: ":9464", Path: p}
+		err := c.Validate()
+		require.Error(t, err, "path %q", p)
+		assert.Contains(t, err.Error(), "metrics.path")
+	}
+}
+
+func TestValidate_MetricsPathAcceptsPlainPath(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
+	c.Metrics = config.MetricsConfig{Enabled: true, Listen: ":9464", Path: "/internal/metrics"}
+	require.NoError(t, c.Validate())
+}
+
+func TestValidate_RejectsEmptyServerListen(t *testing.T) {
+	c := &config.Config{}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server.listen")
+}
+
+func TestLoad_ServerListenDefault(t *testing.T) {
+	path := writeTempConfig(t, `database:
+  path: "/var/lib/jo-ei/jo-ei.db"
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, ":8080", cfg.Server.Listen)
 }

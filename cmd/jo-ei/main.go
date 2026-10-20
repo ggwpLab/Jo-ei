@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +23,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
+	"github.com/ggwpLab/Jo-ei/internal/metrics"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
@@ -105,8 +107,13 @@ type sharedDeps struct {
 func runProxy(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return run(ctx, cfgFile)
+}
 
-	cfg, err := config.Load(cfgFile)
+// run loads the config at cfgPath, wires the proxy and serves it (plus the
+// metrics listener when enabled) until ctx is cancelled or a server fails.
+func run(ctx context.Context, cfgPath string) error {
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
@@ -137,6 +144,13 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		serverLog.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
+	// mx stays nil when metrics are disabled; every Wrap*/Register* method on
+	// it is then a pass-through or no-op.
+	var mx *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		mx = metrics.New(metrics.BuildInfo{Version: version, Commit: commit}, logger)
+	}
+
 	sdb, err := storage.Open(cfg.Database.Path)
 	if err != nil {
 		return fmt.Errorf("opening database at %q: %w", cfg.Database.Path, err)
@@ -157,6 +171,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	defer func() { _ = artifactCache.Close() }()
+	mx.RegisterCache(artifactCache, int64(cfg.Cache.Local.MaxSizeGB)<<30)
 
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
 	if !ok {
@@ -221,14 +236,23 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
 	// skipped immediately in favor of a mirror instead of being retried/hammered.
 	// Inner: a coarse rate cap, then a concurrency cap, over a transport carrying
-	// the configured CA trust pool.
-	upstreamLimiter := httpx.NewCircuitBreaker(
+	// the configured CA trust pool. Metrics instrument the whole chain from the
+	// outside, so rate-limit waits and circuit-open fast-fails are visible.
+	cb := httpx.NewCircuitBreaker(
 		httpx.NewRateLimiter(
 			httpx.NewConcurrencyLimiter(httpx.NewTransport(rootPool), maxConc),
 			float64(rate), 2*rate,
 		),
 		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
 	)
+	// cfg.Registries already carries the stored overlay (applyStoredRegistries
+	// above), so these are the effective upstream hosts.
+	hosts := metrics.UpstreamHosts(
+		cfg.Registries.PyPI.Upstreams, cfg.Registries.NPM.Upstreams, cfg.Registries.Maven.Upstreams,
+		cfg.Registries.RubyGems.Upstreams, cfg.Registries.Go.Upstreams, cfg.Registries.Docker.Upstreams,
+	)
+	upstreamLimiter := mx.WrapTransport(cb, hosts)
+	mx.RegisterCircuitBreaker(cb, hosts)
 	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
 	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}
 	dockerClient := &http.Client{Timeout: 120 * time.Second, Transport: upstreamLimiter}
@@ -237,7 +261,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		filter:         policyRuntime,
 		cache:          cache.AsArtifactCache(artifactCache),
 		logger:         logger,
-		recorder:       &telemetry.Hub{Store: store, Broadcaster: broadcaster},
+		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: store, Broadcaster: broadcaster}),
 		adapterClient:  adapterClient,
 		downloadClient: downloadClient,
 
@@ -266,7 +290,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		}
 		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
 		defer func() { _ = osvScanner.Close() }()
-		shared.cveScanner = osvScanner
+		shared.cveScanner = mx.WrapCVEScanner("osv", osvScanner)
 		shared.policy = policyRuntime
 	}
 
@@ -290,9 +314,17 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		if limit == 0 {
 			limit = defaultMaxConcurrentScans
 		}
+		// avScanners stays unwrapped: the health monitor below type-asserts
+		// scanner.Prober on it, which a metrics wrapper would hide.
+		wrapped := make([]gate.AVScanner, len(avScanners))
+		for i, av := range avScanners {
+			wrapped[i] = mx.WrapAVScanner(cfg.Malware.Scanners[i].Type, av)
+		}
 		// Cap concurrent scans so download bursts don't overwhelm the engines'
 		// worker pools and make clamd/ICAP responses time out.
-		shared.avScanner = scanner.NewLimitedScanner(scanner.NewMultiScanner(avScanners...), limit)
+		shared.avScanner = scanner.NewLimitedScanner(scanner.NewMultiScanner(wrapped...), limit,
+			scanner.WithWaitObserver(mx.ScanWaitObserver()))
+		mx.SetScanConcurrencyLimit(limit)
 		engineCount = len(avScanners)
 	} else if len(cfg.Malware.Scanners) > 0 {
 		serverLog.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
@@ -335,6 +367,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	}
 	healthMon.Start()
 	defer healthMon.Close() //nolint:errcheck
+	mx.RegisterScannerHealth(healthMon.Snapshot)
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
@@ -343,7 +376,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	if cfg.Registries.Docker.Enabled && trivyScanner != nil {
 		rawHandlers["v2"] = dockerproxy.New(dockerproxy.HandlerDeps{
 			Upstreams:     cfg.Registries.Docker.Upstreams,
-			Scanner:       trivyScanner,
+			Scanner:       mx.WrapImageScanner("trivy", trivyScanner),
 			AV:            shared.avScanner,
 			Filter:        policyRuntime,
 			Policy:        policyRuntime,
@@ -436,8 +469,59 @@ func runProxy(_ *cobra.Command, _ []string) error {
 	})))
 	root.Handle("/", mux)
 
+	metricsAddr := "disabled"
+	if mx != nil {
+		metricsAddr = cfg.Metrics.Listen + cfg.Metrics.Path
+	}
+
+	// Label proxy traffic by registry prefix; the closed set keeps the route
+	// label bounded.
+	prefixes := make([]string, 0, len(handlers)+len(rawHandlers))
+	for p := range handlers {
+		prefixes = append(prefixes, p)
+	}
+	for p := range rawHandlers {
+		prefixes = append(prefixes, p)
+	}
+
+	srv := &http.Server{
+		Addr:         cfg.Server.Listen,
+		Handler:      logx.Middleware(mx.WrapHandler(root, metrics.NewRouteFunc(prefixes))),
+		ReadTimeout:  120 * time.Second,
+		WriteTimeout: 120 * time.Second,
+	}
+
+	// Bind every listener before serving any of them, so a port clash (notably
+	// on metrics.listen) stops startup before the proxy accepts traffic.
+	var servers []boundServer
+	defer func() {
+		for _, s := range servers {
+			_ = s.ln.Close() // no-op once the server has shut down
+		}
+	}()
+	if mx != nil {
+		mmux := http.NewServeMux()
+		mmux.Handle(cfg.Metrics.Path, mx.Handler())
+		metricsSrv := &http.Server{
+			Handler:           mmux,
+			ReadHeaderTimeout: 10 * time.Second,
+			WriteTimeout:      30 * time.Second,
+		}
+		ln, err := net.Listen("tcp", cfg.Metrics.Listen)
+		if err != nil {
+			return fmt.Errorf("metrics.listen %s: %w", cfg.Metrics.Listen, err)
+		}
+		servers = append(servers, boundServer{metricsSrv, ln})
+	}
+	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	if err != nil {
+		return fmt.Errorf("server.listen %s: %w", cfg.Server.Listen, err)
+	}
+	servers = append(servers, boundServer{srv, ln})
+
 	serverLog.Info().
 		Str("listen", cfg.Server.Listen).
+		Str("metrics", metricsAddr).
 		Int("registries", registryCount).
 		Int("malware_engines", engineCount).
 		Bool("cve", shared.cveScanner != nil).
@@ -446,13 +530,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 		Str("api", "/api/").
 		Msg("Jōei starting")
 
-	srv := &http.Server{
-		Addr:         cfg.Server.Listen,
-		Handler:      logx.Middleware(root),
-		ReadTimeout:  120 * time.Second,
-		WriteTimeout: 120 * time.Second,
-	}
-	return serve(ctx, srv)
+	return serveAll(ctx, servers...)
 }
 
 // buildHandlers constructs the routing map of prefix→handler from config.
