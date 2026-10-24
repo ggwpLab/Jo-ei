@@ -673,6 +673,12 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
+			// A deleted, disabled or demoted user (any change that revokes
+			// sessions) must not keep receiving the feed: end the stream;
+			// the browser's reconnect then meets the auth middleware.
+			if !auth.Recheck(r.Context()) {
+				return
+			}
 			armWrite()
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return

@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -726,4 +728,44 @@ func TestPutPolicy_PaddedEntryStoredTrimmedAndRemovable(t *testing.T) {
 	body.Denylist = nil
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Empty(t, body.Denylist)
+}
+
+// A stream must end once its user is deleted, disabled or demoted: the
+// heartbeat re-checks the session.
+func TestEventsSSE_EndsWhenSessionNoLongerValid(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	inner := newHandler(console.Config{
+		Store:        newTelemetryStore(t),
+		Broadcaster:  telemetry.NewBroadcaster(),
+		Logger:       zerolog.Nop(),
+		SSEHeartbeat: 50 * time.Millisecond,
+	})
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(w, r.WithContext(auth.WithRecheck(r.Context(), valid.Load)))
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": connected"), "got %q", line)
+	_, _ = reader.ReadString('\n')
+	line, err = reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": ping"), "a valid session keeps streaming, got %q", line)
+	_, _ = reader.ReadString('\n')
+
+	valid.Store(false)
+	rest, err := io.ReadAll(reader)
+	require.NoError(t, err, "the server must close the stream, not leave it hanging")
+	assert.NotContains(t, string(rest), "data:")
 }

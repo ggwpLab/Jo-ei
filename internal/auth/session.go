@@ -57,6 +57,40 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 	return id, ok
 }
 
+type recheckKey struct{}
+
+// WithRecheck returns ctx carrying fn as its session re-validator. Middleware
+// uses it; it is exported so handler tests can fake a session that goes bad.
+func WithRecheck(ctx context.Context, fn func() bool) context.Context {
+	return context.WithValue(ctx, recheckKey{}, fn)
+}
+
+// Recheck reports whether the session that authenticated the request behind
+// ctx is still good: its user exists, is enabled, needs no password change and
+// is at the same token version. Long-lived handlers (the SSE stream) call it
+// periodically and stop when it turns false. Token expiry is not re-checked —
+// a stream outliving its access token is fine; a revoked one is not. Without
+// a re-validator in ctx (no Middleware) it returns true.
+func Recheck(ctx context.Context) bool {
+	fn, ok := ctx.Value(recheckKey{}).(func() bool)
+	return !ok || fn()
+}
+
+// recheckFor returns a re-validator for the session u authenticated with.
+func (s *Sessions) recheckFor(r *http.Request, u users.User) func() bool {
+	return func() bool {
+		cur, err := s.store.Get(u.Username)
+		if err != nil {
+			if !errors.Is(err, users.ErrNotFound) {
+				l := s.log(r)
+				l.Error().Err(err).Str("user", u.Username).Msg("reading console user failed")
+			}
+			return false
+		}
+		return !cur.Disabled && !cur.MustChangePassword && cur.TokenVersion == u.TokenVersion
+	}
+}
+
 // UserFromContext returns the authenticated username stored by Middleware, and
 // false when the request did not pass through the authenticating middleware.
 func UserFromContext(ctx context.Context) (string, bool) {
@@ -190,7 +224,8 @@ func identityOf(u users.User) Identity {
 //     challenge would make the browser cover the console's own login screen.
 //   - Cookie-authenticated state change from another origin: 403.
 //   - User must change their password first: 403 password_change_required.
-//   - Valid: Identity into the request context (see IdentityFromContext).
+//   - Valid: Identity into the request context (see IdentityFromContext),
+//     with a re-validator for long-lived handlers (see Recheck).
 func (s *Sessions) Middleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Locked() {
@@ -216,7 +251,9 @@ func (s *Sessions) Middleware(h http.Handler) http.Handler {
 			writeJSONError(w, http.StatusForbidden, "password_change_required")
 			return
 		}
-		h.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), identityOf(u))))
+		ctx := WithIdentity(r.Context(), identityOf(u))
+		ctx = WithRecheck(ctx, s.recheckFor(r, u))
+		h.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
