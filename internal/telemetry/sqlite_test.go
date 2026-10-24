@@ -239,6 +239,34 @@ func TestSQLiteRepo_PageFiltersByText(t *testing.T) {
 	assert.Len(t, ids("", ""), 4, "empty text matches everything")
 }
 
+func TestSQLiteRepo_PageTextIsNotSQL(t *testing.T) {
+	repo := newRepo(t)
+	now := time.Now()
+	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "plain", Time: now, Verdict: gate.VerdictPass, Gate: gate.GateSupply, Package: "lodash", Version: "1"}))
+	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "quoted", Time: now.Add(time.Second), Verdict: gate.VerdictPass, Gate: gate.GateSupply, Package: "it's", Version: "1"}))
+
+	for _, text := range []string{
+		`' OR 1=1 --`,
+		`" OR ""="`,
+		`x'); DROP TABLE events;--`,
+		`%' UNION SELECT 1, 1, sqlite_version() --`,
+		`\`,
+	} {
+		evs, _, err := repo.Page("", text, telemetry.Cursor{}, 10)
+		require.NoError(t, err, text)
+		assert.Empty(t, evs, "%q must match as a literal substring, not as SQL", text)
+	}
+
+	evs, _, err := repo.Page("", "it's", telemetry.Cursor{}, 10)
+	require.NoError(t, err)
+	require.Len(t, evs, 1, "a quote in the text is just a character")
+	assert.Equal(t, "quoted", evs[0].RequestID)
+
+	all, err := repo.Recent(10)
+	require.NoError(t, err)
+	assert.Len(t, all, 2, "the events table survives")
+}
+
 func TestSQLiteRepo_PageTextPagesWithCursor(t *testing.T) {
 	repo := newRepo(t)
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

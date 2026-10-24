@@ -281,7 +281,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_limit"})
 			return
 		}
-		limit = n
+		limit = min(n, maxRequestsLimit)
 	}
 
 	verdict := r.URL.Query().Get("verdict")

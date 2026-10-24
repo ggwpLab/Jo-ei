@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -540,6 +541,23 @@ func TestRequestsRejectsOverlongQuery(t *testing.T) {
 	code := getJSON(t, f.srv.URL+"/api/requests?q="+strings.Repeat("x", 257), &body)
 	assert.Equal(t, http.StatusBadRequest, code)
 	assert.Equal(t, "invalid_query", body.Error)
+}
+
+func TestRequestsClampsLimit(t *testing.T) {
+	f := newFixture(t)
+	base := time.Now()
+	for i := 0; i < 505; i++ {
+		f.store.Record(gate.Event{RequestID: fmt.Sprintf("r%d", i), Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: base.Add(time.Duration(i) * time.Millisecond), Ecosystem: "npm", Package: "p", Version: "1"})
+	}
+
+	var body struct {
+		Requests   []json.RawMessage `json:"requests"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	code := getJSON(t, f.srv.URL+"/api/requests?limit=1000000", &body)
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, 500, len(body.Requests), "limit is clamped, not honoured")
+	assert.NotEmpty(t, body.NextCursor, "the rest stays reachable by paging")
 }
 
 func TestRequestsRejectsBadVerdictAndCursor(t *testing.T) {
