@@ -83,9 +83,10 @@ func TestUserCreate_RejectsShortPassword(t *testing.T) {
 	db := userDBPath(t)
 	_, _, err := runUser(t, db, "short\n", "create", "alice", "--role", "admin")
 	require.Error(t, err)
-	out, _, err := runUser(t, db, "", "list")
-	require.NoError(t, err)
-	assert.NotContains(t, out, "alice")
+	// The password is rejected before the database is even opened, so no
+	// user (and no database file) exists afterwards.
+	_, statErr := os.Stat(db)
+	assert.True(t, os.IsNotExist(statErr), "a rejected create must not leave a database behind")
 }
 
 func TestUserResetPassword_ReEnablesAndBumpsVersion(t *testing.T) {
@@ -129,4 +130,28 @@ func TestUserList_Output(t *testing.T) {
 	assert.Equal(t, []string{"USERNAME", "ROLE", "STATUS", "LAST", "LOGIN"}, strings.Fields(lines[0]))
 	assert.Equal(t, []string{"alice", "admin", "active", "never"}, strings.Fields(lines[1]))
 	assert.Equal(t, []string{"bob", "operator", "must", "change", "password", "never"}, strings.Fields(lines[2]))
+}
+
+func TestUser_MissingDatabaseFailsClearly(t *testing.T) {
+	for name, args := range map[string][]string{
+		"reset-password": {"reset-password", "admin", "--generate"},
+		"list":           {"list"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := userDBPath(t)
+			_, _, err := runUser(t, db, "", args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "does not exist")
+			assert.Contains(t, err.Error(), "--config")
+			_, statErr := os.Stat(db)
+			assert.True(t, os.IsNotExist(statErr), "a missing database must not be created")
+		})
+	}
+}
+
+func TestUserCreate_CreatesMissingDatabase(t *testing.T) {
+	db := userDBPath(t)
+	_, _, err := runUser(t, db, "", "create", "first", "--role", "admin", "--generate")
+	require.NoError(t, err)
+	assert.Equal(t, "first", getUser(t, db, "first").Username)
 }

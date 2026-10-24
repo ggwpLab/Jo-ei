@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -53,7 +55,7 @@ func newUserCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return withUserStore(func(st *users.Store) error {
+			return withUserStore(true, func(st *users.Store) error {
 				err := st.Create(users.User{
 					Username: name, PasswordHash: hash, Role: r,
 					MustChangePassword: !noForce,
@@ -80,15 +82,17 @@ func newUserCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			password, err := obtainPassword(cmd, name, rGenerate)
-			if err != nil {
-				return err
-			}
-			hash, err := users.HashPassword(password)
-			if err != nil {
-				return err
-			}
-			return withUserStore(func(st *users.Store) error {
+			// Open first: a missing database (wrong --config) should be
+			// reported before the password is asked for.
+			return withUserStore(false, func(st *users.Store) error {
+				password, err := obtainPassword(cmd, name, rGenerate)
+				if err != nil {
+					return err
+				}
+				hash, err := users.HashPassword(password)
+				if err != nil {
+					return err
+				}
 				if err := st.SetPassword(name, hash, !rNoForce); err != nil {
 					if errors.Is(err, users.ErrNotFound) {
 						return fmt.Errorf("user %q not found", name)
@@ -110,7 +114,7 @@ func newUserCmd() *cobra.Command {
 		Short: "List console users",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withUserStore(func(st *users.Store) error {
+			return withUserStore(false, func(st *users.Store) error {
 				us, err := st.List()
 				if err != nil {
 					return err
@@ -195,10 +199,20 @@ func generatePassword() (string, error) {
 }
 
 // withUserStore loads the config, opens the database, runs fn and closes it.
-func withUserStore(fn func(*users.Store) error) error {
+// Only create may bring a new database into existence (first-user
+// bootstrap); for the other commands a missing file almost always means the
+// wrong --config, and silently creating an empty database there would hide it.
+func withUserStore(mayCreate bool, fn func(*users.Store) error) error {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
+	}
+	if !mayCreate {
+		if _, err := os.Stat(cfg.Database.Path); errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("database %s does not exist: check --config (currently %q) points at the server's config file", cfg.Database.Path, cfgFile)
+		} else if err != nil {
+			return fmt.Errorf("checking database: %w", err)
+		}
 	}
 	db, err := storage.Open(cfg.Database.Path)
 	if err != nil {
