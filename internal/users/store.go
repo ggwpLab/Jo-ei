@@ -115,11 +115,17 @@ type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// insert adds u. A new row's token_version starts at the current Unix time in
+// nanoseconds rather than 0: a deleted-and-recreated user must never reach a
+// version the old row held, or the old account's unexpired tokens would verify
+// again. Revocations still increment by one, and nobody bumps a row a billion
+// times a second.
 func insert(ex execer, u User) error {
+	now := time.Now()
 	_, err := ex.Exec(
 		`INSERT INTO users (username, password_hash, role, disabled, must_change_password, token_version, created_at)
-		 VALUES (?, ?, ?, ?, ?, 0, ?)`,
-		u.Username, u.PasswordHash, string(u.Role), b2i(u.Disabled), b2i(u.MustChangePassword), time.Now().Unix())
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		u.Username, u.PasswordHash, string(u.Role), b2i(u.Disabled), b2i(u.MustChangePassword), now.UnixNano(), now.Unix())
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return ErrExists

@@ -90,10 +90,14 @@ func TestStore_LastAdminGuard(t *testing.T) {
 func TestStore_TokenVersionBumps(t *testing.T) {
 	s := newStore(t)
 	require.NoError(t, s.Create(mk("u", users.RoleOperator)))
+	first, err := s.Get("u")
+	require.NoError(t, err)
+	start := first.TokenVersion
+	assert.Positive(t, start, "a new row starts at a time-derived version, not 0")
 	ver := func() int64 {
 		u, err := s.Get("u")
 		require.NoError(t, err)
-		return u.TokenVersion
+		return u.TokenVersion - start
 	}
 	assert.EqualValues(t, 0, ver())
 	require.NoError(t, s.SetPassword("u", "newhash", true))
@@ -112,6 +116,19 @@ func TestStore_TokenVersionBumps(t *testing.T) {
 	assert.EqualValues(t, 3, ver())
 	require.NoError(t, s.SetDisabled("u", false))
 	assert.EqualValues(t, 4, ver())
+}
+
+func TestStore_RecreatedUserStartsAboveOldVersion(t *testing.T) {
+	s := newStore(t)
+	require.NoError(t, s.Create(mk("bob", users.RoleOperator)))
+	require.NoError(t, s.SetPassword("bob", "h2", false))
+	old, err := s.Get("bob")
+	require.NoError(t, err)
+	require.NoError(t, s.Delete("bob"))
+	require.NoError(t, s.Create(mk("bob", users.RoleOperator)))
+	fresh, err := s.Get("bob")
+	require.NoError(t, err)
+	assert.Greater(t, fresh.TokenVersion, old.TokenVersion)
 }
 
 func TestStore_HasEnabledUsers(t *testing.T) {
