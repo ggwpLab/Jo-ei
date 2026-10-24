@@ -118,12 +118,13 @@ func (s *Store) Recent(limit int) []gate.Event {
 	return evs
 }
 
-// Page returns up to limit events matching verdict (empty = any), newest-first,
+// Page returns up to limit events matching verdict (empty = any) and text (a
+// case-insensitive substring of "package@version" or request_id; empty = any), newest-first,
 // older than cursor (zero cursor = newest), plus the cursor for the next call
 // (zero when there are no more pages). A read error logs and yields nil with a
 // zero cursor, so the console degrades to an empty page rather than failing.
-func (s *Store) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
-	evs, next, err := s.repo.Page(verdict, cursor, limit)
+func (s *Store) Page(verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
+	evs, next, err := s.repo.Page(verdict, text, cursor, limit)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("paging events")
 		return nil, Cursor{}

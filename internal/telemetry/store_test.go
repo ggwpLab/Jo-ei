@@ -235,12 +235,12 @@ func TestStorePageFiltersAndPages(t *testing.T) {
 	s.Record(evt("block1", gate.VerdictBlock, gate.GateCVE, "cve_found"))
 	s.Record(evt("block2", gate.VerdictBlock, gate.GateSupply, "young"))
 
-	evs, next := s.Page(gate.VerdictBlock, telemetry.Cursor{}, 1)
+	evs, next := s.Page(gate.VerdictBlock, "", telemetry.Cursor{}, 1)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "block2", evs[0].RequestID, "newest first")
 	require.False(t, next.Zero(), "more pages remain")
 
-	evs2, next2 := s.Page(gate.VerdictBlock, next, 1)
+	evs2, next2 := s.Page(gate.VerdictBlock, "", next, 1)
 	require.Len(t, evs2, 1)
 	assert.Equal(t, "block1", evs2[0].RequestID)
 	assert.True(t, next2.Zero(), "last page")

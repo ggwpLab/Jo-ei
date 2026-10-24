@@ -14,7 +14,7 @@ function FeedRow({ r, onOpen, isNew }) {
       className={`feed-row ${blocked ? "clickable" : ""} ${isNew ? "new-row" : ""}`}
       onClick={blocked ? () => onOpen(r) : undefined}
     >
-      <span className="ts mono">{fmtClock(r.ts)}</span>
+      <span className="ts mono" title={fmtDateTime(r.ts)}>{fmtClock(r.ts)}</span>
       <Eco id={r.eco} />
       <span className="pkg" title={`${r.pkg}@${r.ver}`}>
         {r.pkg}<span className="ver">@{r.ver}</span>
@@ -40,7 +40,12 @@ const FILTERS = [
 
 // Verdict filters that browse the full SQLite history (server-paged) rather
 // than the live in-memory window. The chip value is sent verbatim as ?verdict=.
+// A non-empty search also switches any filter to history: it matches in SQL
+// across the whole retained history, not just the rows already loaded.
 const HISTORY_FILTERS = { BLOCK: true, ERROR: true };
+
+// Typing pause before a search query is sent to the server.
+const SEARCH_DEBOUNCE_MS = 300;
 
 // One page, for both listing modes: the live window reveals rows from the
 // in-memory buffer, the history filters fetch this many per server page.
@@ -50,13 +55,15 @@ function LiveFeed({ openThreat }) {
   const [rows, setRows] = useState(() => JOEI.requests.slice(0, 500));
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
+  // The query the server is asked for: q trimmed, settled after a typing pause.
+  const [dq, setDq] = useState("");
   const [paused, setPaused] = useState(false);
   const [newId, setNewId] = useState(null);
   // How many live rows are rendered. History mode ignores it — the server
   // already pages there — so this only ever grows via "Show more" below.
   const [visible, setVisible] = useState(PAGE_SIZE);
 
-  // History-mode state, active only while filter is in HISTORY_FILTERS.
+  // History-mode state, active while filter is in HISTORY_FILTERS or a search runs.
   const [histRows, setHistRows] = useState([]);
   const [cursor, setCursor] = useState("");
   const [loading, setLoading] = useState(false);
@@ -66,10 +73,15 @@ function LiveFeed({ openThreat }) {
   // resolves (otherwise a late response could write into the new filter's rows).
   const reqToken = useRef(0);
 
-  const history = !!HISTORY_FILTERS[filter];
-  // A new filter or query restarts at the first page; without this, narrowing
-  // a search would keep an inflated row count from the previous filter.
-  useEffect(() => { setVisible(PAGE_SIZE); }, [filter, q]);
+  useEffect(() => {
+    const id = setTimeout(() => setDq(q.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [q]);
+
+  const history = !!HISTORY_FILTERS[filter] || dq !== "";
+  const verdict = filter === "all" ? "" : filter;
+  // A new filter restarts the live window at its first page.
+  useEffect(() => { setVisible(PAGE_SIZE); }, [filter]);
 
   // Live window: prepend SSE events and resync on full refresh. Kept warm even
   // in history mode so switching back to a live filter is instant.
@@ -88,9 +100,9 @@ function LiveFeed({ openThreat }) {
     };
   }, [paused]);
 
-  // Entering a history filter loads its first page; leaving one clears the
-  // history state so a live filter shows the live window again. Keyed on
-  // `filter` only (history is derived from it).
+  // Entering history (a history filter or a search) loads its first page;
+  // leaving it clears the history state so the live window shows again.
+  // Keyed on `filter` and `dq` (history is derived from them).
   useEffect(() => {
     const token = ++reqToken.current; // invalidate any prior in-flight fetch
     if (!history) {
@@ -98,23 +110,23 @@ function LiveFeed({ openThreat }) {
       return;
     }
     setLoading(true); setHistErr(false); setHistRows([]); setCursor("");
-    JOEI.pageRequests({ verdict: filter, cursor: "", limit: PAGE_SIZE })
+    JOEI.pageRequests({ verdict, q: dq, cursor: "", limit: PAGE_SIZE })
       .then(({ rows: got, nextCursor }) => {
         if (token !== reqToken.current) return;
         setHistRows(got); setCursor(nextCursor);
       })
       .catch(() => { if (token === reqToken.current) setHistErr(true); })
       .finally(() => { if (token === reqToken.current) setLoading(false); });
-  }, [filter]);
+  }, [filter, dq]);
 
   const loadMore = () => {
     if (loading || !cursor) return;
-    const token = reqToken.current; // tie this fetch to the current filter
+    const token = reqToken.current; // tie this fetch to the current filter and query
     setHistErr(false);
     setLoading(true);
-    JOEI.pageRequests({ verdict: filter, cursor, limit: PAGE_SIZE })
+    JOEI.pageRequests({ verdict, q: dq, cursor, limit: PAGE_SIZE })
       .then(({ rows: got, nextCursor }) => {
-        if (token !== reqToken.current) return; // filter changed mid-flight
+        if (token !== reqToken.current) return; // filter or query changed mid-flight
         setHistRows((rs) => rs.concat(got));
         setCursor(nextCursor);
       })
@@ -125,13 +137,9 @@ function LiveFeed({ openThreat }) {
   const hasMore = cursor !== "";
 
   const source = history ? histRows : rows;
-  const shown = source.filter((r) => {
-    // Live filters narrow the in-memory window client-side; history rows are
-    // already verdict-filtered by the server.
-    if (!history && filter !== "all" && r.verdict !== filter) return false;
-    if (q && !(`${r.pkg}@${r.ver}`.toLowerCase().includes(q.toLowerCase()) || r.request_id.includes(q))) return false;
-    return true;
-  });
+  // Live filters narrow the in-memory window client-side; history rows are
+  // already verdict- and query-filtered by the server.
+  const shown = history ? source : source.filter((r) => filter === "all" || r.verdict === filter);
   // History rows arrive one server page at a time and accumulate on "Show
   // more", so they are rendered whole; the live window is sliced client-side.
   const page = history ? shown : shown.slice(0, visible);
@@ -148,7 +156,7 @@ function LiveFeed({ openThreat }) {
         {history ? (
           <span className="pill">
             <span className="dot" style={{ color: "var(--washi-mut)" }}></span>
-            history · {filter.toLowerCase()}
+            history · {dq ? "search" : filter.toLowerCase()}
           </span>
         ) : (
           <>

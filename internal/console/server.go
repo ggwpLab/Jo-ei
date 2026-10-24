@@ -281,12 +281,18 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_limit"})
 			return
 		}
-		limit = n
+		limit = min(n, maxRequestsLimit)
 	}
 
 	verdict := r.URL.Query().Get("verdict")
 	if verdict != "" && !validVerdict(verdict) {
 		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_verdict"})
+		return
+	}
+
+	text := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(text) > maxRequestQuery {
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{"error": "invalid_query"})
 		return
 	}
 
@@ -300,7 +306,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 		cursor = c
 	}
 
-	events, next := s.cfg.Store.Page(verdict, cursor, limit)
+	events, next := s.cfg.Store.Page(verdict, text, cursor, limit)
 	out := make([]eventJSON, 0, len(events))
 	for _, ev := range events {
 		out = append(out, toEventJSON(ev))

@@ -28,14 +28,15 @@ type Repo interface {
 	Snapshot(started time.Time) (Snapshot, error)
 	// Recent returns up to limit events, newest first. limit <= 0 means all.
 	Recent(limit int) ([]gate.Event, error)
-	// Page returns up to limit events with the given verdict (empty = any),
-	// newest-first, strictly older than cursor. A zero cursor starts at the
+	// Page returns up to limit events with the given verdict (empty = any)
+	// whose "package@version" or request_id contains text (case-insensitive,
+	// literal substring; empty = any), newest-first, strictly older than cursor. A zero cursor starts at the
 	// newest matching event. The second return is the cursor of the last row
 	// returned; it is the zero Cursor when there are no more pages.
 	// When limit <= 0 all matching rows are returned in one call; the second
 	// return is then the cursor of the last row (non-zero if any rows exist),
 	// but no further rows exist beyond it.
-	Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor, error)
+	Page(verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor, error)
 	// Quarantine returns active supply-chain holds (newest BLOCK@supply per
 	// eco/pkg@ver whose block_until is after now), newest first.
 	Quarantine(now time.Time) ([]gate.Event, error)
