@@ -274,12 +274,10 @@ function App() {
   }, []);
   const dismiss = (id) => setToasts((xs) => xs.filter((x) => x.id !== id));
 
-  // List edits are atomic server-side; they are still chained so toasts
-  // arrive in click order and J.policy ends on the last response.
-  const editChain = useRef(Promise.resolve());
+  // J.editList serialises every list edit (here and on the Policy page), so
+  // toasts arrive in click order and J.policy ends on the last response.
   const editList = (list, entry, toast) => {
-    editChain.current = editChain.current
-      .then(() => JOEI.editList(list, entry, true))
+    JOEI.editList(list, entry, true)
       .then(() => notify(toast))
       .catch((err) => notify({
         kind: "block", code: err.status === 403 ? "403 Forbidden" : err.status === 413 ? "413 Payload Too Large" : "400 Bad Request",

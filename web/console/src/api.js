@@ -95,6 +95,13 @@
   // expired session is not a dead proxy.
   class AuthError extends Error {}
 
+  // Catch handler for load(): an AuthError (401 -> login screen, 403
+  // password_change_required -> forced change screen) has already been routed
+  // by authFetch and must not also raise the "no connection" banner.
+  function offlineUnlessAuth(e) {
+    if (!(e instanceof AuthError)) setConnected(false);
+  }
+
   // One refresh at a time: a page load fires several requests at once and they
   // would otherwise race to rotate the refresh cookie, each invalidating the
   // others' new token.
@@ -283,14 +290,22 @@
   }
 
   // Add (add=true) or remove one entry of allowlist_supply | allowlist_cve |
-  // denylist. The server edits the list atomically.
-  async function editList(list, entry, add) {
-    const res = await authFetch("/api/policy/lists/" + encodeURIComponent(list), {
-      method: add ? "POST" : "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ entry }),
+  // denylist. The server edits each list atomically, but every response is a
+  // full-policy snapshot: run the edits one at a time, for every caller, so
+  // snapshots apply in request order and an older one can never win. A
+  // failed edit rejects only its own promise, never the chain.
+  let listChain = Promise.resolve();
+  function editList(list, entry, add) {
+    const run = listChain.then(async () => {
+      const res = await authFetch("/api/policy/lists/" + encodeURIComponent(list), {
+        method: add ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry }),
+      });
+      return applyPolicyResponse(res, "policy list update");
     });
-    return applyPolicyResponse(res, "policy list update");
+    listChain = run.catch(() => {});
+    return run;
   }
 
   async function saveRegistries(list) {
@@ -335,7 +350,7 @@
     probing = true;
     load()
       .then(() => connectEvents()) // no-op if a live stream is already open
-      .catch(() => setConnected(false))
+      .catch(offlineUnlessAuth)
       .finally(() => { probing = false; });
   }
 
@@ -398,7 +413,12 @@
   // pending: every data endpoint would answer 403 until it is done.
   async function startSession() {
     if (!canLoad()) return;
-    await load().catch(() => setConnected(false));
+    try {
+      await load();
+    } catch (e) {
+      offlineUnlessAuth(e);
+      if (e instanceof AuthError) return; // no stream for a session that cannot load
+    }
     connectEvents();
   }
 
@@ -410,27 +430,37 @@
   // Change the caller's own password. The server re-issues this session's
   // cookies and revokes every other session. Not routed through authFetch: a
   // 401 invalid_credentials here means a wrong current password, not a lapsed
-  // session, and must not trigger a refresh-and-replay or a sign-out.
+  // session, and must neither be replayed nor sign the user out. Any other
+  // 401 is a lapsed access token (the forced screen loads nothing, so nothing
+  // else keeps it fresh): refresh once and replay, sign out only if that fails.
   async function changePassword(current, next) {
-    let res;
-    try {
-      res = await fetch("/api/auth/password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ current, new: next }),
-      });
-    } catch (_) {
-      setConnected(false);
-      const err = new Error("Cannot reach the proxy. Check that it is running, then try again.");
-      err.status = 0;
-      throw err;
+    const post = async () => {
+      let res;
+      try {
+        res = await fetch("/api/auth/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ current, new: next }),
+        });
+      } catch (_) {
+        setConnected(false);
+        const err = new Error("Cannot reach the proxy. Check that it is running, then try again.");
+        err.status = 0;
+        throw err;
+      }
+      setConnected(true);
+      let data = null;
+      try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+      return { res, data };
+    };
+    const lapsed = ({ res, data }) => res.status === 401 && !(data && data.error === "invalid_credentials");
+
+    let { res, data } = await post();
+    if (lapsed({ res, data }) && await refreshSession()) {
+      ({ res, data } = await post());
     }
-    setConnected(true);
-    let data = null;
-    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) {
-      const code = data && data.error;
-      if (res.status === 401 && code !== "invalid_credentials") {
+      if (lapsed({ res, data })) {
         disconnectEvents();
         setAuthenticated(false);
         throw new AuthError("unauthorized");
@@ -482,10 +512,11 @@
         await load();
         connectEvents();
       }
-    } catch (_) {
-      // A throw here means the request never reached the proxy — that is a
-      // connectivity failure, not a lapsed session.
-      setConnected(false);
+    } catch (e) {
+      // Apart from an AuthError out of load() (handled by authFetch: login
+      // screen or forced change screen), a throw here means the request never
+      // reached the proxy — a connectivity failure, not a lapsed session.
+      offlineUnlessAuth(e);
     } finally {
       J.ready = true;
       fire("joei:data");
@@ -505,11 +536,11 @@
   boot();
   // Counters and quarantine are not pushed over SSE — refresh periodically.
   setInterval(() => {
-    if (!document.hidden && canLoad()) load().catch(() => { if (canLoad()) setConnected(false); });
+    if (!document.hidden && canLoad()) load().catch((e) => { if (canLoad()) offlineUnlessAuth(e); });
   }, 15000);
   // Returning to a backgrounded tab: timers were paused and the SSE socket may
   // have died silently — refresh now instead of waiting for the next poll.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && canLoad()) load().catch(() => { if (canLoad()) setConnected(false); });
+    if (!document.hidden && canLoad()) load().catch((e) => { if (canLoad()) offlineUnlessAuth(e); });
   });
 })();
