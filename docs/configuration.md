@@ -41,6 +41,8 @@ process exits non-zero.
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
+| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
+| `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`).
@@ -58,6 +60,17 @@ streamed through untouched rather than buffered. This applies to npm only —
 every other registry's metadata is proxied untouched regardless of this
 setting. It cannot help a lockfile-pinned install (`npm ci`): there is no
 range left to resolve, so a blocked exact version still fails with `423`.
+
+### Behind a reverse proxy
+
+Forwarding headers are believed only when the request's direct peer is listed in
+`trusted_proxies`; from any other peer they are ignored, since a client could
+forge them. With `trusted_proxies` empty, every client behind nginx or Traefik
+appears to come from the proxy's IP, so the per-IP console login limits are shared
+by all users. For `X-Forwarded-For` the right-most address that is not a trusted
+proxy is the client. When a forwarding header arrives from an untrusted peer,
+Jō-ei logs a one-time warning mentioning `server.trusted_proxies` with the
+offending `peer`; seeing it means the proxy needs to be listed.
 
 ## `tls`
 

@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -39,6 +40,16 @@ func (c *Config) Validate() error {
 		if rc.Enabled && len(rc.Upstreams) == 0 {
 			return fmt.Errorf("registry %q is enabled but has no upstreams", name)
 		}
+	}
+	for i, entry := range c.Server.TrustedProxies {
+		if err := validateTrustedProxy(entry); err != nil {
+			return fmt.Errorf("server.trusted_proxies[%d]: %w", i, err)
+		}
+	}
+	switch strings.ToLower(c.Server.ClientIPHeader) {
+	case "", "x-forwarded-for", "x-real-ip", "forwarded":
+	default:
+		return fmt.Errorf("server.client_ip_header: unknown header %q (want X-Forwarded-For|X-Real-IP|Forwarded)", c.Server.ClientIPHeader)
 	}
 	// Zero scanners is valid; malware scanning is simply skipped.
 	scannerNames := map[string]int{}
@@ -153,6 +164,13 @@ type ServerConfig struct {
 	// explicit zero in YAML survives as the feature's kill switch rather than
 	// being replaced.
 	MetadataFilterMaxMB int `mapstructure:"metadata_filter_max_mb"`
+	// TrustedProxies lists the reverse proxies (CIDRs or bare IPs) whose
+	// forwarding header is believed when resolving the client IP. Empty (the
+	// default) means no header is trusted and the TCP peer address is used.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	// ClientIPHeader selects the forwarding header read from a trusted proxy:
+	// X-Forwarded-For (default when empty), X-Real-IP or Forwarded.
+	ClientIPHeader string `mapstructure:"client_ip_header"`
 }
 
 // DefaultUpstreamMaxConcurrent is the per-host outbound concurrency cap applied
@@ -387,4 +405,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// validateTrustedProxy accepts a CIDR or a bare IP address.
+func validateTrustedProxy(entry string) error {
+	entry = strings.TrimSpace(entry)
+	if strings.Contains(entry, "/") {
+		_, err := netip.ParsePrefix(entry)
+		return err
+	}
+	_, err := netip.ParseAddr(entry)
+	return err
 }

@@ -768,3 +768,24 @@ func TestValidate_RejectsDuplicateScannerNames(t *testing.T) {
 	assert.Contains(t, err.Error(), "malware.scanners[1]")
 	assert.Contains(t, err.Error(), "icap:avscan")
 }
+
+func TestValidate_TrustedProxies(t *testing.T) {
+	c := &config.Config{}
+	c.Server.Listen = ":8080"
+	c.Database.Path = "x.db"
+	c.Server.TrustedProxies = []string{"10.0.0.0/8", "192.0.2.1"}
+	assert.NoError(t, c.Validate())
+
+	c.Server.TrustedProxies = []string{"10.0.0.0/33"}
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server.trusted_proxies[0]")
+
+	c = &config.Config{}
+	c.Server.Listen = ":8080"
+	c.Database.Path = "x.db"
+	c.Server.ClientIPHeader = "X-Foo"
+	err = c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server.client_ip_header")
+}
