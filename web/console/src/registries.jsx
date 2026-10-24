@@ -2,7 +2,7 @@
 
 const REG_ECOS = ["pypi", "npm", "maven", "rubygems", "go", "docker"];
 
-function UpstreamEditor({ upstreams, onChange }) {
+function UpstreamEditor({ upstreams, onChange, readOnly }) {
   const [val, setVal] = useState("");
   const add = () => { const v = val.trim(); if (v) { onChange([...upstreams, v]); setVal(""); } };
   const remove = (i) => onChange(upstreams.filter((_, j) => j !== i));
@@ -20,12 +20,14 @@ function UpstreamEditor({ upstreams, onChange }) {
           <span className="ord">{i + 1}</span>
           <span style={{ flex: 1 }}>{u}</span>
           <span className="pri">{i === 0 ? "primary" : "fallback"}</span>
-          <button className="btn sm ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label="up">↑</button>
-          <button className="btn sm ghost" disabled={i === upstreams.length - 1} onClick={() => move(i, 1)} aria-label="down">↓</button>
-          <button className="lc-del" onClick={() => remove(i)}><Icons.trash /></button>
+          {!readOnly && <>
+            <button className="btn sm ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label="up">↑</button>
+            <button className="btn sm ghost" disabled={i === upstreams.length - 1} onClick={() => move(i, 1)} aria-label="down">↓</button>
+            <button className="lc-del" onClick={() => remove(i)}><Icons.trash /></button>
+          </>}
         </div>
       ))}
-      <div className="upstream-item" style={{ borderStyle: "dashed" }}>
+      {!readOnly && <div className="upstream-item" style={{ borderStyle: "dashed" }}>
         <Icons.plus />
         <input
           className="lc-val" style={{ background: "none", border: "none", outline: "none", color: "var(--washi)", flex: 1 }}
@@ -34,12 +36,12 @@ function UpstreamEditor({ upstreams, onChange }) {
           onKeyDown={(e) => e.key === "Enter" && add()}
         />
         <button className="btn sm ghost" onClick={add}>Add</button>
-      </div>
+      </div>}
     </div>
   );
 }
 
-function RegistryCard({ reg, onToggle, onUpstreams }) {
+function RegistryCard({ reg, onToggle, onUpstreams, readOnly }) {
   const e = JOEI.ECO[reg.eco] || { name: reg.eco };
   return (
     <div className="card reg-card">
@@ -51,16 +53,19 @@ function RegistryCard({ reg, onToggle, onUpstreams }) {
         </div>
         <div className="right row" style={{ gap: 10 }}>
           <span className="muted" style={{ fontSize: 12 }}>{reg.enabled ? "enabled" : "off"}</span>
-          <button className={`toggle ${reg.enabled ? "on" : ""}`} onClick={() => onToggle(!reg.enabled)} aria-label="toggle"></button>
+          {!readOnly && <button className={`toggle ${reg.enabled ? "on" : ""}`} onClick={() => onToggle(!reg.enabled)} aria-label="toggle"></button>}
         </div>
       </div>
-      <UpstreamEditor upstreams={reg.upstreams} onChange={onUpstreams} />
+      <UpstreamEditor upstreams={reg.upstreams} onChange={onUpstreams} readOnly={readOnly} />
     </div>
   );
 }
 
 function Registries({ notify }) {
   useJoeiData();
+  // Upstream edits and cache cleanup are admin-only; an operator sees the
+  // page read-only.
+  const admin = JOEI.isAdmin();
   const c = JOEI.cache;
   const usedPct = c.max_gb > 0 ? Math.min(100, (c.used_gb / c.max_gb) * 100) : 0;
   // Stale entries (idle past the threshold) are part of used space; hatch that
@@ -88,7 +93,7 @@ function Registries({ notify }) {
     JOEI.cleanupCache()
       .then(({ removed, freed_bytes }) => notify({ kind: "ok", code: "200 OK", title: "Cache cleaned",
         msg: <>Freed <b>{(freed_bytes / 1024 ** 3).toFixed(2)} GB</b> — {removed} objects removed.</> }))
-      .catch((err) => notify({ kind: "block", code: "500 Internal Server Error", title: "Cleanup failed",
+      .catch((err) => notify({ kind: "block", code: err.status === 403 ? "403 Forbidden" : "500 Internal Server Error", title: "Cleanup failed",
         msg: String(err.message || err) }))
       .finally(() => setCleaning(false));
   };
@@ -118,7 +123,7 @@ function Registries({ notify }) {
         notify({ kind: "ok", code: "200 OK", title: "Registries saved",
           msg: <>Saved to the database — changes apply on the next restart.{warnings.length ? " " + warnings[0] : ""}</> });
       })
-      .catch((err) => notify({ kind: "block", code: "400 Bad Request", title: "Registries rejected",
+      .catch((err) => notify({ kind: "block", code: err.status === 403 ? "403 Forbidden" : "400 Bad Request", title: "Registries rejected",
         msg: String(err.message || err) }))
       .finally(() => setSaving(false));
   };
@@ -132,10 +137,14 @@ function Registries({ notify }) {
           <h2>Registries &amp; cache</h2>
         </div>
         <div className="spacer"></div>
-        <button className={`btn ${dirty ? "primary" : ""}`} disabled={!dirty || saving}
-          style={!dirty ? { opacity: .5 } : undefined} onClick={save}>
-          {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-        </button>
+        {admin ? (
+          <button className={`btn ${dirty ? "primary" : ""}`} disabled={!dirty || saving}
+            style={!dirty ? { opacity: .5 } : undefined} onClick={save}>
+            {saving ? "Saving…" : dirty ? "Save" : "Saved"}
+          </button>
+        ) : (
+          <span className="muted" style={{ fontSize: 12 }}>🔒 Only an admin can change registries</span>
+        )}
       </div>
 
       {pending && (
@@ -180,7 +189,7 @@ function Registries({ notify }) {
           {c.stale_gb > 0 && (
             <span className="muted right row" style={{ fontSize: 11, alignItems: "center", gap: 8 }}>
               <i className="legend-chip"></i>reclaimable · unused {c.stale_after_days}d+ · <b className="mono">{c.stale_gb} GB</b>
-              <button className="btn sm" onClick={cleanup} disabled={cleaning}>{cleaning ? "Cleaning…" : "Clean up"}</button>
+              {admin && <button className="btn sm" onClick={cleanup} disabled={cleaning}>{cleaning ? "Cleaning…" : "Clean up"}</button>}
             </span>
           )}
         </div>
@@ -191,7 +200,7 @@ function Registries({ notify }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         {draft.map((r) => (
-          <RegistryCard key={r.eco} reg={r}
+          <RegistryCard key={r.eco} reg={r} readOnly={!admin}
             onToggle={(enabled) => patch(r.eco, { enabled })}
             onUpstreams={(upstreams) => patch(r.eco, { upstreams })} />
         ))}
