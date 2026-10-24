@@ -33,6 +33,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 	"github.com/ggwpLab/Jo-ei/web"
 )
 
@@ -414,12 +415,15 @@ func run(ctx context.Context, cfgPath string) error {
 	// other path (registry prefixes, /health) falls through to the proxy mux
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
-	authUsers, err := auth.NewUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"))
-	if err != nil {
+	// Console users live in the database. config/env users are still validated
+	// here so a broken entry fails startup; importing them into the store is
+	// not wired yet.
+	if _, err := auth.ParseBootstrapUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS")); err != nil {
 		return err
 	}
-	if authUsers.Locked() {
-		serverLog.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+	userStore, err := users.New(sdb)
+	if err != nil {
+		return fmt.Errorf("console users: %w", err)
 	}
 	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
 	if err != nil {
@@ -430,7 +434,10 @@ func run(ctx context.Context, cfgPath string) error {
 		return fmt.Errorf("console auth: %w", err)
 	}
 	accessTTL, refreshTTL := authTTLs(cfg.Console.Auth)
-	sessions := auth.NewSessions(authUsers, signer, accessTTL, refreshTTL)
+	sessions := auth.NewSessions(userStore, signer, accessTTL, refreshTTL, auth.WithLogger(logger))
+	if sessions.Locked() {
+		serverLog.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+	}
 
 	root := http.NewServeMux()
 	// Public site icon: browsers auto-probe /favicon.ico on every page load, so

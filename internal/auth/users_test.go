@@ -18,57 +18,56 @@ func hash(t *testing.T, pw string) string {
 	return string(h)
 }
 
-func TestNewUsersFileOnly(t *testing.T) {
-	u, err := auth.NewUsers([]auth.User{{Username: "admin", PasswordHash: hash(t, "secret")}}, "")
-	require.NoError(t, err)
-	assert.False(t, u.Locked())
-	assert.True(t, u.Verify("admin", "secret"))
-	assert.False(t, u.Verify("admin", "wrong"))
-}
+func TestParseBootstrapUsers(t *testing.T) {
+	t.Run("file only", func(t *testing.T) {
+		h := hash(t, "secret")
+		got, err := auth.ParseBootstrapUsers([]auth.User{{Username: " admin ", PasswordHash: h}}, "")
+		require.NoError(t, err)
+		assert.Equal(t, []auth.User{{Username: "admin", PasswordHash: h}}, got)
+	})
 
-func TestNewUsersEnvOnly(t *testing.T) {
-	env := "alice:" + hash(t, "pw1") + " ; bob:" + hash(t, "pw2")
-	u, err := auth.NewUsers(nil, env)
-	require.NoError(t, err)
-	assert.True(t, u.Verify("alice", "pw1"))
-	assert.True(t, u.Verify("bob", "pw2"))
-	assert.False(t, u.Verify("alice", "pw2"))
-}
+	t.Run("env only", func(t *testing.T) {
+		h1, h2 := hash(t, "pw1"), hash(t, "pw2")
+		got, err := auth.ParseBootstrapUsers(nil, "alice:"+h1+" ; bob:"+h2)
+		require.NoError(t, err)
+		assert.Equal(t, []auth.User{{Username: "alice", PasswordHash: h1}, {Username: "bob", PasswordHash: h2}}, got)
+	})
 
-func TestNewUsersEnvOverridesFile(t *testing.T) {
-	file := []auth.User{{Username: "admin", PasswordHash: hash(t, "oldpw")}}
-	env := "admin:" + hash(t, "newpw")
-	u, err := auth.NewUsers(file, env)
-	require.NoError(t, err)
-	assert.False(t, u.Verify("admin", "oldpw"), "env entry overrides the file entry")
-	assert.True(t, u.Verify("admin", "newpw"))
-}
+	t.Run("env overrides file", func(t *testing.T) {
+		oldH, newH, otherH := hash(t, "oldpw"), hash(t, "newpw"), hash(t, "other")
+		file := []auth.User{{Username: "admin", PasswordHash: oldH}, {Username: "ops", PasswordHash: otherH}}
+		got, err := auth.ParseBootstrapUsers(file, "admin:"+newH)
+		require.NoError(t, err)
+		assert.Equal(t, []auth.User{{Username: "admin", PasswordHash: newH}, {Username: "ops", PasswordHash: otherH}}, got)
+	})
 
-func TestNewUsersEmptyIsLocked(t *testing.T) {
-	u, err := auth.NewUsers(nil, "")
-	require.NoError(t, err)
-	assert.True(t, u.Locked())
-	assert.False(t, u.Verify("admin", "secret"))
-}
+	t.Run("override is case-insensitive", func(t *testing.T) {
+		oldH, newH := hash(t, "oldpw"), hash(t, "newpw")
+		got, err := auth.ParseBootstrapUsers([]auth.User{{Username: "Admin", PasswordHash: oldH}}, "admin:"+newH)
+		require.NoError(t, err)
+		assert.Equal(t, []auth.User{{Username: "admin", PasswordHash: newH}}, got,
+			"usernames are case-insensitive, so the env entry replaces the file entry")
+	})
 
-func TestNewUsersValidationErrors(t *testing.T) {
-	good := hash(t, "secret")
+	t.Run("empty", func(t *testing.T) {
+		got, err := auth.ParseBootstrapUsers(nil, "")
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
 
-	_, err := auth.NewUsers([]auth.User{{Username: "  ", PasswordHash: good}}, "")
-	require.Error(t, err, "blank username")
+	t.Run("validation errors", func(t *testing.T) {
+		good := hash(t, "secret")
 
-	_, err = auth.NewUsers([]auth.User{{Username: "admin", PasswordHash: "not-a-bcrypt-hash"}}, "")
-	require.Error(t, err, "non-bcrypt hash")
+		_, err := auth.ParseBootstrapUsers([]auth.User{{Username: "  ", PasswordHash: good}}, "")
+		require.Error(t, err, "blank username")
 
-	_, err = auth.NewUsers(nil, "no-colon-entry")
-	require.Error(t, err, "env entry without ':'")
+		_, err = auth.ParseBootstrapUsers([]auth.User{{Username: "admin", PasswordHash: "not-a-bcrypt-hash"}}, "")
+		require.Error(t, err, "non-bcrypt hash")
 
-	_, err = auth.NewUsers(nil, "admin:")
-	require.Error(t, err, "env entry with empty hash")
-}
+		_, err = auth.ParseBootstrapUsers(nil, "no-colon-entry")
+		require.Error(t, err, "env entry without ':'")
 
-func TestVerifyUnknownUser(t *testing.T) {
-	u, err := auth.NewUsers([]auth.User{{Username: "admin", PasswordHash: hash(t, "secret")}}, "")
-	require.NoError(t, err)
-	assert.False(t, u.Verify("nobody", "secret"))
+		_, err = auth.ParseBootstrapUsers(nil, "admin:")
+		require.Error(t, err, "env entry with empty hash")
+	})
 }

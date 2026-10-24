@@ -1,14 +1,17 @@
 // Package auth provides JWT session authentication for the admin console and
-// API. Credentials are a set of username + bcrypt password-hash pairs loaded
-// from config and the JOEI_CONSOLE_AUTH_USERS environment variable; a
-// successful POST /api/auth/login exchanges them for an HS256-signed session:
-// HttpOnly access/refresh cookies for the browser console, and a bearer
-// access token in the response body for scripts and CI. The /api/auth/*
-// endpoints (login, refresh, logout, me) and the session-verifying middleware
-// live alongside the credential set in this package. With no users configured
-// the set is "locked" (fail-closed): the middleware serves 503 on /api/ and
-// never reaches the wrapped handler — the console shell itself stays public so
-// its login screen can still render.
+// API. Console accounts (username, bcrypt hash, role, disabled flag, token
+// version) live in the users store (internal/users); config.yaml and the
+// JOEI_CONSOLE_AUTH_USERS environment variable only bootstrap that store (see
+// ParseBootstrapUsers). A successful POST /api/auth/login exchanges a
+// username and password for an HS256-signed session: HttpOnly access/refresh
+// cookies for the browser console, and a bearer access token in the response
+// body for scripts and CI. Every request re-reads its user from the store, so
+// disabling, deleting or bumping a user's token version revokes their
+// sessions at once. The /api/auth/* endpoints (login, refresh, logout, me,
+// password) and the session-verifying middleware live in this package. With
+// no enabled users the console is "locked" (fail-closed): the middleware
+// serves 503 on /api/ and never reaches the wrapped handler — the console
+// shell itself stays public so its login screen can still render.
 package auth
 
 import (
@@ -18,38 +21,23 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// User is one credential: a username and its bcrypt password hash.
+// User is one bootstrap credential from config or the environment: a username
+// and its bcrypt password hash.
 type User struct {
 	Username     string
 	PasswordHash string
 }
 
-// Users is a validated set of credentials. An empty set is the locked state.
-type Users struct {
-	byName map[string]string // username -> bcrypt hash
-}
-
-// dummyHash is compared against when an unknown username is supplied so that
-// response timing does not reveal whether a username exists. Generated once at
-// package load at the default cost.
-var dummyHash []byte
-
-func init() {
-	h, err := bcrypt.GenerateFromPassword([]byte("joei-timing-dummy-password"), bcrypt.DefaultCost)
-	if err != nil {
-		panic("auth: generating dummy hash: " + err.Error())
-	}
-	dummyHash = h
-}
-
-// NewUsers builds the credential set from config-file users and the
-// semicolon-separated JOEI_CONSOLE_AUTH_USERS env value
-// ("username:hash;username:hash"). Whitespace around entries is trimmed. Env
-// entries override file entries with the same username. Every username must be
-// non-empty and every hash must be a valid bcrypt hash, else an error is
-// returned. An empty result is valid and yields the locked state.
-func NewUsers(fileUsers []User, envValue string) (*Users, error) {
-	byName := map[string]string{}
+// ParseBootstrapUsers validates config-file users and the semicolon-separated
+// JOEI_CONSOLE_AUTH_USERS env value ("username:hash;username:hash") and
+// returns the merged list. Whitespace around entries is trimmed. An env entry
+// overrides a file entry with the same username (compared case-insensitively,
+// as usernames are), keeping the file entry's position. Every username must
+// be non-empty and every hash a valid bcrypt hash, else an error is returned.
+// An empty result is valid.
+func ParseBootstrapUsers(fileUsers []User, envValue string) ([]User, error) {
+	var out []User
+	index := map[string]int{} // lower-cased username -> position in out
 
 	add := func(username, passwordHash, src string) error {
 		name := strings.TrimSpace(username)
@@ -60,7 +48,14 @@ func NewUsers(fileUsers []User, envValue string) (*Users, error) {
 		if _, err := bcrypt.Cost([]byte(h)); err != nil {
 			return fmt.Errorf("auth: %s: user %q: password_hash is not a valid bcrypt hash: %w", src, name, err)
 		}
-		byName[name] = h
+		u := User{Username: name, PasswordHash: h}
+		key := strings.ToLower(name)
+		if i, ok := index[key]; ok {
+			out[i] = u
+			return nil
+		}
+		index[key] = len(out)
+		out = append(out, u)
 		return nil
 	}
 
@@ -84,30 +79,5 @@ func NewUsers(fileUsers []User, envValue string) (*Users, error) {
 			return nil, err
 		}
 	}
-
-	return &Users{byName: byName}, nil
-}
-
-// Locked reports whether no users are configured (fail-closed state).
-func (u *Users) Locked() bool { return len(u.byName) == 0 }
-
-// Verify reports whether username/password match a configured user. For an
-// unknown username it still performs a bcrypt comparison against a dummy hash
-// so timing does not reveal which usernames exist. It is safe to call on a
-// locked (empty) set — it simply returns false.
-func (u *Users) Verify(username, password string) bool {
-	h, ok := u.byName[username]
-	if !ok {
-		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-		return false
-	}
-	return bcrypt.CompareHashAndPassword([]byte(h), []byte(password)) == nil
-}
-
-// Known reports whether username is configured. A token stays cryptographically
-// valid after its user is removed from the config, so every request re-checks
-// the subject against the current set.
-func (u *Users) Known(username string) bool {
-	_, ok := u.byName[username]
-	return ok
+	return out, nil
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +27,18 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
+	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 	"github.com/ggwpLab/Jo-ei/web"
 )
 
 // authConsoleStack mirrors cmd/jo-ei wiring: the console shell is public, the
 // session endpoints are public, and sessions.Middleware gates the rest of
-// /api/. users==nil yields the locked (fail-closed) state. The console
+// /api/. An empty user store yields the locked (fail-closed) state. The console
 // handler logs into logBuf so attribution can be asserted.
-func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users, logBuf *bytes.Buffer) *httptest.Server {
+func authConsoleStack(t *testing.T, upstream *httptest.Server, userStore auth.UserStore, logBuf *bytes.Buffer) *httptest.Server {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -63,7 +67,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 
 	signer, err := auth.NewSigner([]byte("0123456789abcdef0123456789abcdef"))
 	require.NoError(t, err)
-	sessions := auth.NewSessions(users, signer, 15*time.Minute, 168*time.Hour)
+	sessions := auth.NewSessions(userStore, signer, 15*time.Minute, 168*time.Hour)
 
 	root := http.NewServeMux()
 	root.Handle("/favicon.ico", web.FaviconHandler())
@@ -79,13 +83,25 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, users *auth.Users
 	return srv
 }
 
-func testUsers(t *testing.T) *auth.Users {
+// emptyUserStore returns a users store over a fresh database, with no users.
+func emptyUserStore(t *testing.T) *users.Store {
+	t.Helper()
+	db, err := storage.Open(filepath.Join(storagetest.TempDir(t), "users.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := users.New(db)
+	require.NoError(t, err)
+	return s
+}
+
+// testUsers returns a users store holding one admin, "admin"/"s3cret".
+func testUsers(t *testing.T) *users.Store {
 	t.Helper()
 	h, err := bcrypt.GenerateFromPassword([]byte("s3cret"), bcrypt.MinCost)
 	require.NoError(t, err)
-	u, err := auth.NewUsers([]auth.User{{Username: "admin", PasswordHash: string(h)}}, "")
-	require.NoError(t, err)
-	return u
+	s := emptyUserStore(t)
+	require.NoError(t, s.Create(users.User{Username: "admin", PasswordHash: string(h), Role: users.RoleAdmin}))
+	return s
 }
 
 func TestConsoleAuth_ShellIsPublicButAPIIsNot(t *testing.T) {
@@ -136,7 +152,7 @@ func TestConsoleAuth_LoginThenCookieAccess(t *testing.T) {
 	defer me.Body.Close()
 	body, err := io.ReadAll(me.Body)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"username":"admin"}`, string(body))
+	assert.JSONEq(t, `{"username":"admin","role":"admin","must_change_password":false}`, string(body))
 }
 
 func TestConsoleAuth_LoginThenBearerAccess(t *testing.T) {
@@ -222,9 +238,7 @@ func TestConsoleAuth_RefreshKeepsSessionAliveAndLogoutEndsIt(t *testing.T) {
 func TestConsoleAuth_LockedReturns503(t *testing.T) {
 	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
 	defer upstream.Close()
-	locked, err := auth.NewUsers(nil, "") // no users configured
-	require.NoError(t, err)
-	srv := authConsoleStack(t, upstream, locked, &bytes.Buffer{})
+	srv := authConsoleStack(t, upstream, emptyUserStore(t), &bytes.Buffer{}) // no users
 
 	res, err := http.Get(srv.URL + "/api/overview")
 	require.NoError(t, err)
