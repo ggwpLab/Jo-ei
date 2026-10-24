@@ -75,7 +75,7 @@ function LoginScreen() {
           : ex.status === 429
           ? `Too many attempts, try again in ${ex.retryAfter} s`
           : ex.status === 503
-          ? "Authentication is not configured on this server. Add console.auth.users or JOEI_CONSOLE_AUTH_USERS and restart."
+          ? "No enabled console users on this server. Restore the admin account with jo-ei reset-admin-password."
           : "Incorrect username or password.");
         setPassword("");
       })
