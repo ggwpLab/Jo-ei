@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -540,4 +541,42 @@ func TestChangePassword_RejectsCrossSiteOrigin(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// slowStore delays every lookup so that concurrent logins all sit between
+// the limiter check and the password check at the same time.
+type slowStore struct{ *fakeStore }
+
+func (s slowStore) Get(username string) (users.User, error) {
+	time.Sleep(50 * time.Millisecond)
+	return s.fakeStore.Get(username)
+}
+
+func TestLogin_ParallelAttemptsCannotBypassLimiter(t *testing.T) {
+	s := sessionsWith(t, slowStore{newStore(adminUser(t))})
+	const n = 20
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			codes[i] = loginFrom(t, s, "1.1.1.1:1", nil, "admin", "wrong").Code
+		}(i)
+	}
+	wg.Wait()
+
+	checked, limited := 0, 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusUnauthorized:
+			checked++
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Errorf("unexpected status %d", c)
+		}
+	}
+	assert.LessOrEqual(t, checked, auth.LoginPairLimit, "at most %d attempts may reach the password check", auth.LoginPairLimit)
+	assert.Equal(t, n, checked+limited)
 }

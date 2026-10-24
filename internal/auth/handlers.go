@@ -82,7 +82,9 @@ func (s *Sessions) login(w http.ResponseWriter, r *http.Request) {
 
 	// A blocked attempt is refused before the password is looked at — even a
 	// correct one — and is not itself counted, so waiting out Retry-After is
-	// always enough.
+	// always enough. An admitted attempt is counted as a failure up front, so
+	// parallel requests cannot all pass the check before any is recorded;
+	// Success below takes it back.
 	if retry, ok := s.limiter.Allow(req.Username, ip); !ok {
 		log.Warn().Str("user", req.Username).Str("client_ip", ip).Msg("login rate limited")
 		rateLimited(w, retry)
@@ -103,7 +105,6 @@ func (s *Sessions) login(w http.ResponseWriter, r *http.Request) {
 		_ = users.CheckPassword(dummyHash, req.Password)
 	}
 	if !valid {
-		s.limiter.Failure(req.Username, ip)
 		log.Warn().Str("user", req.Username).Str("client_ip", ip).Msg("login failed")
 		writeJSONError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
@@ -236,14 +237,14 @@ func (s *Sessions) changePassword(w http.ResponseWriter, r *http.Request) {
 	log := s.log(r)
 
 	// A stolen session must not become an unthrottled password oracle: wrong
-	// current passwords count against the same limiter as failed logins.
+	// current passwords count against the same limiter as failed logins, and
+	// the attempt is reserved before the check, as in login.
 	if retry, ok := s.limiter.Allow(u.Username, ip); !ok {
 		log.Warn().Str("user", u.Username).Str("client_ip", ip).Msg("login rate limited")
 		rateLimited(w, retry)
 		return
 	}
 	if !users.CheckPassword(u.PasswordHash, req.Current) {
-		s.limiter.Failure(u.Username, ip)
 		writeJSONError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
