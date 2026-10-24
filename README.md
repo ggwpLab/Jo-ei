@@ -259,7 +259,7 @@ the effective policy at runtime. It is backed by a JSON API under `/api/`:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/overview` | GET | KPIs, per-gate counters, cache stats, configured scanners (since process start) |
-| `/api/requests?limit=N` | GET | recent request events, newest first (SQLite-backed, cursor pagination) |
+| `/api/requests?limit=N` | GET | recent request events, newest first (SQLite-backed, cursor pagination; `verdict=` filters, `q=` searches `package@version` and request ID) |
 | `/api/events` | GET | Server-Sent Events stream of new request events |
 | `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
 | `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |

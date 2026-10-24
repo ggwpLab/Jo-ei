@@ -9,6 +9,9 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
+// maxRequestQuery caps the ?q= search text on /api/requests, in bytes.
+const maxRequestQuery = 256
+
 // validVerdict reports whether v is one of the four accepted verdict
 // constants. The empty string (meaning "any verdict" per Repo.Page) is not a
 // valid value here; callers must guard with v != "" before calling.

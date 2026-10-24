@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recreates `admin` if it was deleted. It works while the server runs and
   refuses to create a database at a wrong `--config` path.
 
+- **Request feed search covers the whole history.** The search box now queries
+  the server (`GET /api/requests?q=`, a case-insensitive substring of
+  `package@version` or the request ID, combinable with `verdict`, cursor-paged)
+  instead of filtering only the rows already loaded in the browser. Hovering
+  the time in the feed shows the full date.
+
 ### Changed
 
 - **Breaking: config/env console users and `jo-ei hashpw` are removed.**

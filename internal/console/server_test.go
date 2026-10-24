@@ -503,6 +503,45 @@ func TestRequestsFilterByVerdictAndPage(t *testing.T) {
 	assert.Empty(t, page2.NextCursor, "no more pages")
 }
 
+func TestRequestsSearchByText(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now()
+	f.store.Record(gate.Event{RequestID: "a1", Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: now, Ecosystem: "npm", Package: "lodash", Version: "4.17.21"})
+	f.store.Record(gate.Event{RequestID: "b1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: now.Add(time.Second), Ecosystem: "npm", Package: "express", Version: "4.0.0"})
+	f.store.Record(gate.Event{RequestID: "c1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: now.Add(2 * time.Second), Ecosystem: "npm", Package: "lodash", Version: "3.0.0"})
+
+	ids := func(query string) []string {
+		t.Helper()
+		var body struct {
+			Requests []struct {
+				RequestID string `json:"request_id"`
+			} `json:"requests"`
+		}
+		code := getJSON(t, f.srv.URL+"/api/requests?"+query, &body)
+		require.Equal(t, http.StatusOK, code)
+		out := []string{}
+		for _, r := range body.Requests {
+			out = append(out, r.RequestID)
+		}
+		return out
+	}
+
+	assert.Equal(t, []string{"c1", "a1"}, ids("q=lodash"))
+	assert.Equal(t, []string{"c1"}, ids("q=lodash&verdict=BLOCK"))
+	assert.Equal(t, []string{"b1"}, ids("q=b1"))
+	assert.Equal(t, []string{"c1", "b1", "a1"}, ids("q=++"), "whitespace-only query matches everything")
+}
+
+func TestRequestsRejectsOverlongQuery(t *testing.T) {
+	f := newFixture(t)
+	var body struct {
+		Error string `json:"error"`
+	}
+	code := getJSON(t, f.srv.URL+"/api/requests?q="+strings.Repeat("x", 257), &body)
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Equal(t, "invalid_query", body.Error)
+}
+
 func TestRequestsRejectsBadVerdictAndCursor(t *testing.T) {
 	f := newFixture(t)
 

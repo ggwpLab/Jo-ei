@@ -12,6 +12,12 @@ function fmtCompact(n) {
 function fmtClock(d) {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+function fmtDateTime(d) {
+  return d.toLocaleString("en-GB", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
 function fmtAgo(d) {
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return s + "s ago";
@@ -175,7 +181,7 @@ const GATE_LABEL = {
 };
 
 Object.assign(window, {
-  fmtNum, fmtCompact, fmtClock, fmtAgo, fmtCountdown,
+  fmtNum, fmtCompact, fmtClock, fmtDateTime, fmtAgo, fmtCountdown,
   useJoeiData,
   Ico, Icons, Torii, ToriiMark, Eco, Verdict, Spark, GATE_LABEL,
   useState, useEffect, useRef, useMemo, useCallback,

@@ -64,6 +64,9 @@ CREATE INDEX IF NOT EXISTS idx_events_verdict_ts_id ON events(verdict, ts, id);
 const defaultEventRetentionDays = 30
 const defaultDailyRetentionDays = 365
 
+// likeEscaper escapes LIKE's wildcards (and the escape character itself).
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 type sqliteRepo struct {
 	db             *sql.DB
 	eventRetention time.Duration
@@ -280,7 +283,7 @@ func (r *sqliteRepo) Recent(limit int) ([]gate.Event, error) {
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {
+func (r *sqliteRepo) Page(verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {
 	var (
 		conds []string
 		args  []any
@@ -288,6 +291,13 @@ func (r *sqliteRepo) Page(verdict string, cursor Cursor, limit int) ([]gate.Even
 	if verdict != "" {
 		conds = append(conds, "verdict = ?")
 		args = append(args, verdict)
+	}
+	if text != "" {
+		// SQLite's LIKE is case-insensitive for ASCII; escape its wildcards so
+		// the text matches as a literal substring.
+		pat := "%" + likeEscaper.Replace(text) + "%"
+		conds = append(conds, `(package || '@' || version LIKE ? ESCAPE '\' OR request_id LIKE ? ESCAPE '\')`)
+		args = append(args, pat, pat)
 	}
 	if !cursor.Zero() {
 		// Keyset: rows strictly older than the cursor under (ts DESC, id DESC).

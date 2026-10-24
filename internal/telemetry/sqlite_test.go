@@ -161,7 +161,7 @@ func TestSQLiteRepo_PagePagesAllWithoutGapsOrDupes(t *testing.T) {
 	var ids []string
 	cursor := telemetry.Cursor{}
 	for {
-		evs, next, err := repo.Page(gate.VerdictBlock, cursor, 2)
+		evs, next, err := repo.Page(gate.VerdictBlock, "", cursor, 2)
 		require.NoError(t, err)
 		for _, ev := range evs {
 			ids = append(ids, ev.RequestID)
@@ -182,7 +182,7 @@ func TestSQLiteRepo_PageFiltersByVerdict(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "err1", Time: now.Add(time.Second), Verdict: gate.VerdictError, Gate: gate.GateCache}))
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "block1", Time: now.Add(2 * time.Second), Verdict: gate.VerdictBlock, Gate: gate.GateCVE}))
 
-	evs, next, err := repo.Page(gate.VerdictError, telemetry.Cursor{}, 10)
+	evs, next, err := repo.Page(gate.VerdictError, "", telemetry.Cursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "err1", evs[0].RequestID)
@@ -195,9 +195,77 @@ func TestSQLiteRepo_PageEmptyVerdictReturnsAllNewestFirst(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "a", Time: now, Verdict: gate.VerdictPass, Gate: gate.GateSupply}))
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "b", Time: now.Add(time.Second), Verdict: gate.VerdictBlock, Gate: gate.GateCVE}))
 
-	evs, next, err := repo.Page("", telemetry.Cursor{}, 10)
+	evs, next, err := repo.Page("", "", telemetry.Cursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, evs, 2)
 	assert.Equal(t, "b", evs[0].RequestID, "newest first")
 	assert.True(t, next.Zero())
+}
+
+func TestSQLiteRepo_PageFiltersByText(t *testing.T) {
+	repo := newRepo(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	add := func(i int, id, pkg, ver, verdict string) {
+		t.Helper()
+		require.NoError(t, repo.RecordEvent(gate.Event{
+			RequestID: id, Time: base.Add(time.Duration(i) * time.Second),
+			Verdict: verdict, Gate: gate.GateSupply,
+			Ecosystem: "npm", Package: pkg, Version: ver,
+		}))
+	}
+	add(1, "req-aaa", "lodash", "4.17.21", gate.VerdictPass)
+	add(2, "req-bbb", "left_pad", "1.3.0", gate.VerdictBlock)
+	add(3, "req-ccc", "leftxpad", "1.3.0", gate.VerdictPass)
+	add(4, "req-ddd", "Lodash.Merge", "4.6.2", gate.VerdictBlock)
+
+	ids := func(verdict, text string) []string {
+		t.Helper()
+		evs, _, err := repo.Page(verdict, text, telemetry.Cursor{}, 10)
+		require.NoError(t, err)
+		out := []string{}
+		for _, ev := range evs {
+			out = append(out, ev.RequestID)
+		}
+		return out
+	}
+
+	assert.Equal(t, []string{"req-ddd", "req-aaa"}, ids("", "LODASH"), "package match is case-insensitive")
+	assert.Equal(t, []string{"req-aaa"}, ids("", "lodash@4.17"), "matches across package@version")
+	assert.Equal(t, []string{"req-ccc", "req-bbb"}, ids("", "1.3.0"), "matches version")
+	assert.Equal(t, []string{"req-bbb"}, ids("", "req-bbb"), "matches request_id")
+	assert.Equal(t, []string{"req-bbb"}, ids("", "left_pad"), "_ is literal, not a LIKE wildcard")
+	assert.Empty(t, ids("", "%"), "% is literal, not a LIKE wildcard")
+	assert.Equal(t, []string{"req-ddd"}, ids(gate.VerdictBlock, "lodash"), "combines with verdict")
+	assert.Len(t, ids("", ""), 4, "empty text matches everything")
+}
+
+func TestSQLiteRepo_PageTextPagesWithCursor(t *testing.T) {
+	repo := newRepo(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 1; i <= 6; i++ {
+		pkg := "other"
+		if i%2 == 0 {
+			pkg = "wanted"
+		}
+		require.NoError(t, repo.RecordEvent(gate.Event{
+			RequestID: fmt.Sprintf("r%d", i), Time: base.Add(time.Duration(i) * time.Second),
+			Verdict: gate.VerdictPass, Gate: gate.GateSupply,
+			Ecosystem: "npm", Package: pkg, Version: "1",
+		}))
+	}
+
+	var ids []string
+	cursor := telemetry.Cursor{}
+	for {
+		evs, next, err := repo.Page("", "wanted", cursor, 2)
+		require.NoError(t, err)
+		for _, ev := range evs {
+			ids = append(ids, ev.RequestID)
+		}
+		if next.Zero() {
+			break
+		}
+		cursor = next
+	}
+	assert.Equal(t, []string{"r6", "r4", "r2"}, ids)
 }
