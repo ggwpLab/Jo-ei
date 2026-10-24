@@ -415,15 +415,14 @@ func run(ctx context.Context, cfgPath string) error {
 	// other path (registry prefixes, /health) falls through to the proxy mux
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
-	// Console users live in the database. config/env users are still validated
-	// here so a broken entry fails startup; importing them into the store is
-	// not wired yet.
-	if _, err := auth.ParseBootstrapUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS")); err != nil {
-		return err
-	}
+	// Console users live in the database; config/env users only seed an empty
+	// table (bootstrapUsers), and a broken entry fails startup.
 	userStore, err := users.New(sdb)
 	if err != nil {
 		return fmt.Errorf("console users: %w", err)
+	}
+	if err := bootstrapUsers(userStore, toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"), serverLog); err != nil {
+		return err
 	}
 	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
 	if err != nil {
@@ -434,9 +433,16 @@ func run(ctx context.Context, cfgPath string) error {
 		return fmt.Errorf("console auth: %w", err)
 	}
 	accessTTL, refreshTTL := authTTLs(cfg.Console.Auth)
-	sessions := auth.NewSessions(userStore, signer, accessTTL, refreshTTL, auth.WithLogger(logger))
+	clientIP, err := httpx.NewClientIPResolver(cfg.Server.TrustedProxies, cfg.Server.ClientIPHeader, serverLog)
+	if err != nil {
+		return fmt.Errorf("server.trusted_proxies: %w", err)
+	}
+	sessions := auth.NewSessions(userStore, signer, accessTTL, refreshTTL,
+		auth.WithLoginLimiter(auth.NewLoginLimiter(nil)),
+		auth.WithClientIP(clientIP.ClientIP),
+		auth.WithLogger(logger))
 	if sessions.Locked() {
-		serverLog.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+		serverLog.Warn().Msg(`console auth not configured — no enabled users; /api/ is disabled (HTTP 503) until one is created with "jo-ei user create <name> --role admin" (or bootstrap via console.auth.users / JOEI_CONSOLE_AUTH_USERS on an empty database); the proxy continues to serve`)
 	}
 
 	root := http.NewServeMux()
@@ -474,6 +480,7 @@ func run(ctx context.Context, cfgPath string) error {
 		RunningRegistries:   runningRegistries,
 		ImageScanEnabled:    cfg.ImageScan.Enabled,
 		Health:              healthMon,
+		Users:               userStore,
 		Logger:              logger,
 	})))
 	root.Handle("/", mux)

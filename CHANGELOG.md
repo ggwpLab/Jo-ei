@@ -17,7 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. `examples/monitoring/` ships a Prometheus scrape config, alert rules and
   a Grafana dashboard; see [docs/metrics.md](docs/metrics.md).
 
+- **Console users and roles.** Users now live in the database with an `admin` or
+  `operator` role, managed from a new Users page in the console or with
+  `jo-ei user create|list|role|disable|enable|reset-password|delete`. Sessions
+  are revocable, passwords are 12 characters to 72 bytes, and temporary
+  passwords force a change at next sign-in. Sign-in is rate limited (5 failures
+  per user and IP, 20 per IP, per 15 minutes; `429` with `Retry-After`). New
+  `server.trusted_proxies` and `server.client_ip_header` resolve the real client
+  IP behind a reverse proxy. Allow/deny lists get add/remove endpoints. See
+  [docs/configuration.md](docs/configuration.md#users-and-roles).
+
 ### Changed
+
+- **Config/env console users are bootstrap-only.** `console.auth.users` and
+  `JOEI_CONSOLE_AUTH_USERS` are imported as admins once, into an empty users
+  table; editing them after first boot no longer changes who can log in (a
+  warning is logged). `PUT /api/policy` and `POST /api/cache/cleanup` are now
+  admin-only, and `PUT /api/policy` keeps allow/deny lists that are absent from
+  the body.
 
 - **One log format across the proxy.** Package downloads, metadata filtering,
   transparent proxying, Docker, the console API, telemetry and startup used to

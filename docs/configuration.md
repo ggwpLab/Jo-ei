@@ -41,7 +41,7 @@ process exits non-zero.
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
-| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
+| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. As with every key, the `JOEI_SERVER_TRUSTED_PROXIES` env override only applies when the key is present in `config.yaml` (an empty `trusted_proxies: []` is enough). |
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
@@ -335,12 +335,56 @@ an internal interface.
 
 | Key | Default | Description |
 |---|---|---|
-| `auth.users` | — | List of `{username, password_hash}` (bcrypt). Prefer `JOEI_CONSOLE_AUTH_USERS`. |
+| `auth.users` | — | **Bootstrap only.** List of `{username, password_hash}` (bcrypt) imported as admins when the users table is empty. Prefer `JOEI_CONSOLE_AUTH_USERS`. Ignored once any user exists. |
 | `auth.jwt_secret` | generated | HS256 key signing console sessions, at least 32 bytes. Prefer `JOEI_CONSOLE_JWT_SECRET`. Unset, Jōei generates one on first boot and stores it in the database, so sessions survive a restart; set it explicitly to share sessions across replicas. |
 | `auth.access_ttl_minutes` | `15` | Access-token lifetime. |
 | `auth.refresh_ttl_hours` | `168` | Refresh-token lifetime (7 days). |
 
-Generate a password hash: `printf '%s' 'your-password' | jo-ei hashpw`
+### Users and roles
+
+Console users are stored in the database and managed from the console's Users
+page (admins only) or the CLI (`jo-ei user create|list|role|disable|enable|reset-password|delete`).
+There are two roles:
+
+| | `operator` | `admin` |
+|---|---|---|
+| View overview, requests, cache, policy, registries | yes | yes |
+| Add or remove allow/deny list entries | yes | yes |
+| Change policy mode or minimum age (`PUT /api/policy`) | no | yes |
+| Purge the cache (`POST /api/cache/cleanup`) | no | yes |
+| Manage users | no | yes |
+| Change own password | yes | yes |
+
+A forbidden call returns `403 {"error":"forbidden"}`. The last enabled admin
+cannot be disabled, demoted or deleted, and nobody can disable, demote or delete
+themselves.
+
+**Bootstrap, once.** On first boot with an empty users table, `auth.users` and
+`JOEI_CONSOLE_AUTH_USERS` (`name:hash;name:hash`) are imported as admins and the
+log says `imported N console users from config`. After that the database is the
+source of truth: if either is still set, Jō-ei logs one warning that they are
+ignored, and editing them changes nothing. An invalid entry (for example a
+username with a forbidden character) stops startup. With no users at all, create
+the first with `jo-ei user create <name> --role admin`.
+
+**Passwords** are 12 characters to 72 bytes (bcrypt's limit; longer is rejected,
+never truncated) and must not equal the username. There are no composition
+rules. An admin-created or reset password is temporary: the user must change it
+at next sign-in, and until then every other API call returns
+`403 {"error":"password_change_required"}`.
+
+**Sessions** are database-backed. Disabling a user, changing their role or
+resetting or changing their password revokes their sessions.
+
+**Login limits.** Per process and in memory: 5 failures per (username, client IP)
+per 15 minutes and 20 failures per client IP per 15 minutes. A blocked attempt
+gets `429` with `Retry-After` (seconds) even with the correct password; success
+resets that pair. The client IP is resolved as described in
+[Behind a reverse proxy](#behind-a-reverse-proxy) — set `server.trusted_proxies`
+or all users share one IP's budget. With several replicas the limits and the
+counters are per replica, not shared.
+
+Generate a password hash for bootstrap: `printf '%s' 'your-password' | jo-ei hashpw`
 
 **Sessions.** The console signs in at `POST /api/auth/login` and rides two
 HttpOnly, `SameSite=Strict` cookies (`joei_at`, `joei_rt`); the browser never
@@ -373,10 +417,9 @@ curl -H "Authorization: Bearer $TOKEN" "$JOEI/api/overview"
 
 HTTP Basic is no longer accepted.
 
-**Fail-closed:** with zero users configured, `/api/` returns HTTP 503 and no
+**Fail-closed:** with no enabled users, `/api/` returns HTTP 503 and no
 one can sign in; the console shell still loads (it is static UI), and the proxy
 data path and `/health` stay open.
 
-**Signing out** clears the cookies. Tokens are stateless, so a bearer token
-already issued stays valid until it expires (15 minutes by default); to end
-every session at once, change `auth.jwt_secret` and restart.
+**Signing out** clears the cookies and revokes the session. To end every
+session at once, change `auth.jwt_secret` and restart.

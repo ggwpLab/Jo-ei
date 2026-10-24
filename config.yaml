@@ -162,10 +162,13 @@ logging:
   output: "stdout"
 
 # Admin console / API authentication (JWT sessions).
-# Without at least one user, /api/ returns HTTP 503 (fail-closed); the console
+# Without at least one enabled user, /api/ returns HTTP 503 (fail-closed); the console
 # shell at /console/ still loads so its login screen can render.
 # Generate a hash with:  printf '%s' 'your-password' | jo-ei hashpw
 # Prefer the JOEI_CONSOLE_AUTH_USERS env var so hashes stay out of this file.
+# `users` (and that env var) only SEED an empty database, as admins, on first
+# boot; afterwards users are managed in the console Users page or `jo-ei user`
+# and these are ignored with a warning.
 # console:
 #   auth:
 #     users:
