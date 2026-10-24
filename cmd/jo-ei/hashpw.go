@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -28,17 +29,26 @@ func init() {
 	rootCmd.AddCommand(newHashpwCmd())
 }
 
-func runHashpw(cmd *cobra.Command, _ []string) error {
-	reader := bufio.NewReader(cmd.InOrStdin())
-	line, err := reader.ReadString('\n')
+// readPasswordLine reads the first line from r with trailing CR/LF trimmed.
+// A final line without a newline is accepted; an empty password is an error.
+func readPasswordLine(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(r).ReadString('\n')
 	// A final line with no trailing newline returns io.EOF together with the
 	// data, so only treat EOF as fatal when nothing was read.
 	if err != nil && line == "" {
-		return fmt.Errorf("reading password from stdin: %w", err)
+		return "", fmt.Errorf("reading password from stdin: %w", err)
 	}
 	password := strings.TrimRight(line, "\r\n")
 	if password == "" {
-		return fmt.Errorf("empty password")
+		return "", fmt.Errorf("empty password")
+	}
+	return password, nil
+}
+
+func runHashpw(cmd *cobra.Command, _ []string) error {
+	password, err := readPasswordLine(cmd.InOrStdin())
+	if err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

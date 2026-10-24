@@ -369,6 +369,20 @@ ignored, and editing them changes nothing. An invalid entry (for example a
 username with a forbidden character) stops startup. With no users at all, create
 the first with `jo-ei user create <name> --role admin`.
 
+**Recovery.** If the last admin's password is lost, reset it from the CLI; it
+also re-enables a disabled user and revokes their sessions:
+
+```sh
+jo-ei user reset-password admin
+docker compose exec jo-ei jo-ei user reset-password admin
+```
+
+The password is read from the first line of stdin (or pass `--generate` to have
+one printed on stdout, `--no-force-change` to skip the forced change at next
+sign-in). `jo-ei user create <name> --role admin|operator` takes the same flags,
+and `jo-ei user list` shows every user. The CLI opens the database directly, so
+it works while the server is running.
+
 **Passwords** are 12 characters to 72 bytes (bcrypt's limit; longer is rejected,
 never truncated) and must not equal the username. There are no composition
 rules. An admin-created or reset password is temporary: the user must change it
