@@ -594,3 +594,112 @@ func TestPutPolicyLogCarriesRequestIDAndComponent(t *testing.T) {
 	assert.Equal(t, "rid-console", line["request_id"])
 	assert.Equal(t, "console", line["component"])
 }
+
+func listHandler(t *testing.T, logger zerolog.Logger, _ auth.Identity) http.Handler {
+	t.Helper()
+	rt := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{Enabled: true, BlockOn: "HIGH"}, config.PolicyProfile{}, nil,
+	)
+	return console.NewHandler(console.Config{
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
+		Policy: rt, Logger: logger,
+	})
+}
+
+func doBody(h http.Handler, id auth.Identity, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req = req.WithContext(auth.WithIdentity(req.Context(), id))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+var (
+	opID    = auth.Identity{Username: "anna", Role: users.RoleOperator}
+	adminID = auth.Identity{Username: "root", Role: users.RoleAdmin}
+)
+
+func TestListEndpoint_OperatorAdds(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_cve", `{"entry":"npm/x@1.0.0"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		AllowlistCVE []string `json:"allowlist_cve"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x@1.0.0"}, body.AllowlistCVE)
+
+	rec = doBody(h, opID, http.MethodGet, "/api/policy", "")
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x@1.0.0"}, body.AllowlistCVE)
+}
+
+func TestListEndpoint_Delete(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	rec := doBody(h, opID, http.MethodDelete, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Denylist []string `json:"denylist"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}
+
+func TestListEndpoint_UnknownList400(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/nope", `{"entry":"npm/x"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"invalid_policy","field":"list","message":"unknown list \"nope\""}`, rec.Body.String())
+
+	rec = doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"no-slash"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"field":"entry"`)
+
+	rec = doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/x","extra":1}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestListEndpoint_LogsUserAndEntry(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := listHandler(t, zerolog.New(&logBuf), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_supply", `{"entry":"npm/y"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	out := logBuf.String()
+	assert.Contains(t, out, `"message":"policy list updated"`)
+	assert.Contains(t, out, `"user":"anna"`)
+	assert.Contains(t, out, `"list":"allowlist_supply"`)
+	assert.Contains(t, out, `"entry":"npm/y"`)
+	assert.Contains(t, out, `"action":"add"`)
+
+	logBuf.Reset()
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_supply", `{"entry":"npm/y"}`)
+	assert.NotContains(t, logBuf.String(), "policy list updated", "unchanged edit is not logged")
+}
+
+func TestPutPolicy_AbsentListsUnchanged(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_cve", `{"entry":"npm/keep"}`)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy", `{"mode":"enforce","min_age_hours":48,"cve_block_on":"HIGH"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		MinAgeHours  int      `json:"min_age_hours"`
+		AllowlistCVE []string `json:"allowlist_cve"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, 48, body.MinAgeHours)
+	assert.Equal(t, []string{"npm/keep"}, body.AllowlistCVE)
+}
+
+func TestPutPolicy_PresentEmptyListClears(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy", `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","denylist":[]}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Denylist []string `json:"denylist"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}

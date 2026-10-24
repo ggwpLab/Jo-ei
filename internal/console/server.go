@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -132,6 +133,8 @@ func NewHandler(cfg Config) http.Handler {
 	operator("GET /api/quarantine", s.quarantine)
 	operator("GET /api/policy", s.getPolicy)
 	admin("PUT /api/policy", s.putPolicy)
+	operator("POST /api/policy/lists/{list}", s.editList(true))
+	operator("DELETE /api/policy/lists/{list}", s.editList(false))
 	operator("GET /api/registries", s.registries)
 	admin("PUT /api/registries", s.putRegistries)
 	admin("POST /api/cache/cleanup", s.cacheCleanup)
@@ -347,9 +350,16 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
+	// List fields are pointers: absent keeps the current list (so settings-only
+	// saves cannot clobber concurrent list edits), present replaces it.
 	var in struct {
-		policy.RuntimeParams
-		Persistence string `json:"persistence"` // read-only field from GET; accepted and ignored so GET→PUT round-trips
+		Mode            string    `json:"mode"`
+		MinAgeHours     int       `json:"min_age_hours"`
+		CVEBlockOn      string    `json:"cve_block_on"`
+		AllowlistSupply *[]string `json:"allowlist_supply"`
+		AllowlistCVE    *[]string `json:"allowlist_cve"`
+		Denylist        *[]string `json:"denylist"`
+		Persistence     string    `json:"persistence"` // read-only field from GET; accepted and ignored so GET→PUT round-trips
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -366,23 +376,20 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	p := in.RuntimeParams
-	if err := s.cfg.Policy.Apply(p); err != nil {
-		var verr *policy.ValidationError
-		if errors.As(err, &verr) {
-			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
-				"error": "invalid_policy", "field": verr.Field, "message": verr.Message,
-			})
-			return
+	err := s.cfg.Policy.Update(func(cur policy.RuntimeParams) policy.RuntimeParams {
+		cur.Mode, cur.MinAgeHours, cur.CVEBlockOn = in.Mode, in.MinAgeHours, in.CVEBlockOn
+		if in.AllowlistSupply != nil {
+			cur.AllowlistSupply = *in.AllowlistSupply
 		}
-		var perr *policy.PersistError
-		if errors.As(err, &perr) {
-			s.log(r).Error().Err(err).Msg("persisting policy")
-			s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
-			return
+		if in.AllowlistCVE != nil {
+			cur.AllowlistCVE = *in.AllowlistCVE
 		}
-		s.log(r).Error().Err(err).Msg("applying policy")
-		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
+		if in.Denylist != nil {
+			cur.Denylist = *in.Denylist
+		}
+		return cur
+	})
+	if s.writePolicyError(w, r, err) {
 		return
 	}
 	logEvent := s.log(r).Info().Interface("policy", s.cfg.Policy.Current())
@@ -391,6 +398,71 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	logEvent.Msg("runtime policy updated")
 	s.writePolicy(w, r, http.StatusOK)
+}
+
+// writePolicyError maps a policy update error onto the HTTP response and
+// reports whether it wrote one (err != nil).
+func (s *server) writePolicyError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	var verr *policy.ValidationError
+	if errors.As(err, &verr) {
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+			"error": "invalid_policy", "field": verr.Field, "message": verr.Message,
+		})
+		return true
+	}
+	var perr *policy.PersistError
+	if errors.As(err, &perr) {
+		s.log(r).Error().Err(err).Msg("persisting policy")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+		return true
+	}
+	s.log(r).Error().Err(err).Msg("applying policy")
+	s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
+	return true
+}
+
+// editList handles POST (add) and DELETE (remove) of a single list entry.
+func (s *server) editList(add bool) http.HandlerFunc {
+	action := "remove"
+	if add {
+		action = "add"
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		var in struct {
+			Entry string `json:"entry"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				s.writeJSON(w, r, http.StatusRequestEntityTooLarge, map[string]any{
+					"error": "invalid_policy", "field": "body", "message": "request body too large",
+				})
+				return
+			}
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+				"error": "invalid_policy", "field": "body", "message": err.Error(),
+			})
+			return
+		}
+		list := r.PathValue("list")
+		changed, err := s.cfg.Policy.EditList(list, in.Entry, add)
+		if s.writePolicyError(w, r, err) {
+			return
+		}
+		if changed {
+			user, _ := auth.UserFromContext(r.Context())
+			s.log(r).Info().Str("user", user).Str("list", list).
+				Str("entry", strings.TrimSpace(in.Entry)).Str("action", action).
+				Msg("policy list updated")
+		}
+		s.writePolicy(w, r, http.StatusOK)
+	}
 }
 
 func (s *server) registries(w http.ResponseWriter, r *http.Request) {
