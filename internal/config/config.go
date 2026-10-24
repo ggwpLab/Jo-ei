@@ -41,6 +41,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	// Zero scanners is valid; malware scanning is simply skipped.
+	scannerNames := map[string]int{}
 	for i, sc := range c.Malware.Scanners {
 		switch sc.Type {
 		case "clamav", "icap":
@@ -55,6 +56,11 @@ func (c *Config) Validate() error {
 		if sc.Type == "icap" && sc.Service == "" {
 			return fmt.Errorf("malware.scanners[%d]: icap scanner requires a service", i)
 		}
+		name := sc.DisplayName()
+		if j, dup := scannerNames[name]; dup {
+			return fmt.Errorf("malware.scanners[%d]: name %q already used by malware.scanners[%d]; set a distinct name", i, name, j)
+		}
+		scannerNames[name] = i
 	}
 	if c.Malware.MaxConcurrentScans < 0 {
 		return fmt.Errorf("malware.max_concurrent_scans must not be negative")
@@ -301,9 +307,23 @@ type MalwareConfig struct {
 // ScannerConfig configures a single malware-scanning engine.
 type ScannerConfig struct {
 	Type           string `mapstructure:"type"`            // "clamav" | "icap"
+	Name           string `mapstructure:"name"`            // display name; see DisplayName
 	Address        string `mapstructure:"address"`         // unix:///path | tcp:host:port
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 30
 	Service        string `mapstructure:"service"`         // ICAP service name (icap only)
+}
+
+// DisplayName is the name the scanner is reported under in detections, logs and
+// the console overview: Name when set, otherwise "icap:<service>" for ICAP and
+// the bare type for everything else.
+func (sc ScannerConfig) DisplayName() string {
+	if n := strings.TrimSpace(sc.Name); n != "" {
+		return n
+	}
+	if sc.Type == "icap" && sc.Service != "" {
+		return "icap:" + sc.Service
+	}
+	return sc.Type
 }
 
 // HealthConfig tunes the scanner health probes. Zero values use defaults

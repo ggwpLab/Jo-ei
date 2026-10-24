@@ -740,3 +740,31 @@ func TestLoad_ServerListenDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ":8080", cfg.Server.Listen)
 }
+
+func TestScannerConfig_DisplayName(t *testing.T) {
+	cases := []struct {
+		sc   config.ScannerConfig
+		want string
+	}{
+		{config.ScannerConfig{Type: "clamav"}, "clamav"},
+		{config.ScannerConfig{Type: "icap", Service: "avscan"}, "icap:avscan"},
+		{config.ScannerConfig{Type: "icap", Service: "avscan", Name: "kaspersky"}, "kaspersky"},
+		{config.ScannerConfig{Type: "clamav", Name: "  "}, "clamav"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, tc.sc.DisplayName(), "%+v", tc.sc)
+	}
+}
+
+func TestValidate_RejectsDuplicateScannerNames(t *testing.T) {
+	c := &config.Config{Malware: config.MalwareConfig{Scanners: []config.ScannerConfig{
+		{Type: "icap", Address: "tcp:a:1344", Service: "avscan"},
+		{Type: "icap", Address: "tcp:b:1344", Service: "avscan"},
+	}}}
+	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+	c.Server.Listen = ":8080"
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "malware.scanners[1]")
+	assert.Contains(t, err.Error(), "icap:avscan")
+}

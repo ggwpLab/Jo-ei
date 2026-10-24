@@ -48,7 +48,7 @@ func newFullyWired(t *testing.T) *Metrics {
 	m.ScanWaitObserver()(time.Millisecond)
 	m.RegisterScannerHealth(func() []health.ScannerHealth {
 		return []health.ScannerHealth{{Name: "clamav", Status: health.StatusOK, Enabled: true}}
-	})
+	}, nil)
 	m.WrapRecorder(&fakeRecorder{}).Record(gate.Event{Ecosystem: "npm", Verdict: gate.VerdictPass, Gate: gate.GateCVE})
 	m.RegisterCache(fakeStatter{stats: cache.CacheStats{SizeBytes: 1024}}, 4096)
 	return m

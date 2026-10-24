@@ -106,9 +106,9 @@ func TestScannerUpCollector(t *testing.T) {
 			{Name: "icap", Status: health.StatusUnknown, Enabled: true},
 			{Name: "trivy", Status: health.StatusOff, Enabled: false},
 		}
-	})
+	}, nil)
 	// A second registration is ignored.
-	m.RegisterScannerHealth(func() []health.ScannerHealth { return nil })
+	m.RegisterScannerHealth(func() []health.ScannerHealth { return nil }, nil)
 	expected := `# HELP jo_ei_scanner_up 1 when the scanner's last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled.
 # TYPE jo_ei_scanner_up gauge
 jo_ei_scanner_up{scanner="clamav"} 0
@@ -135,7 +135,23 @@ func TestScannerNilMetrics(t *testing.T) {
 	assert.Equal(t, img, m.WrapImageScanner("trivy", img))
 	assert.Nil(t, m.ScanWaitObserver())
 	m.SetScanConcurrencyLimit(1)
-	m.RegisterScannerHealth(nil)
+	m.RegisterScannerHealth(nil, nil)
+}
+
+func TestScannerUpCollector_NamedEnginesLabelByType(t *testing.T) {
+	m := New(BuildInfo{}, zerolog.Nop())
+	m.RegisterScannerHealth(func() []health.ScannerHealth {
+		return []health.ScannerHealth{
+			{Name: "kaspersky", Status: health.StatusOK, Enabled: true},
+			{Name: "clamav-eu", Status: health.StatusDown, Enabled: true},
+		}
+	}, map[string]string{"kaspersky": "icap", "clamav-eu": "clamav"})
+	expected := `# HELP jo_ei_scanner_up 1 when the scanner's last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled.
+# TYPE jo_ei_scanner_up gauge
+jo_ei_scanner_up{scanner="clamav"} 0
+jo_ei_scanner_up{scanner="icap"} 1
+`
+	require.NoError(t, testutil.GatherAndCompare(m.Registry, strings.NewReader(expected), "jo_ei_scanner_up"))
 }
 
 // histCount sums the sample count of every series of the named histogram.
