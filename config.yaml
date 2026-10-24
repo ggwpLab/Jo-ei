@@ -162,18 +162,15 @@ logging:
   output: "stdout"
 
 # Admin console / API authentication (JWT sessions).
-# Without at least one enabled user, /api/ returns HTTP 503 (fail-closed); the console
-# shell at /console/ still loads so its login screen can render.
-# Generate a hash with:  printf '%s' 'your-password' | jo-ei hashpw
-# Prefer the JOEI_CONSOLE_AUTH_USERS env var so hashes stay out of this file.
-# `users` (and that env var) only SEED an empty database, as admins, on first
-# boot; afterwards users are managed in the console Users page or `jo-ei user`
-# and these are ignored with a warning.
+# Users live in the database and are managed on the console Users page. On
+# first start, with an empty users table, Jōei creates user "admin" with a
+# random temporary password and logs it once (warn line "created initial admin
+# user"); sign in with it and choose a new one. Lost it, or locked out? Run
+#   jo-ei --config <this file> reset-admin-password
+# Without at least one enabled user, /api/ returns HTTP 503 (fail-closed); the
+# console shell at /console/ still loads so its login screen can render.
 # console:
 #   auth:
-#     users:
-#       - username: admin
-#         password_hash: "$2a$10$REPLACE_WITH_A_REAL_BCRYPT_HASH"
 #     # HS256 key signing console sessions, at least 32 bytes. Prefer the
 #     # JOEI_CONSOLE_JWT_SECRET env var. Left unset, Jōei generates one on
 #     # first boot and persists it in the database, so sessions survive a

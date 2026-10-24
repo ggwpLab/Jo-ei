@@ -187,9 +187,11 @@ with no extra load on the public API.
 Console sign-in uses JWT sessions. The browser holds two HttpOnly cookies with
 `SameSite=Strict`: an access token for 15 minutes and a refresh token for 7
 days. Scripts and CI get a bearer token from `POST /api/auth/login`. Passwords
-are stored as bcrypt hashes (via the built-in `jo-ei hashpw` command), and
-users can be supplied through the `JOEI_CONSOLE_AUTH_USERS` environment
-variable so the hashes stay out of the repository. TLS is deliberately not
+are stored as bcrypt hashes in the database, with `admin` and `operator`
+roles managed on the console's Users page. On first start Jōei creates the
+user `admin` with a random temporary password, logs it once and requires a
+change at first sign-in; `jo-ei reset-admin-password` restores access if it is
+lost. TLS is deliberately not
 built into the binary; a reverse proxy in front of Jōei terminates it.
 
 ## Architecture
@@ -244,11 +246,10 @@ nothing is compiled: the clone only provides `docker-compose.yaml`,
 
 ```bash
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
-cp .env.example .env
+cp .env.example .env   # optional JOEI_* overrides
 
-HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
-echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
+docker-compose logs jo-ei | grep "initial admin"   # temporary admin password
 
 pip install requests --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```

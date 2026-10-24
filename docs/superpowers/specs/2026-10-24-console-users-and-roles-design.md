@@ -55,11 +55,14 @@ credentials through environment variables.
    Policy settings block read-only with a lock and "only admin can change",
    lists editable; Quarantine allow/deny buttons work for operator).
 2. **Storage**: users and bcrypt hashes in the database.
-3. **Bootstrap**: on startup, if the users table is empty, import the users
-   from `console.auth.users` / `JOEI_CONSOLE_AUTH_USERS` once, all as admin.
-   From then on the database is the source of truth (same model as policy, see
-   `policy.Runtime` seeding). No browser setup wizard.
-4. **Recovery**: a CLI, `jo-ei user …`, that works on the database directly.
+3. **Bootstrap** (revised by owner decision, 2026-10-24): on startup, if the
+   users table is completely empty, create user `admin` with a generated
+   temporary password that is logged once. Config/env users
+   (`console.auth.users`, `JOEI_CONSOLE_AUTH_USERS`) are removed. The database
+   is the only source of truth. No browser setup wizard.
+4. **Recovery** (revised by owner decision, 2026-10-24): a single CLI command,
+   `jo-ei reset-admin-password`, that works on the database directly. The
+   `jo-ei user …` and `jo-ei hashpw` commands are removed.
 5. **Cache cleanup is admin-only.**
 6. **Audit**: log lines are enough, no UI.
 7. Accepted best-practice set (proposed by Claude, approved by the owner):
@@ -210,39 +213,52 @@ operator. Quarantine/drawer `saveLists` also switches to the list endpoints.
   `action` (`create`|`role`|`disable`|`enable`|`reset_password`|`delete`), and
   `role` where relevant. Never the password or hash.
 
-### Bootstrap and the old config keys
+### Bootstrap: the initial admin
 
-- Startup: open DB, run migrations; if `users` is empty and config/env yields
-  users, insert them as `admin` with `must_change_password=false` (their owners
-  already know those passwords) and log `imported N console users from config`.
-- If `users` is non-empty and config/env still define users, log a warning that
-  they are ignored after first boot. Startup does not fail.
-- If `users` is empty and nothing to import: locked state, `/api/` → 503 as
-  today; the startup warning now points at `jo-ei user create`.
-- `console.auth.users` and `JOEI_CONSOLE_AUTH_USERS` stay supported for
-  bootstrap only; docs and `config.yaml` say so.
-- `Users` becomes DB-backed; `Locked()` = no enabled users. The in-memory
-  credential map goes away.
+*Owner decision, 2026-10-24.* This replaces the earlier draft, which imported
+config/env users into an empty table and kept a `jo-ei user` CLI.
 
-### CLI
+- Startup: open DB, run migrations. If the `users` table has no rows at all
+  (`Store.HasAnyUsers` false), `Store.EnsureInitialAdmin` creates, in one
+  transaction that re-checks emptiness, user `admin` with role `admin`,
+  `must_change_password = true` and a random 20-character password
+  (`A–Z a–z 0–9`, crypto/rand, unbiased — `users.GeneratePassword`).
+- The password is logged exactly once, at creation, as one `warn` line:
+  message `created initial admin user`, fields `user=admin`,
+  `password=<temp>` and a hint to change it at first sign-in or run
+  `jo-ei reset-admin-password`. This is the only place a password ever appears
+  in logs; later restarts print nothing.
+- If the table has any row (even only disabled users), nothing is created. With
+  no enabled users the console is locked (`/api/` → 503) and the startup
+  warning points at `jo-ei reset-admin-password`.
+- `console.auth.users`, `JOEI_CONSOLE_AUTH_USERS`, `auth.ParseBootstrapUsers`
+  and `Store.ImportIfEmpty` are removed outright — no compatibility handling and
+  no warning. Existing installs keep their users (they are already in the
+  database); a fresh or empty database no longer reads config/env users.
+- Security trade-off, documented: the temporary password lands in the logs (and
+  any log aggregator) and stays valid until `admin` signs in and changes it.
+- `Users` is DB-backed; `Locked()` = no enabled users.
 
-Cobra subcommands next to `hashpw`, reading the same `--config` to find the DB:
+### CLI: `jo-ei reset-admin-password`
 
-- `jo-ei user create <name> --role admin|operator` — password from stdin
-  (like `hashpw`), or `--generate` to print a random one. Sets
-  `must_change_password` unless `--no-force-change`.
-- `jo-ei user reset-password <name>` — same password input; also re-enables a
-  disabled user and bumps `tokens_valid_after`.
-- `jo-ei user list`.
+*Owner decision, 2026-10-24.* The only user-related CLI command; it reads the
+global `--config` to find the DB.
 
-The CLI writes to SQLite while the server may be running (WAL mode, the server
-reads users per request, so changes apply live). It is the recovery path for
-"every admin is locked out"; it is not subject to the last-admin or self
-guards except that `create` refuses an existing name. Docs show the Docker form
-(`docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin --generate`:
-the distroless image has no shell and `/jo-ei` is not on `PATH`, `--config`
-defaults to `config.yaml` in the working directory, and `-T` is needed to pipe a
-password on stdin).
+- Fails clearly if the database file does not exist (a wrong `--config` must
+  not silently create an empty database).
+- Generates a new temporary password with `users.GeneratePassword` and prints
+  only that password on stdout (one line); other messages go to stderr.
+- `Store.ResetAdmin(hash)`, one transaction: if `admin` exists, set the
+  password (token_version bump → all its sessions revoked), set
+  `must_change_password`, enable it and restore role `admin` if it was demoted;
+  if `admin` was deleted, recreate it as an admin with `must_change_password`.
+- Restoring or enabling an admin only adds admins, so the console's last-admin
+  and self guards never apply to it.
+- Works while the server runs (WAL mode; the server reads users per request).
+- Docker form: `docker compose exec -T jo-ei /jo-ei --config
+  /etc/jo-ei/config.yaml reset-admin-password` (the distroless image has no
+  shell, `/jo-ei` is not on `PATH`, and `--config` defaults to `config.yaml` in
+  the working directory).
 
 ### Console
 
@@ -257,14 +273,14 @@ password on stdin).
 
 ### Docs and release
 
-- `docs/configuration.md`: auth section rewritten — DB users, roles, bootstrap,
-  CLI, rate limits.
+- `docs/configuration.md`: auth section rewritten — DB users, roles, the
+  initial admin, `reset-admin-password`, rate limits.
 - `config.yaml` comments updated.
 - CHANGELOG `Added` (users & roles, `server.trusted_proxies` +
   `server.client_ip_header`, list endpoints)
-  and `Changed` (config/env users become bootstrap-only — editing them after
-  first boot no longer changes who can log in; `PUT /api/policy` is admin-only
-  and treats absent list fields as unchanged).
+  and `Changed` (initial admin with a logged temporary password replaces
+  config/env users, which are removed along with `jo-ei hashpw`;
+  `PUT /api/policy` is admin-only and treats absent list fields as unchanged).
 
 ### Builder's own calls already noted
 

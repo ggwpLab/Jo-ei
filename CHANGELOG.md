@@ -18,8 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a Grafana dashboard; see [docs/metrics.md](docs/metrics.md).
 
 - **Console users and roles.** Users now live in the database with an `admin` or
-  `operator` role, managed from a new Users page in the console or with
-  `jo-ei user create|reset-password|list`. Sessions
+  `operator` role, managed from a new Users page in the console. Sessions
   are revocable, passwords are 12 characters to 72 bytes, and temporary
   passwords force a change at next sign-in. Sign-in is rate limited (5 failures
   per user and IP, 20 per IP, per 15 minutes; `429` with `Retry-After`). New
@@ -27,20 +26,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   IP behind a reverse proxy. Allow/deny lists get add/remove endpoints. See
   [docs/configuration.md](docs/configuration.md#users-and-roles).
 
+- **Initial admin with a generated password.** On first start with an empty
+  users table, Jōei creates the user `admin` (role admin) with a random
+  20-character temporary password, logs it once as a `warn` line
+  `created initial admin user` (find it with
+  `docker compose logs jo-ei | grep "initial admin"`) and requires a change at
+  first sign-in. The password is never logged again. Until `admin` changes it,
+  the temporary password is readable by anyone with access to the logs.
+
+- **`jo-ei reset-admin-password`.** The recovery command: gives `admin` a new
+  temporary password (printed alone on stdout), re-enables it, restores its
+  admin role, revokes its sessions and forces a change at next sign-in; it
+  recreates `admin` if it was deleted. It works while the server runs and
+  refuses to create a database at a wrong `--config` path.
+
 ### Changed
 
-- **Config/env console users are bootstrap-only.** `console.auth.users` and
-  `JOEI_CONSOLE_AUTH_USERS` are imported as admins once, into an empty users
-  table; editing them after first boot no longer changes who can log in (a
-  warning is logged). `PUT /api/policy`, `PUT /api/registries` and
-  `POST /api/cache/cleanup` are now admin-only, and `PUT /api/policy` keeps
-  allow/deny lists that are absent from the body.
+- **Breaking: config/env console users and `jo-ei hashpw` are removed.**
+  `console.auth.users`, the `JOEI_CONSOLE_AUTH_USERS` environment variable and
+  the `jo-ei hashpw` command no longer exist and are not read. **Upgrading
+  from 0.5.x:** the accounts defined there are not imported. The users table
+  is new and starts empty, so the first start of this version creates `admin`
+  with a generated password (see above) — take it from the log, sign in, and
+  re-create the other people on the Users page. A database that already holds
+  users keeps them. Remove the old keys from `config.yaml` and `.env`.
 
-  **Upgrade warning:** usernames must now be 1–64 characters of
-  `[A-Za-z0-9._@-]`. On the first boot of this version — only while the users
-  table is still empty — a `console.auth.users` or `JOEI_CONSOLE_AUTH_USERS`
-  name that breaks this rule (e.g. `ivan petrov`, `ops+ci`) stops startup.
-  Rename it before upgrading.
+- **Admin-only console mutations.** `PUT /api/policy`, `PUT /api/registries`
+  and `POST /api/cache/cleanup` are now admin-only, and `PUT /api/policy` keeps
+  allow/deny lists that are absent from the body.
 
 - **One log format across the proxy.** Package downloads, metadata filtering,
   transparent proxying, Docker, the console API, telemetry and startup used to

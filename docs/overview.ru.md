@@ -186,9 +186,11 @@ CDN и без npm-тулчейна при сборке: React вендорен, 
 Вход в консоль выполняется через JWT-сессии. Браузер хранит два HttpOnly-cookie
 с `SameSite=Strict`: access на 15 минут и refresh на 7 дней. Скрипты и CI
 получают bearer-токен через `POST /api/auth/login`. Пароли хранятся как
-bcrypt-хеши (встроенная команда `jo-ei hashpw`), пользователей можно задать
-через переменную окружения `JOEI_CONSOLE_AUTH_USERS`, чтобы хеши не попадали в
-репозиторий. TLS в бинарник намеренно не встроен, его терминирует reverse proxy
+bcrypt-хеши в базе данных, роли `admin` и `operator` назначаются на странице
+Users в консоли. При первом запуске Jōei создаёт пользователя `admin` со
+случайным временным паролем, один раз пишет его в лог и требует сменить его при
+первом входе; если пароль потерян, доступ восстанавливает команда
+`jo-ei reset-admin-password`. TLS в бинарник намеренно не встроен, его терминирует reverse proxy
 перед Jōei.
 
 ## Архитектура
@@ -243,11 +245,10 @@ Compose-файл запускает готовый образ `ghcr.io/ggwplab/j
 
 ```bash
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
-cp .env.example .env
+cp .env.example .env   # необязательные переопределения JOEI_*
 
-HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
-echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
+docker-compose logs jo-ei | grep "initial admin"   # временный пароль admin
 
 pip install requests --index-url http://localhost:8080/pypi/simple/ --trusted-host localhost
 ```

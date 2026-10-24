@@ -18,17 +18,16 @@ path, replace dots with underscores, uppercase it, and prefix `JOEI_`.
 Only keys that appear in the YAML file can be overridden (the override
 replaces the file's value; it cannot introduce a key the file omits).
 
-Two special cases are read directly from the environment, not through this
+One special case is read directly from the environment, not through this
 mechanism:
 
-- **`JOEI_CONSOLE_AUTH_USERS`** — console credentials as
-  `username:bcrypt-hash`, multiple users separated by `;`. Merged with (and
-  taking precedence over) `console.auth.users` from the file. Preferred over
-  the file so password hashes stay out of version control.
 - **`JOEI_CONSOLE_JWT_SECRET`** — the HS256 key that signs console sessions,
   taking precedence over `console.auth.jwt_secret` from the file. Preferred
-  over the file for the same reason, and required to share sessions across
-  replicas (see `console` below).
+  over the file so the secret stays out of version control, and required to
+  share sessions across replicas (see `console` below).
+
+Console users are not configured through the file or the environment at all —
+they live in the database (see [Users and roles](#users-and-roles)).
 
 Validation runs at startup; an invalid config prints the offending key and the
 process exits non-zero.
@@ -353,7 +352,6 @@ an internal interface.
 
 | Key | Default | Description |
 |---|---|---|
-| `auth.users` | — | **Bootstrap only.** List of `{username, password_hash}` (bcrypt) imported as admins when the users table is empty. Prefer `JOEI_CONSOLE_AUTH_USERS`. Ignored once any user exists. |
 | `auth.jwt_secret` | generated | HS256 key signing console sessions, at least 32 bytes. Prefer `JOEI_CONSOLE_JWT_SECRET`. Unset, Jōei generates one on first boot and stores it in the database, so sessions survive a restart; set it explicitly to share sessions across replicas. |
 | `auth.access_ttl_minutes` | `15` | Access-token lifetime. |
 | `auth.refresh_ttl_hours` | `168` | Refresh-token lifetime (7 days). |
@@ -361,10 +359,10 @@ an internal interface.
 ### Users and roles
 
 Console users are stored in the database and managed from the console's Users
-page (admins only). The CLI covers only the basics: `jo-ei user create|reset-password|list`
-(reset-password also re-enables a disabled user). Changing a role and disabling,
-enabling or deleting a user are Users-page / API operations, not CLI ones.
-There are two roles:
+page (admins only): creating users, changing roles, resetting passwords and
+disabling, enabling or deleting users all happen there (or through the same
+API). The only CLI is the recovery command `jo-ei reset-admin-password`
+(below). There are two roles:
 
 | | `operator` | `admin` |
 |---|---|---|
@@ -380,35 +378,53 @@ A forbidden call returns `403 {"error":"forbidden"}`. The last enabled admin
 cannot be disabled, demoted or deleted, and nobody can disable, demote or delete
 themselves.
 
-**Bootstrap, once.** On first boot with an empty users table, `auth.users` and
-`JOEI_CONSOLE_AUTH_USERS` (`name:hash;name:hash`) are imported as admins and the
-log says `imported N console users from config`. After that the database is the
-source of truth: if either is still set, Jō-ei logs one warning that they are
-ignored, and editing them changes nothing. An invalid entry (for example a
-username with a forbidden character) stops startup. With no users at all, create
-the first with `jo-ei user create <name> --role admin`.
+**First start.** When the users table is completely empty, Jōei creates the
+user `admin` (role admin) with a random 20-character temporary password
+(`A–Z a–z 0–9`) and logs it exactly once, as a `warn` line:
 
-**Recovery.** If the last admin's password is lost, reset it from the CLI; it
-also re-enables a disabled user and revokes their sessions:
+```json
+{"level":"warn","component":"server","time":"2026-10-24T10:00:00Z","user":"admin","password":"<temporary>","hint":"temporary password: change it at first sign-in; lost it? run jo-ei reset-admin-password","message":"created initial admin user"}
+```
+
+Find it with:
 
 ```sh
-jo-ei user reset-password admin --generate
+docker compose logs jo-ei | grep "initial admin"
+```
+
+Sign in as `admin` with that password; the console makes you choose a new one
+before anything else. The line is written only when the user is created — later
+restarts never print a password. Once the table holds any user (even only
+disabled ones) nothing is created automatically. A `logging.level` of `error`
+hides the line; use `jo-ei reset-admin-password` then.
+
+> **Security:** the temporary password is in the logs, and in any log
+> aggregator they are shipped to, and it stays valid until `admin` signs in and
+> changes it. Sign in right after the first start; if the logs may have been
+> read by others before that, run `jo-ei reset-admin-password`.
+
+**Recovery.** `jo-ei reset-admin-password` gives `admin` a new temporary
+password and prints it — and only it — on stdout (messages go to stderr). It
+also re-enables `admin`, restores its admin role if it was demoted, revokes its
+sessions and requires a password change at next sign-in. If `admin` was deleted
+it is recreated as an admin. It opens the database directly, so it works while
+the server is running, and it refuses to run if the database file does not
+exist (a wrong `--config` would otherwise silently create an empty one).
+
+```sh
+jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
 ```
 
 In the Docker image the binary is `/jo-ei` (not on `PATH`; the image has no
 shell) and `--config` defaults to `config.yaml` in the working directory, so
-name both. `-T` gives the command a plain stdin, needed when piping a password:
+name both:
 
 ```sh
-docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin --generate
-printf '%s\n' 'new-password-here' | docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin
+docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
 ```
 
-The password is read from the first line of stdin (or pass `--generate` to have
-one printed on stdout, `--no-force-change` to skip the forced change at next
-sign-in). `jo-ei user create <name> --role admin|operator` takes the same flags,
-and `jo-ei user list` shows every user. The CLI opens the database directly, so
-it works while the server is running.
+With no enabled users at all the console is locked (`/api/` answers 503) and
+the startup log points at this command.
 
 **Passwords** are 12 characters to 72 bytes (bcrypt's limit; longer is rejected,
 never truncated) and must not equal the username. There are no composition
@@ -426,8 +442,6 @@ resets that pair. The client IP is resolved as described in
 [Behind a reverse proxy](#behind-a-reverse-proxy) — set `server.trusted_proxies`
 or all users share one IP's budget. With several replicas the limits and the
 counters are per replica, not shared.
-
-Generate a password hash for bootstrap: `printf '%s' 'your-password' | jo-ei hashpw`
 
 **Sessions.** The console signs in at `POST /api/auth/login` and rides two
 HttpOnly, `SameSite=Strict` cookies (`joei_at`, `joei_rt`); the browser never
