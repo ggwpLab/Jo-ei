@@ -38,13 +38,13 @@ func TestOverview_ReflectsDownScanner(t *testing.T) {
 		config.PolicyProfile{},
 		nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := asAdmin(console.NewHandler(console.Config{
 		Store:       store,
 		Broadcaster: telemetry.NewBroadcaster(),
 		Policy:      runtime,
 		Health:      mon,
 		Logger:      zerolog.Nop(),
-	})
+	}))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 

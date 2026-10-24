@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
@@ -28,6 +29,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 )
 
 func newTelemetryStore(t *testing.T) *telemetry.Store {
@@ -77,7 +79,7 @@ func newFixture(t *testing.T) *fixture {
 		config.PolicyProfile{CVEBlock: true},
 		nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:               store,
 		Broadcaster:         bcast,
 		Policy:              runtime,
@@ -292,7 +294,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store: store, Broadcaster: bcast, Logger: zerolog.Nop(),
 	})
 	srv := httptest.NewUnstartedServer(h)
@@ -331,7 +333,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 // console then shows its "no connection" banner although the API is healthy.
 func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
 	store := newTelemetryStore(t)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:        store,
 		Broadcaster:  telemetry.NewBroadcaster(),
 		Logger:       zerolog.Nop(),
@@ -369,7 +371,7 @@ func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
 // shape must stay an array — null crashes the SPA's Registries screen.
 func TestRegistries_NilUpstreams(t *testing.T) {
 	store := newTelemetryStore(t)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       store,
 		Broadcaster: telemetry.NewBroadcaster(),
 		Registries: []console.RegistryInfo{
@@ -452,10 +454,10 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := withIdentity(console.NewHandler(console.Config{
 		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
 		Policy: rt, Logger: logger,
-	})
+	}), &auth.Identity{Role: users.RoleAdmin})
 
 	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(body))
@@ -463,8 +465,8 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	// No authenticating middleware in front, so the log line must not carry a
-	// "user" field (and must not panic building it).
+	// The identity has no username, so the log line must not carry a "user"
+	// field (and must not panic building it).
 	assert.NotContains(t, logBuf.String(), `"user"`)
 }
 
@@ -539,7 +541,7 @@ func TestCacheCleanup(t *testing.T) {
 }
 
 func TestCacheCleanup_NoPurger(t *testing.T) {
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Logger:      zerolog.Nop(),
@@ -554,7 +556,7 @@ func TestCacheCleanup_NoPurger(t *testing.T) {
 }
 
 func TestCacheCleanup_PurgeError(t *testing.T) {
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Purger:      &fakePurger{err: errors.New("db locked")},
@@ -575,7 +577,7 @@ func TestPutPolicyLogCarriesRequestIDAndComponent(t *testing.T) {
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
 		Policy: rt, Logger: zerolog.New(&logBuf),
 	})

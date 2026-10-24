@@ -23,6 +23,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 )
 
 // CacheStatsProvider exposes cache statistics; cache.Cache satisfies it.
@@ -116,17 +117,39 @@ func NewHandler(cfg Config) http.Handler {
 	}
 	s := &server{cfg: cfg, logger: cfg.Logger.With().Str("component", "console").Logger()}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/overview", s.overview)
-	mux.HandleFunc("GET /api/requests", s.requests)
-	mux.HandleFunc("GET /api/events", s.events)
-	mux.HandleFunc("GET /api/quarantine", s.quarantine)
-	mux.HandleFunc("GET /api/policy", s.getPolicy)
-	mux.HandleFunc("PUT /api/policy", s.putPolicy)
-	mux.HandleFunc("GET /api/registries", s.registries)
-	mux.HandleFunc("PUT /api/registries", s.putRegistries)
-	mux.HandleFunc("POST /api/cache/cleanup", s.cacheCleanup)
-	mux.HandleFunc("GET /api/metrics/daily", s.dailyMetrics)
+	// Every route is registered through admin or operator; there is no
+	// unguarded helper, so an undeclared route cannot exist. New routes use
+	// admin unless operators need them.
+	admin := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, s.requireRole(h, users.RoleAdmin))
+	}
+	operator := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, s.requireRole(h, users.RoleAdmin, users.RoleOperator))
+	}
+	operator("GET /api/overview", s.overview)
+	operator("GET /api/requests", s.requests)
+	operator("GET /api/events", s.events)
+	operator("GET /api/quarantine", s.quarantine)
+	operator("GET /api/policy", s.getPolicy)
+	admin("PUT /api/policy", s.putPolicy)
+	operator("GET /api/registries", s.registries)
+	admin("PUT /api/registries", s.putRegistries)
+	admin("POST /api/cache/cleanup", s.cacheCleanup)
+	operator("GET /api/metrics/daily", s.dailyMetrics)
 	return mux
+}
+
+// requireRole runs h only when the request carries an identity whose role is
+// one of allowed; otherwise (including no identity) it answers 403.
+func (s *server) requireRole(h http.HandlerFunc, allowed ...users.Role) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := auth.IdentityFromContext(r.Context())
+		if !ok || !slices.Contains(allowed, id.Role) {
+			s.writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
