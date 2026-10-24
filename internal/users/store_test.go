@@ -187,3 +187,14 @@ func TestStore_NotFound(t *testing.T) {
 	assert.ErrorIs(t, s.SetDisabled("x", true), users.ErrNotFound)
 	assert.ErrorIs(t, s.SetPassword("x", "h", false), users.ErrNotFound)
 }
+
+func TestStore_HasAnyUsers(t *testing.T) {
+	s := newStore(t)
+	has, err := s.HasAnyUsers()
+	require.NoError(t, err)
+	assert.False(t, has)
+	require.NoError(t, s.Create(users.User{Username: "d", PasswordHash: "h", Role: users.RoleOperator, Disabled: true}))
+	has, err = s.HasAnyUsers()
+	require.NoError(t, err)
+	assert.True(t, has, "a disabled user still makes the table non-empty")
+}

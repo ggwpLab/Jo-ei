@@ -101,6 +101,16 @@ func (s *Store) HasEnabledUsers() (bool, error) {
 	return n > 0, nil
 }
 
+// HasAnyUsers reports whether the table holds at least one user, enabled or
+// not. It decides whether config/env bootstrap users still apply.
+func (s *Store) HasAnyUsers() (bool, error) {
+	var n int
+	if err := s.db.SQL().QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return false, fmt.Errorf("counting users: %w", err)
+	}
+	return n > 0, nil
+}
+
 func validateNew(u User) error {
 	if err := ValidateUsername(u.Username); err != nil {
 		return err

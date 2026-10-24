@@ -95,3 +95,46 @@ func TestBootstrapUsers_NothingToImport(t *testing.T) {
 	assert.Empty(t, all)
 	assert.Empty(t, buf.String())
 }
+
+func TestBootstrapUsers_NonEmptyTableIgnoresInvalidEntries(t *testing.T) {
+	enableLogs(t)
+	st := newBootstrapStore(t)
+	h := bootstrapHash(t)
+	require.NoError(t, bootstrapUsers(st, nil, "ops:"+h, zerolog.Nop()))
+
+	cases := map[string]struct {
+		file []auth.User
+		env  string
+	}{
+		"malformed env hash":    {env: "ops:not-a-bcrypt-hash"},
+		"invalid env name":      {env: "ops+ci:" + h},
+		"malformed env entry":   {env: "no-colon-here"},
+		"invalid config name":   {file: []auth.User{{Username: "ivan petrov", PasswordHash: h}}},
+		"malformed config hash": {file: []auth.User{{Username: "x", PasswordHash: "nope"}}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, bootstrapUsers(st, tc.file, tc.env, zerolog.New(&buf)),
+				"once users exist, config/env users must not stop startup")
+			assert.Contains(t, buf.String(), "console.auth.users / JOEI_CONSOLE_AUTH_USERS are ignored")
+		})
+	}
+	all, err := st.List()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.Equal(t, "ops", all[0].Username)
+}
+
+func TestBootstrapUsers_DisabledOnlyTableStillCountsAsNonEmpty(t *testing.T) {
+	enableLogs(t)
+	st := newBootstrapStore(t)
+	require.NoError(t, st.Create(users.User{Username: "gone", PasswordHash: bootstrapHash(t), Role: users.RoleAdmin, Disabled: true}))
+
+	var buf bytes.Buffer
+	require.NoError(t, bootstrapUsers(st, nil, "ops+ci:bad", zerolog.New(&buf)))
+	assert.Contains(t, buf.String(), "are ignored")
+	all, err := st.List()
+	require.NoError(t, err)
+	assert.Len(t, all, 1)
+}

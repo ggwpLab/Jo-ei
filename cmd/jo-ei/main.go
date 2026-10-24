@@ -416,7 +416,7 @@ func run(ctx context.Context, cfgPath string) error {
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
 	// Console users live in the database; config/env users only seed an empty
-	// table (bootstrapUsers), and a broken entry fails startup.
+	// table (bootstrapUsers); a broken entry fails startup only then.
 	userStore, err := users.New(sdb)
 	if err != nil {
 		return fmt.Errorf("console users: %w", err)
