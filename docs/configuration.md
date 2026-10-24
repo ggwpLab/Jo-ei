@@ -191,11 +191,13 @@ Per scanner:
 | Key | Default | Description |
 |---|---|---|
 | `type` | — | `clamav` (clamd protocol) or `icap` (RFC 3507 — Kaspersky, Dr.Web, …). |
+| `name` | type, or `icap:<service>` | Name the engine is reported under in detections, logs and the console overview. Must be unique across scanners, so give several engines of one type distinct names. |
 | `address` | — | `tcp:host:port` or `unix:///path/to/socket`. |
 | `timeout_seconds` | `30` | Per-scan timeout. |
 | `service` | — | ICAP service name (required for `icap`). |
 
 All configured engines scan every artifact; any single detection blocks.
+Prometheus labels keep the engine type (`clamav`, `icap`), not the name.
 Malware verdicts cannot be allowlisted.
 
 ## `health`

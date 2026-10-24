@@ -25,6 +25,7 @@ type ICAPScanner struct {
 	addr    string
 	service string
 	timeout time.Duration
+	name    string // engine reported in verdicts
 }
 
 // NewICAPScanner creates a scanner for an ICAP server at address with the given
@@ -40,7 +41,7 @@ func NewICAPScanner(address, service string, timeout time.Duration) (*ICAPScanne
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &ICAPScanner{network: network, addr: addr, service: service, timeout: timeout}, nil
+	return &ICAPScanner{network: network, addr: addr, service: service, timeout: timeout, name: "icap"}, nil
 }
 
 // Scan implements gate.AVScanner using ICAP RESPMOD.
@@ -67,7 +68,12 @@ func (s *ICAPScanner) Scan(ctx context.Context, filePath string) (*gate.AVResult
 	if err := s.writeRespmod(conn, f); err != nil {
 		return nil, err
 	}
-	return parseICAPResponse(bufio.NewReader(conn))
+	res, err := parseICAPResponse(bufio.NewReader(conn))
+	if err != nil {
+		return nil, err
+	}
+	res.Engine = s.name
+	return res, nil
 }
 
 // writeRespmod sends a RESPMOD request encapsulating a minimal HTTP response

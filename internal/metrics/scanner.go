@@ -175,6 +175,7 @@ var scannerUpDesc = prometheus.NewDesc(
 // time.
 type scannerUpCollector struct {
 	snapshot func() []health.ScannerHealth
+	types    map[string]string // display name → engine type
 }
 
 func (c *scannerUpCollector) Describe(ch chan<- *prometheus.Desc) { ch <- scannerUpDesc }
@@ -186,6 +187,9 @@ func (c *scannerUpCollector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 		name := sh.Name
+		if t, ok := c.types[name]; ok {
+			name = t
+		}
 		if name == "osv.dev" {
 			name = "osv"
 		}
@@ -200,13 +204,15 @@ func (c *scannerUpCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // RegisterScannerHealth exposes jo_ei_scanner_up, derived from snapshot at
-// scrape time. Call it once per process: a repeated call is ignored. A nil
-// *Metrics is a no-op.
-func (m *Metrics) RegisterScannerHealth(snapshot func() []health.ScannerHealth) {
+// scrape time. types maps a scanner's display name to its engine type (e.g.
+// "kaspersky" → "icap") so operator-chosen names keep the label in the known
+// set. Call it once per process: a repeated call is ignored. A nil *Metrics is
+// a no-op.
+func (m *Metrics) RegisterScannerHealth(snapshot func() []health.ScannerHealth, types map[string]string) {
 	if m == nil {
 		return
 	}
-	err := m.Registry.Register(&scannerUpCollector{snapshot: snapshot})
+	err := m.Registry.Register(&scannerUpCollector{snapshot: snapshot, types: types})
 	var already prometheus.AlreadyRegisteredError
 	if err != nil && !errors.As(err, &already) {
 		m.log.Error().Err(err).Msg("register scanner health collector")

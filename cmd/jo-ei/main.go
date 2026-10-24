@@ -353,21 +353,23 @@ func run(ctx context.Context, cfgPath string) error {
 		}
 		healthMon.AddPassive("osv.dev", base, true, osvScanner.Health)
 	}
+	scannerTypes := map[string]string{} // display name → type, for metric labels
 	for i, sc := range cfg.Malware.Scanners {
+		scannerTypes[sc.DisplayName()] = sc.Type
 		if profile.MalwareBlock && i < len(avScanners) {
 			if pr, ok := avScanners[i].(scanner.Prober); ok {
-				healthMon.AddActive(sc.Type, sc.Address, true, pr.Probe)
+				healthMon.AddActive(sc.DisplayName(), sc.Address, true, pr.Probe)
 				continue
 			}
 		}
-		healthMon.AddDisabled(sc.Type, sc.Address)
+		healthMon.AddDisabled(sc.DisplayName(), sc.Address)
 	}
 	if cfg.ImageScan.Enabled && trivyScanner != nil {
 		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, true, trivyScanner.Probe)
 	}
 	healthMon.Start()
 	defer healthMon.Close() //nolint:errcheck
-	mx.RegisterScannerHealth(healthMon.Snapshot)
+	mx.RegisterScannerHealth(healthMon.Snapshot, scannerTypes)
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)

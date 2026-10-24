@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Log queries keyed on the old messages or fields need updating; see
   [configuration › logging](docs/configuration.md#logging).
 
+### Fixed
+
+- **Malware engines are reported by name.** Detections, logs and the console
+  overview showed only the scanner type, so with several ICAP engines every
+  verdict and health row read `icap`. Scanners now take an optional `name`
+  (`malware.scanners[].name`); it defaults to the type, or `icap:<service>` for
+  ICAP. Names must be unique: a config with two unnamed scanners of the same
+  type and service now fails validation until one is given a `name`.
+  Prometheus labels are unchanged.
+
 ## [0.5.1] - 2026-10-05
 
 ### Changed

@@ -22,6 +22,7 @@ type ClamAVScanner struct {
 	network string // "unix" or "tcp"
 	addr    string
 	timeout time.Duration
+	name    string // engine reported in verdicts
 }
 
 // NewClamAVScanner creates a scanner for the given clamd address.
@@ -34,7 +35,7 @@ func NewClamAVScanner(address string, timeout time.Duration) (*ClamAVScanner, er
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &ClamAVScanner{network: network, addr: addr, timeout: timeout}, nil
+	return &ClamAVScanner{network: network, addr: addr, timeout: timeout, name: "clamav"}, nil
 }
 
 // parseScannerAddress splits "unix:///path" or "tcp:host:port" into (network, addr).
@@ -107,7 +108,12 @@ func (s *ClamAVScanner) Scan(ctx context.Context, filePath string) (*gate.AVResu
 	if err != nil {
 		return nil, fmt.Errorf("reading clamd response: %w", err)
 	}
-	return parseClamAVResponse(string(respBytes))
+	res, err := parseClamAVResponse(string(respBytes))
+	if err != nil {
+		return nil, err
+	}
+	res.Engine = s.name
+	return res, nil
 }
 
 // parseClamAVResponse interprets a clamd INSTREAM reply.
