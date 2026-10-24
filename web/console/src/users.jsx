@@ -173,7 +173,10 @@ function AddUserForm({ onCreated, onCancel, onError }) {
 }
 
 /* ---------- per-row ⋯ menu ---------- */
-function RowMenu({ user, onAction }) {
+// On the signed-in admin's own row the menu holds only a hint: the server
+// refuses self role/disable/delete (409 self), and resetting your own password
+// here would sign you out — "Change password" in the sidebar is the way.
+function RowMenu({ user, self, onAction }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -186,7 +189,7 @@ function RowMenu({ user, onAction }) {
   }, [open]);
 
   const other = user.role === "admin" ? "operator" : "admin";
-  const items = [
+  const items = self ? [] : [
     { id: "role", label: <>Change role <span className="faint">→ {other}</span></> },
     { id: "reset", label: "Reset password" },
     { id: user.disabled ? "enable" : "disable", label: user.disabled ? "Enable" : "Disable" },
@@ -199,6 +202,12 @@ function RowMenu({ user, onAction }) {
       {open && (
         <div role="menu" className="card"
           style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 20, minWidth: 190, padding: 4, display: "flex", flexDirection: "column" }}>
+          {self && (
+            <div className="faint" role="note" style={{ fontSize: 11.5, padding: "6px 8px", lineHeight: 1.45 }}>
+              This is you. Use <b style={{ color: "var(--washi-soft)" }}>Change password</b> in the sidebar;
+              another admin can change your role or status.
+            </div>
+          )}
           {items.map((it) => (
             <button key={it.id} role="menuitem" className="btn sm ghost"
               style={{ justifyContent: "flex-start", textAlign: "left", border: "none", ...(it.danger ? { color: "var(--vermilion-l)" } : {}) }}
@@ -345,7 +354,7 @@ function Users({ notify }) {
               <span style={{ fontSize: 12.5, color: u.role === "admin" ? "var(--gold-l)" : "var(--washi-soft)" }}>{u.role}</span>
               <span style={{ fontSize: 12.5, color: st.color }}>{st.text}</span>
               <span className="ts">{fmtWhen(u.last_login_at)}</span>
-              <RowMenu user={u} onAction={onAction} />
+              <RowMenu user={u} self={self} onAction={onAction} />
             </div>
           );
         })}
