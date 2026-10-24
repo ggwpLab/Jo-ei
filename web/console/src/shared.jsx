@@ -58,6 +58,7 @@ const Icons = {
   feed:     () => <Ico><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></Ico>,
   quar:     () => <Ico><path d="M6 2h12M6 22h12M8 2c0 4 8 6 8 10s-8 6-8 10M16 2c0 4-8 6-8 10"/></Ico>,
   policy:   () => <Ico><path d="M5 3h11l3 3v15H5zM9 9h6M9 13h6M9 17h3"/></Ico>,
+  users:    () => <Ico><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 4.6a3.5 3.5 0 010 6.8M18 14.4c2.2.6 3.5 2.7 3.5 5.6"/></Ico>,
   registry: () => <Ico><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="14" width="18" height="5" rx="1"/><path d="M7 6.5h.01M7 16.5h.01"/></Ico>,
   shield:   () => <Ico><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></Ico>,
   search:   () => <Ico size={15}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></Ico>,

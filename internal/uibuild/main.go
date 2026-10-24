@@ -30,6 +30,7 @@ var sources = []string{
 	"drawer.jsx",
 	"policy.jsx",
 	"registries.jsx",
+	"users.jsx",
 	"app.jsx",
 }
 

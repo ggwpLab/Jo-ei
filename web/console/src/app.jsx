@@ -6,6 +6,7 @@ const NAV = [
   { id: "quarantine", label: "Quarantine", icon: "quar", gold: true },
   { id: "policy", label: "Policy", icon: "policy" },
   { id: "registries", label: "Registries & Cache", icon: "registry" },
+  { id: "users", label: "Users", icon: "users", adminOnly: true },
 ];
 
 const PAGE_META = {
@@ -14,6 +15,7 @@ const PAGE_META = {
   quarantine: { kanji: "衛", title: "Quarantine" },
   policy:     { kanji: "法", title: "Policy Editor" },
   registries: { kanji: "蔵", title: "Registries & Cache" },
+  users:      { kanji: "人", title: "Users" },
 };
 
 /* ---------- toasts ---------- */
@@ -306,6 +308,14 @@ function App() {
   };
   const openThreat = (r) => setThreat(r);
 
+  // Admin-only pages vanish from the nav for an operator; if the role drops
+  // while one is open, fall back to the overview.
+  const admin = role === "admin";
+  const nav = NAV.filter((n) => admin || !n.adminOnly);
+  useEffect(() => {
+    if (!admin && NAV.some((n) => n.id === page && n.adminOnly)) setPage("overview");
+  }, [admin, page]);
+
   const meta = PAGE_META[page];
 
   // The sidebar badge reports the worst scan-engine status. "off" (configured
@@ -364,7 +374,7 @@ function App() {
         </div>
 
         <div className="nav-group-label">Console</div>
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <button key={n.id} className={`nav-item ${page === n.id ? "active" : ""}`} onClick={() => { setPage(n.id); }}>
             {Icons[n.icon]()}
             <span>{n.label}</span>
@@ -424,6 +434,7 @@ function App() {
           {page === "quarantine" && <Quarantine onAllowlist={onAllowlist} />}
           {page === "policy" && <Policy notify={notify} />}
           {page === "registries" && <Registries notify={notify} />}
+          {page === "users" && admin && <Users notify={notify} />}
         </div>
       </div>
 

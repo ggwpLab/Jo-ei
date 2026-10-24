@@ -340,6 +340,47 @@
     return data; // { removed, freed_bytes }
   }
 
+  /* ---------- users (admin only) ---------- */
+
+  // Users API calls throw an Error carrying the server's error code (code),
+  // rejected field, status and message, so the page can map codes to copy.
+  async function usersCall(path, opts, what) {
+    const res = await authFetch(path, opts);
+    if (res.status === 204) return null;
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok) {
+      const err = new Error((data && data.message) || what + " failed (HTTP " + res.status + ")");
+      err.code = data && data.error;
+      err.field = data && data.field;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  const userPath = (name) => "/api/users/" + encodeURIComponent(name);
+  const jsonBody = (method, body) => ({
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+
+  async function listUsers() {
+    return (await usersCall("/api/users", undefined, "user list")) || [];
+  }
+  function createUser({ username, role, password }) {
+    return usersCall("/api/users", jsonBody("POST", { username, role, password }), "user create");
+  }
+  // change: { role?, disabled? }
+  function updateUser(name, change) {
+    return usersCall(userPath(name), jsonBody("PATCH", change), "user update");
+  }
+  function resetUserPassword(name, password) {
+    return usersCall(userPath(name) + "/password", jsonBody("POST", { password }), "password reset");
+  }
+  function deleteUser(name) {
+    return usersCall(userPath(name), { method: "DELETE" }, "user delete");
+  }
+
   // An SSE drop alone does not mean the API is down: EventSource reconnects
   // transparently and every panel is refreshed by the 15s polls regardless.
   // Probe the API once per error burst; only a failing probe shows the
@@ -530,6 +571,14 @@
   J.pageRequests = pageRequests;
   J.saveRegistries = saveRegistries;
   J.cleanupCache = cleanupCache;
+  J.listUsers = listUsers;
+  J.createUser = createUser;
+  J.updateUser = updateUser;
+  J.resetUserPassword = resetUserPassword;
+  J.deleteUser = deleteUser;
+  // True for a failure authFetch has already routed (login screen or forced
+  // change screen): callers should not also report it.
+  J.isAuthError = (e) => e instanceof AuthError;
   J.login = login;
   J.logout = logout;
 
