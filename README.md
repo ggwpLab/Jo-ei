@@ -55,22 +55,20 @@ by default; the clone only supplies `docker-compose.yaml`, `config.yaml` and
 git clone https://github.com/ggwpLab/Jo-ei.git && cd Jo-ei
 ```
 
-**Configure secrets** — copy the example env file and fill it in:
+**Optional overrides** — copy the example env file if you want to set any
+`JOEI_*` variable (none is required to start):
 
 ```bash
 cp .env.example .env
 ```
 
-**Create a console user** (the console is fail-closed until you do). bcrypt-hash a
-password and write the `username:hash` pair into `.env`:
+**Start the proxy and read the initial admin password.** On first start, with
+an empty database, Jōei creates the console user `admin` with a random
+temporary password and logs it once:
 
 ```bash
-# Generate a hash (pick your own strong password)
-HASH=$(printf '%s' 'change-me' | docker-compose run --rm -T jo-ei hashpw)
-
-# Put it in .env as JOEI_CONSOLE_AUTH_USERS, then start the proxy
-echo "JOEI_CONSOLE_AUTH_USERS=admin:$HASH" > .env
 docker-compose up -d
+docker-compose logs jo-ei | grep "initial admin"
 ```
 
 **Prebuilt image or source build.** By default Compose pulls
@@ -89,7 +87,10 @@ image until you `docker-compose pull` again.
 
 Every variable in `.env` is passed into the container, so any `JOEI_*` override
 belongs there and nowhere else. `.env` is gitignored — your secrets stay out of
-git. Then open the console and log in as `admin`.
+git. Then open the console, sign in as `admin` with the logged password and
+choose a new one (the console requires it). Lost it before signing in? Run
+`docker-compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml reset-admin-password`
+for a new one.
 
 The proxy starts on `http://localhost:8080`. ClamAV runs as a sidecar in the compose file;
 malware scanning is active when the selected policy profile sets `malware_block: true`.
@@ -274,56 +275,43 @@ persistent (SQLite, with configurable retention).
 The console signs in through `POST /api/auth/login` and rides a JWT session:
 two HttpOnly, `SameSite=Strict` cookies (`joei_at` for API calls, `joei_rt`
 scoped to `/api/auth` for silent refresh) that JavaScript never touches.
-Configure one or more operator accounts; the proxy data path (`/pypi/`,
-`/npm/`, …) and `/health` stay open.
+Users live in the database and are managed on the console's Users page
+(admins only); the proxy data path (`/pypi/`, `/npm/`, …) and `/health` stay
+open.
 
-**Fail-closed:** with no users configured, `/api/` returns **HTTP 503** and no
-one can sign in, until you add at least one user. `/console/` (the static UI
-bundle) still loads so the login screen renders, and the proxy keeps serving.
-
-Generate a bcrypt hash:
-
-```bash
-printf '%s' 'choose-a-strong-password' | jo-ei hashpw
-# -> $2a$10$... (copy this)
-```
-
-(Docker users: `printf '%s' 'choose-a-strong-password' | docker-compose run --rm -T jo-ei hashpw`)
-
-Configure users in `config.yaml`:
-
-```yaml
-console:
-  auth:
-    users:
-      - username: admin
-        password_hash: "$2a$10$...."
-```
-
-Or inject them via the environment (preferred for secrets — keeps hashes out of
-committed config). Entries are `username:hash`, separated by `;`:
+**First start.** With an empty users table, Jōei creates the user `admin`
+(role admin) with a random 20-character temporary password and logs it once,
+as a `warn` line `created initial admin user` with `user` and `password`
+fields. Sign in with it and the console makes you choose a new password. The
+password is never logged again on later restarts.
 
 ```bash
-export JOEI_CONSOLE_AUTH_USERS='admin:$2a$10$...;alice:$2a$10$...'
+docker compose logs jo-ei | grep "initial admin"
 ```
 
-Env entries override file entries with the same username.
+> **Security:** the temporary password sits in the logs (and in any log
+> aggregator they are shipped to) and stays valid until `admin` signs in and
+> changes it. Sign in promptly after the first start.
 
-**With Docker Compose**, set the same variable in `.env` (see
-[`.env.example`](./.env.example)) instead of exporting it — Compose loads `.env`
-automatically and substitutes it into `docker-compose.yaml`:
+**Recovery.** `jo-ei reset-admin-password` gives `admin` a new temporary
+password (printed alone on stdout), re-enables it, restores its admin role,
+ends its sessions and requires a change at next sign-in; if `admin` was deleted
+it is recreated. It opens the database directly, so it works while the server
+runs — pass the server's `--config`:
 
-```dotenv
-JOEI_CONSOLE_AUTH_USERS=admin:$2a$10$...;alice:$2a$10$...
+```bash
+jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
+docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
 ```
 
-Write the hash **literally** in `.env` — values there are not interpolated. Only
-when you hardcode a hash *inline* in `docker-compose.yaml` must each `$` be
-doubled to `$$` to escape Compose variable substitution.
+**Fail-closed:** with no enabled users, `/api/` returns **HTTP 503** and no
+one can sign in until an admin is restored with `jo-ei reset-admin-password`.
+`/console/` (the static UI bundle) still loads so the login screen renders, and
+the proxy keeps serving.
 
 **Signing the session.** Sessions are HS256 JWTs signed with
 `console.auth.jwt_secret` (`JOEI_CONSOLE_JWT_SECRET`, at least 32 bytes,
-preferred for the same reason as the users list). Leave it unset and Jōei
+preferred so the secret stays out of committed config). Leave it unset and Jōei
 generates one on first boot and stores it in the database, so sessions survive
 a restart; set it explicitly to share sessions across replicas. Access tokens
 last 15 minutes and refresh tokens 7 days by default
@@ -336,7 +324,7 @@ works:
 ```bash
 TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"choose-a-strong-password"}' | jq -r .access_token)
+  -d '{"username":"admin","password":"your-password"}' | jq -r .access_token)
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/overview
 ```
 

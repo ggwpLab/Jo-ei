@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
@@ -28,6 +31,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 )
 
 func newTelemetryStore(t *testing.T) *telemetry.Store {
@@ -77,7 +81,7 @@ func newFixture(t *testing.T) *fixture {
 		config.PolicyProfile{CVEBlock: true},
 		nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:               store,
 		Broadcaster:         bcast,
 		Policy:              runtime,
@@ -292,7 +296,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
 	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store: store, Broadcaster: bcast, Logger: zerolog.Nop(),
 	})
 	srv := httptest.NewUnstartedServer(h)
@@ -331,7 +335,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 // console then shows its "no connection" banner although the API is healthy.
 func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
 	store := newTelemetryStore(t)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:        store,
 		Broadcaster:  telemetry.NewBroadcaster(),
 		Logger:       zerolog.Nop(),
@@ -369,7 +373,7 @@ func TestEventsSSE_HeartbeatOnIdleStream(t *testing.T) {
 // shape must stay an array — null crashes the SPA's Registries screen.
 func TestRegistries_NilUpstreams(t *testing.T) {
 	store := newTelemetryStore(t)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       store,
 		Broadcaster: telemetry.NewBroadcaster(),
 		Registries: []console.RegistryInfo{
@@ -452,10 +456,10 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := withIdentity(console.NewHandler(console.Config{
 		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
 		Policy: rt, Logger: logger,
-	})
+	}), &auth.Identity{Role: users.RoleAdmin})
 
 	body := `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","allowlist_supply":[],"allowlist_cve":[],"denylist":[]}`
 	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(body))
@@ -463,8 +467,8 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	// No authenticating middleware in front, so the log line must not carry a
-	// "user" field (and must not panic building it).
+	// The identity has no username, so the log line must not carry a "user"
+	// field (and must not panic building it).
 	assert.NotContains(t, logBuf.String(), `"user"`)
 }
 
@@ -539,7 +543,7 @@ func TestCacheCleanup(t *testing.T) {
 }
 
 func TestCacheCleanup_NoPurger(t *testing.T) {
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Logger:      zerolog.Nop(),
@@ -554,7 +558,7 @@ func TestCacheCleanup_NoPurger(t *testing.T) {
 }
 
 func TestCacheCleanup_PurgeError(t *testing.T) {
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Purger:      &fakePurger{err: errors.New("db locked")},
@@ -575,7 +579,7 @@ func TestPutPolicyLogCarriesRequestIDAndComponent(t *testing.T) {
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
 		config.CVEConfig{}, config.PolicyProfile{}, nil,
 	)
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
 		Policy: rt, Logger: zerolog.New(&logBuf),
 	})
@@ -591,4 +595,177 @@ func TestPutPolicyLogCarriesRequestIDAndComponent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logBuf.Bytes()), &line), logBuf.String())
 	assert.Equal(t, "rid-console", line["request_id"])
 	assert.Equal(t, "console", line["component"])
+}
+
+func listHandler(t *testing.T, logger zerolog.Logger, _ auth.Identity) http.Handler {
+	t.Helper()
+	rt := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{Enabled: true, BlockOn: "HIGH"}, config.PolicyProfile{}, nil,
+	)
+	return console.NewHandler(console.Config{
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
+		Policy: rt, Logger: logger,
+	})
+}
+
+func doBody(h http.Handler, id auth.Identity, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req = req.WithContext(auth.WithIdentity(req.Context(), id))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+var (
+	opID    = auth.Identity{Username: "anna", Role: users.RoleOperator}
+	adminID = auth.Identity{Username: "root", Role: users.RoleAdmin}
+)
+
+func TestListEndpoint_OperatorAdds(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_cve", `{"entry":"npm/x@1.0.0"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		AllowlistCVE []string `json:"allowlist_cve"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x@1.0.0"}, body.AllowlistCVE)
+
+	rec = doBody(h, opID, http.MethodGet, "/api/policy", "")
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x@1.0.0"}, body.AllowlistCVE)
+}
+
+func TestListEndpoint_Delete(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	rec := doBody(h, opID, http.MethodDelete, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Denylist []string `json:"denylist"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}
+
+func TestListEndpoint_UnknownList400(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/nope", `{"entry":"npm/x"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error":"invalid_policy","field":"list","message":"unknown list \"nope\""}`, rec.Body.String())
+
+	rec = doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"no-slash"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"field":"entry"`)
+
+	rec = doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/x","extra":1}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestListEndpoint_LogsUserAndEntry(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := listHandler(t, zerolog.New(&logBuf), opID)
+	rec := doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_supply", `{"entry":"npm/y"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	out := logBuf.String()
+	assert.Contains(t, out, `"message":"policy list updated"`)
+	assert.Contains(t, out, `"user":"anna"`)
+	assert.Contains(t, out, `"list":"allowlist_supply"`)
+	assert.Contains(t, out, `"entry":"npm/y"`)
+	assert.Contains(t, out, `"action":"add"`)
+
+	logBuf.Reset()
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_supply", `{"entry":"npm/y"}`)
+	assert.NotContains(t, logBuf.String(), "policy list updated", "unchanged edit is not logged")
+}
+
+func TestPutPolicy_AbsentListsUnchanged(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/allowlist_cve", `{"entry":"npm/keep"}`)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy", `{"mode":"enforce","min_age_hours":48,"cve_block_on":"HIGH"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		MinAgeHours  int      `json:"min_age_hours"`
+		AllowlistCVE []string `json:"allowlist_cve"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, 48, body.MinAgeHours)
+	assert.Equal(t, []string{"npm/keep"}, body.AllowlistCVE)
+}
+
+func TestPutPolicy_PresentEmptyListClears(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	doBody(h, opID, http.MethodPost, "/api/policy/lists/denylist", `{"entry":"npm/evil"}`)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy", `{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","denylist":[]}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Denylist []string `json:"denylist"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}
+
+func TestPutPolicy_PaddedEntryStoredTrimmedAndRemovable(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy",
+		`{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","denylist":[" npm/x "],"allowlist_supply":["  pypi/a"],"allowlist_cve":["npm/b@1.0 "]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var body struct {
+		Denylist        []string `json:"denylist"`
+		AllowlistSupply []string `json:"allowlist_supply"`
+		AllowlistCVE    []string `json:"allowlist_cve"`
+	}
+	rec = doBody(h, opID, http.MethodGet, "/api/policy", "")
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x"}, body.Denylist)
+	assert.Equal(t, []string{"pypi/a"}, body.AllowlistSupply)
+	assert.Equal(t, []string{"npm/b@1.0"}, body.AllowlistCVE)
+
+	rec = doBody(h, opID, http.MethodDelete, "/api/policy/lists/denylist", `{"entry":"npm/x"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body.Denylist = nil
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}
+
+// A stream must end once its user is deleted, disabled or demoted: the
+// heartbeat re-checks the session.
+func TestEventsSSE_EndsWhenSessionNoLongerValid(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	inner := newHandler(console.Config{
+		Store:        newTelemetryStore(t),
+		Broadcaster:  telemetry.NewBroadcaster(),
+		Logger:       zerolog.Nop(),
+		SSEHeartbeat: 50 * time.Millisecond,
+	})
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(w, r.WithContext(auth.WithRecheck(r.Context(), valid.Load)))
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": connected"), "got %q", line)
+	_, _ = reader.ReadString('\n')
+	line, err = reader.ReadString('\n')
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(line, ": ping"), "a valid session keeps streaming, got %q", line)
+	_, _ = reader.ReadString('\n')
+
+	valid.Store(false)
+	rest, err := io.ReadAll(reader)
+	require.NoError(t, err, "the server must close the stream, not leave it hanging")
+	assert.NotContains(t, string(rest), "data:")
 }

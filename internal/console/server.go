@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -23,6 +24,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 )
 
 // CacheStatsProvider exposes cache statistics; cache.Cache satisfies it.
@@ -83,7 +85,9 @@ type Config struct {
 	// is gated on image-scan at boot).
 	ImageScanEnabled bool
 	Health           ScannerHealthProvider // optional; nil reports no scanners
-	Logger           zerolog.Logger
+	// Users backs the /api/users routes; nil answers 503 users_unavailable.
+	Users  UserAdmin
+	Logger zerolog.Logger
 	// SSEHeartbeat is the idle keep-alive interval for /api/events. With no
 	// traffic the stream is otherwise silent for hours and intermediaries
 	// (Docker port-forwards, AV web filters) drop the idle connection.
@@ -116,17 +120,46 @@ func NewHandler(cfg Config) http.Handler {
 	}
 	s := &server{cfg: cfg, logger: cfg.Logger.With().Str("component", "console").Logger()}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/overview", s.overview)
-	mux.HandleFunc("GET /api/requests", s.requests)
-	mux.HandleFunc("GET /api/events", s.events)
-	mux.HandleFunc("GET /api/quarantine", s.quarantine)
-	mux.HandleFunc("GET /api/policy", s.getPolicy)
-	mux.HandleFunc("PUT /api/policy", s.putPolicy)
-	mux.HandleFunc("GET /api/registries", s.registries)
-	mux.HandleFunc("PUT /api/registries", s.putRegistries)
-	mux.HandleFunc("POST /api/cache/cleanup", s.cacheCleanup)
-	mux.HandleFunc("GET /api/metrics/daily", s.dailyMetrics)
+	// Every route is registered through admin or operator; there is no
+	// unguarded helper, so an undeclared route cannot exist. New routes use
+	// admin unless operators need them.
+	admin := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, s.requireRole(h, users.RoleAdmin))
+	}
+	operator := func(pattern string, h http.HandlerFunc) {
+		mux.HandleFunc(pattern, s.requireRole(h, users.RoleAdmin, users.RoleOperator))
+	}
+	operator("GET /api/overview", s.overview)
+	operator("GET /api/requests", s.requests)
+	operator("GET /api/events", s.events)
+	operator("GET /api/quarantine", s.quarantine)
+	operator("GET /api/policy", s.getPolicy)
+	admin("PUT /api/policy", s.putPolicy)
+	operator("POST /api/policy/lists/{list}", s.editList(true))
+	operator("DELETE /api/policy/lists/{list}", s.editList(false))
+	operator("GET /api/registries", s.registries)
+	admin("PUT /api/registries", s.putRegistries)
+	admin("POST /api/cache/cleanup", s.cacheCleanup)
+	operator("GET /api/metrics/daily", s.dailyMetrics)
+	admin("GET /api/users", s.listUsers)
+	admin("POST /api/users", s.createUser)
+	admin("PATCH /api/users/{name}", s.patchUser)
+	admin("POST /api/users/{name}/password", s.resetUserPassword)
+	admin("DELETE /api/users/{name}", s.deleteUser)
 	return mux
+}
+
+// requireRole runs h only when the request carries an identity whose role is
+// one of allowed; otherwise (including no identity) it answers 403.
+func (s *server) requireRole(h http.HandlerFunc, allowed ...users.Role) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := auth.IdentityFromContext(r.Context())
+		if !ok || !slices.Contains(allowed, id.Role) {
+			s.writeJSON(w, r, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
@@ -324,9 +357,16 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
+	// List fields are pointers: absent keeps the current list (so settings-only
+	// saves cannot clobber concurrent list edits), present replaces it.
 	var in struct {
-		policy.RuntimeParams
-		Persistence string `json:"persistence"` // read-only field from GET; accepted and ignored so GET→PUT round-trips
+		Mode            string    `json:"mode"`
+		MinAgeHours     int       `json:"min_age_hours"`
+		CVEBlockOn      string    `json:"cve_block_on"`
+		AllowlistSupply *[]string `json:"allowlist_supply"`
+		AllowlistCVE    *[]string `json:"allowlist_cve"`
+		Denylist        *[]string `json:"denylist"`
+		Persistence     string    `json:"persistence"` // read-only field from GET; accepted and ignored so GET→PUT round-trips
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -343,23 +383,20 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	p := in.RuntimeParams
-	if err := s.cfg.Policy.Apply(p); err != nil {
-		var verr *policy.ValidationError
-		if errors.As(err, &verr) {
-			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
-				"error": "invalid_policy", "field": verr.Field, "message": verr.Message,
-			})
-			return
+	err := s.cfg.Policy.Update(func(cur policy.RuntimeParams) policy.RuntimeParams {
+		cur.Mode, cur.MinAgeHours, cur.CVEBlockOn = in.Mode, in.MinAgeHours, in.CVEBlockOn
+		if in.AllowlistSupply != nil {
+			cur.AllowlistSupply = *in.AllowlistSupply
 		}
-		var perr *policy.PersistError
-		if errors.As(err, &perr) {
-			s.log(r).Error().Err(err).Msg("persisting policy")
-			s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
-			return
+		if in.AllowlistCVE != nil {
+			cur.AllowlistCVE = *in.AllowlistCVE
 		}
-		s.log(r).Error().Err(err).Msg("applying policy")
-		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
+		if in.Denylist != nil {
+			cur.Denylist = *in.Denylist
+		}
+		return cur
+	})
+	if s.writePolicyError(w, r, err) {
 		return
 	}
 	logEvent := s.log(r).Info().Interface("policy", s.cfg.Policy.Current())
@@ -368,6 +405,71 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	logEvent.Msg("runtime policy updated")
 	s.writePolicy(w, r, http.StatusOK)
+}
+
+// writePolicyError maps a policy update error onto the HTTP response and
+// reports whether it wrote one (err != nil).
+func (s *server) writePolicyError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	var verr *policy.ValidationError
+	if errors.As(err, &verr) {
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+			"error": "invalid_policy", "field": verr.Field, "message": verr.Message,
+		})
+		return true
+	}
+	var perr *policy.PersistError
+	if errors.As(err, &perr) {
+		s.log(r).Error().Err(err).Msg("persisting policy")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+		return true
+	}
+	s.log(r).Error().Err(err).Msg("applying policy")
+	s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "apply_failed"})
+	return true
+}
+
+// editList handles POST (add) and DELETE (remove) of a single list entry.
+func (s *server) editList(add bool) http.HandlerFunc {
+	action := "remove"
+	if add {
+		action = "add"
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		var in struct {
+			Entry string `json:"entry"`
+		}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				s.writeJSON(w, r, http.StatusRequestEntityTooLarge, map[string]any{
+					"error": "invalid_policy", "field": "body", "message": "request body too large",
+				})
+				return
+			}
+			s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+				"error": "invalid_policy", "field": "body", "message": err.Error(),
+			})
+			return
+		}
+		list := r.PathValue("list")
+		changed, err := s.cfg.Policy.EditList(list, in.Entry, add)
+		if s.writePolicyError(w, r, err) {
+			return
+		}
+		if changed {
+			user, _ := auth.UserFromContext(r.Context())
+			s.log(r).Info().Str("user", user).Str("list", list).
+				Str("entry", strings.TrimSpace(in.Entry)).Str("action", action).
+				Msg("policy list updated")
+		}
+		s.writePolicy(w, r, http.StatusOK)
+	}
 }
 
 func (s *server) registries(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +673,12 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
+			// A deleted, disabled or demoted user (any change that revokes
+			// sessions) must not keep receiving the feed: end the stream;
+			// the browser's reconnect then meets the auth middleware.
+			if !auth.Recheck(r.Context()) {
+				return
+			}
 			armWrite()
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return

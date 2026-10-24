@@ -56,7 +56,7 @@ func allSix(dockerEnabled bool) []console.RegistryInfo {
 
 func regHandler(t *testing.T, store console.RegistryStore, running []console.RegistryInfo, imageScan bool) *httptest.Server {
 	t.Helper()
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:             newTelemetryStore(t),
 		Broadcaster:       telemetry.NewBroadcaster(),
 		RegistryStore:     store,
@@ -294,7 +294,7 @@ func TestGetPolicy_ReportsDatabasePersistence(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Policy:      rt,
@@ -327,7 +327,7 @@ func TestPutPolicy_PersistFailed(t *testing.T) {
 	// Make all subsequent saves fail — triggers PersistError in Apply.
 	fps.saveErr = errors.New("disk full")
 
-	h := console.NewHandler(console.Config{
+	h := newHandler(console.Config{
 		Store:       newTelemetryStore(t),
 		Broadcaster: telemetry.NewBroadcaster(),
 		Policy:      rt,

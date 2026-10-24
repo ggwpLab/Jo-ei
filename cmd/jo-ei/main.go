@@ -33,6 +33,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/users"
 	"github.com/ggwpLab/Jo-ei/web"
 )
 
@@ -414,12 +415,14 @@ func run(ctx context.Context, cfgPath string) error {
 	// other path (registry prefixes, /health) falls through to the proxy mux
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
-	authUsers, err := auth.NewUsers(toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"))
+	// Console users live in the database. On an empty table the initial
+	// admin is created and its temporary password logged once.
+	userStore, err := users.New(sdb)
 	if err != nil {
-		return err
+		return fmt.Errorf("console users: %w", err)
 	}
-	if authUsers.Locked() {
-		serverLog.Warn().Msg("console auth not configured — /api/ is disabled (HTTP 503) and the console cannot sign in until users are added (set console.auth.users or JOEI_CONSOLE_AUTH_USERS); the proxy continues to serve")
+	if err := ensureInitialAdmin(userStore, serverLog); err != nil {
+		return err
 	}
 	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
 	if err != nil {
@@ -430,7 +433,17 @@ func run(ctx context.Context, cfgPath string) error {
 		return fmt.Errorf("console auth: %w", err)
 	}
 	accessTTL, refreshTTL := authTTLs(cfg.Console.Auth)
-	sessions := auth.NewSessions(authUsers, signer, accessTTL, refreshTTL)
+	clientIP, err := httpx.NewClientIPResolver(cfg.Server.TrustedProxies, cfg.Server.ClientIPHeader, serverLog)
+	if err != nil {
+		return fmt.Errorf("server.trusted_proxies: %w", err)
+	}
+	sessions := auth.NewSessions(userStore, signer, accessTTL, refreshTTL,
+		auth.WithLoginLimiter(auth.NewLoginLimiter(nil)),
+		auth.WithClientIP(clientIP.ClientIP),
+		auth.WithLogger(logger))
+	if sessions.Locked() {
+		serverLog.Warn().Msg(`console locked — no enabled users; /api/ is disabled (HTTP 503) until an admin is restored with "jo-ei reset-admin-password"; the proxy continues to serve`)
+	}
 
 	root := http.NewServeMux()
 	// Public site icon: browsers auto-probe /favicon.ico on every page load, so
@@ -467,6 +480,7 @@ func run(ctx context.Context, cfgPath string) error {
 		RunningRegistries:   runningRegistries,
 		ImageScanEnabled:    cfg.ImageScan.Enabled,
 		Health:              healthMon,
+		Users:               userStore,
 		Logger:              logger,
 	})))
 	root.Handle("/", mux)
@@ -679,15 +693,6 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 		}
 	}
 	return nil
-}
-
-// toAuthUsers converts the config credential list into auth.User values.
-func toAuthUsers(in []config.AuthUser) []auth.User {
-	out := make([]auth.User, len(in))
-	for i, u := range in {
-		out[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
-	}
-	return out
 }
 
 // registryInfo flattens the registry config for GET /api/registries.

@@ -27,29 +27,30 @@ func TestNewSignerRejectsShortSecret(t *testing.T) {
 func TestIssueVerifyRoundTrip(t *testing.T) {
 	s := testSigner(t)
 
-	tok, err := s.Issue("ops", TypeAccess, 15*time.Minute)
+	tok, err := s.Issue("ops", 7, TypeAccess, 15*time.Minute)
 	require.NoError(t, err)
 
 	claims, err := s.Verify(tok, TypeAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "ops", claims.Sub)
 	assert.Equal(t, TypeAccess, claims.Typ)
+	assert.Equal(t, int64(7), claims.Ver)
 	assert.NotEmpty(t, claims.JTI)
 	assert.Equal(t, claims.IAT+int64((15*time.Minute).Seconds()), claims.Exp)
 }
 
 func TestIssueGivesEachTokenItsOwnID(t *testing.T) {
 	s := testSigner(t)
-	a, err := s.Issue("ops", TypeAccess, time.Minute)
+	a, err := s.Issue("ops", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
-	b, err := s.Issue("ops", TypeAccess, time.Minute)
+	b, err := s.Issue("ops", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b, "two tokens issued in the same second must still differ")
 }
 
 func TestVerifyRejectsExpiredToken(t *testing.T) {
 	s := testSigner(t)
-	tok, err := s.Issue("ops", TypeAccess, time.Minute)
+	tok, err := s.Issue("ops", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
 
 	s.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
@@ -59,7 +60,7 @@ func TestVerifyRejectsExpiredToken(t *testing.T) {
 
 func TestVerifyRejectsWrongType(t *testing.T) {
 	s := testSigner(t)
-	tok, err := s.Issue("ops", TypeRefresh, time.Hour)
+	tok, err := s.Issue("ops", 0, TypeRefresh, time.Hour)
 	require.NoError(t, err)
 
 	_, err = s.Verify(tok, TypeAccess)
@@ -68,7 +69,7 @@ func TestVerifyRejectsWrongType(t *testing.T) {
 
 func TestVerifyRejectsAnotherSecret(t *testing.T) {
 	s := testSigner(t)
-	tok, err := s.Issue("ops", TypeAccess, time.Minute)
+	tok, err := s.Issue("ops", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
 
 	other, err := NewSigner([]byte("ffffffffffffffffffffffffffffffff"))
@@ -79,7 +80,7 @@ func TestVerifyRejectsAnotherSecret(t *testing.T) {
 
 func TestVerifyRejectsTamperedPayload(t *testing.T) {
 	s := testSigner(t)
-	tok, err := s.Issue("ops", TypeAccess, time.Minute)
+	tok, err := s.Issue("ops", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
 
 	parts := strings.Split(tok, ".")
@@ -130,7 +131,7 @@ func TestVerifyRejectsMalformedTokens(t *testing.T) {
 
 func TestVerifyRejectsEmptySubject(t *testing.T) {
 	s := testSigner(t)
-	tok, err := s.Issue("", TypeAccess, time.Minute)
+	tok, err := s.Issue("", 0, TypeAccess, time.Minute)
 	require.NoError(t, err)
 	_, err = s.Verify(tok, TypeAccess)
 	assert.ErrorIs(t, err, ErrMalformedToken)

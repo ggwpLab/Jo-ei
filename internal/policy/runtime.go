@@ -3,7 +3,9 @@ package policy
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
@@ -49,6 +51,7 @@ type Runtime struct {
 	profile   config.PolicyProfile
 	fileAllow []string      // supply_chain.allowlist_path entries, immutable
 	store     SettingsStore // nil = runtime-only (no persistence)
+	mu        sync.Mutex    // serialises read-modify-write edits (Update, EditList)
 }
 
 // SettingsStore persists the runtime policy params. Implemented in cmd/jo-ei by
@@ -151,10 +154,98 @@ func (r *Runtime) install(p RuntimeParams) {
 var validModes = map[string]bool{"enforce": true, "dry_run": true, "off": true}
 var validSeverities = map[string]bool{"CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true}
 
-// Apply validates p and atomically swaps the active policy. Concurrent calls
-// are safe; last writer wins (no compare-and-swap). On error the current
-// policy is unchanged.
+// Names of the editable lists, as used by EditList and the console API.
+const (
+	ListAllowlistSupply = "allowlist_supply"
+	ListAllowlistCVE    = "allowlist_cve"
+	ListDenylist        = "denylist"
+)
+
+// Apply validates p and atomically swaps the active policy. Calls are
+// serialised; on error the current policy is unchanged.
 func (r *Runtime) Apply(p RuntimeParams) error {
+	return r.Update(func(RuntimeParams) RuntimeParams { return p })
+}
+
+// Update reads the current params, applies fn, validates the result, persists
+// it and installs it, all under one lock so concurrent edits cannot lose each
+// other's changes. fn receives a copy it may modify freely. On error the
+// current policy is unchanged.
+func (r *Runtime) Update(fn func(cur RuntimeParams) RuntimeParams) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateLocked(fn(r.Current()))
+}
+
+func (r *Runtime) updateLocked(p RuntimeParams) error {
+	// Store entries trimmed, as EditList does, so an entry set via PUT can
+	// be removed by the list endpoint under the same spelling.
+	p.AllowlistSupply = trimEntries(p.AllowlistSupply)
+	p.AllowlistCVE = trimEntries(p.AllowlistCVE)
+	p.Denylist = trimEntries(p.Denylist)
+	if err := validateParams(p); err != nil {
+		return err
+	}
+	if r.store != nil {
+		if err := r.store.SavePolicy(p); err != nil {
+			return &PersistError{Err: err}
+		}
+	}
+	r.install(p)
+	return nil
+}
+
+// EditList adds or removes one entry of the named list atomically. Adding an
+// existing entry and removing an absent one are no-ops (changed=false, nothing
+// persisted).
+func (r *Runtime) EditList(list, entry string, add bool) (changed bool, err error) {
+	entry = strings.TrimSpace(entry)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.Current()
+	var target *[]string
+	switch list {
+	case ListAllowlistSupply:
+		target = &p.AllowlistSupply
+	case ListAllowlistCVE:
+		target = &p.AllowlistCVE
+	case ListDenylist:
+		target = &p.Denylist
+	default:
+		return false, &ValidationError{Field: "list", Message: fmt.Sprintf("unknown list %q", list)}
+	}
+	if msg := validateListEntry(entry); msg != "" {
+		return false, &ValidationError{Field: "entry", Message: msg}
+	}
+	has := slices.Contains(*target, entry)
+	switch {
+	case add && !has:
+		*target = append(*target, entry)
+	case !add && has:
+		*target = slices.DeleteFunc(*target, func(e string) bool { return e == entry })
+	default:
+		return false, nil
+	}
+	if err := r.updateLocked(p); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// trimEntries returns a copy of entries with surrounding whitespace removed;
+// nil stays nil.
+func trimEntries(entries []string) []string {
+	if entries == nil {
+		return nil
+	}
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = strings.TrimSpace(e)
+	}
+	return out
+}
+
+func validateParams(p RuntimeParams) error {
 	if !validModes[p.Mode] {
 		return &ValidationError{Field: "mode", Message: fmt.Sprintf("must be enforce, dry_run or off (got %q)", p.Mode)}
 	}
@@ -164,27 +255,16 @@ func (r *Runtime) Apply(p RuntimeParams) error {
 	if !validSeverities[p.CVEBlockOn] {
 		return &ValidationError{Field: "cve_block_on", Message: fmt.Sprintf("must be CRITICAL, HIGH, MEDIUM or LOW (got %q)", p.CVEBlockOn)}
 	}
-	for i, e := range p.AllowlistSupply {
-		if msg := validateListEntry(e); msg != "" {
-			return &ValidationError{Field: fmt.Sprintf("allowlist_supply[%d]", i), Message: msg}
+	for _, l := range []struct {
+		name    string
+		entries []string
+	}{{ListAllowlistSupply, p.AllowlistSupply}, {ListAllowlistCVE, p.AllowlistCVE}, {ListDenylist, p.Denylist}} {
+		for i, e := range l.entries {
+			if msg := validateListEntry(e); msg != "" {
+				return &ValidationError{Field: fmt.Sprintf("%s[%d]", l.name, i), Message: msg}
+			}
 		}
 	}
-	for i, e := range p.AllowlistCVE {
-		if msg := validateListEntry(e); msg != "" {
-			return &ValidationError{Field: fmt.Sprintf("allowlist_cve[%d]", i), Message: msg}
-		}
-	}
-	for i, e := range p.Denylist {
-		if msg := validateListEntry(e); msg != "" {
-			return &ValidationError{Field: fmt.Sprintf("denylist[%d]", i), Message: msg}
-		}
-	}
-	if r.store != nil {
-		if err := r.store.SavePolicy(p); err != nil {
-			return &PersistError{Err: err}
-		}
-	}
-	r.install(p)
 	return nil
 }
 

@@ -71,9 +71,9 @@ func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *p
 
 	mux := proxy.NewMux(map[string]*proxy.Handler{"pypi": handler}, nil, zerolog.Nop())
 	root := http.NewServeMux()
-	root.Handle("/api/", console.NewHandler(console.Config{
+	root.Handle("/api/", asAdmin(console.NewHandler(console.Config{
 		Store: store, Broadcaster: bcast, Policy: runtime, Logger: zerolog.Nop(),
-	}))
+	})))
 	root.Handle("/", mux)
 
 	srv := httptest.NewServer(root)

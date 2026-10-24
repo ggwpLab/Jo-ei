@@ -45,7 +45,7 @@ that is what makes the graph acyclic.
 
 | Package | Role |
 |---|---|
-| `cmd/jo-ei` | CLI (cobra): `serve` (default), `hashpw`. Loads config, wires every subsystem, owns graceful shutdown. |
+| `cmd/jo-ei` | CLI (cobra): `serve` (default), `reset-admin-password` (console recovery). Loads config, wires every subsystem, creates the initial `admin` user on an empty users table, owns graceful shutdown. |
 | `internal/gate` | Domain types and ports (see above). |
 | `internal/proxy` | The package-registry HTTP data path: gate pipeline orchestration (`Handler`), path-prefix routing (`Mux`), transparent proxying of metadata requests. |
 | `internal/proxy/adapters` | One `RegistryAdapter` per ecosystem: PyPI, npm (+ Yarn alias), Maven, RubyGems. Adapters normalize download URLs to a `PackageRef`, fetch publish metadata, and enumerate upstream URLs (multi-upstream failover). |
@@ -59,7 +59,8 @@ that is what makes the graph acyclic.
 | `internal/storage` | Shared embedded SQLite (pure Go, no cgo): PRAGMAs, per-component migrations. `storagetest` holds the retrying temp-dir helper for tests. |
 | `internal/settings` | Generic key→JSON settings store on `storage`, used for policy and registry persistence. |
 | `internal/config` | YAML + `JOEI_*` env loading (viper) and validation. |
-| `internal/auth` | Console/API authentication: bcrypt user list from YAML and `JOEI_CONSOLE_AUTH_USERS`, HS256 JWT sessions (HttpOnly access/refresh cookies for the browser, bearer tokens for scripts), the `/api/auth/*` endpoints and the gating middleware. |
+| `internal/auth` | Console/API authentication against the database users store (`internal/users`): HS256 JWT sessions (HttpOnly access/refresh cookies for the browser, bearer tokens for scripts), the `/api/auth/*` endpoints and the gating middleware. |
+| `internal/users` | Console users on `storage`: username, bcrypt hash, `admin`/`operator` role, disabled flag, token version; last-admin guards, initial-admin creation and the `reset-admin-password` recovery transaction. |
 | `internal/console` | Console REST API (`/api/…`) and SSE event stream. |
 | `internal/health` | Scanner health registry and probe loop. |
 | `web` | Embedded console SPA (React, vendored, compiled by `internal/uibuild` via `go generate` — no npm). |

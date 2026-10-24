@@ -37,7 +37,8 @@ var (
 // Claims is the JWT payload. Issuer and audience are omitted: single issuer,
 // single audience, and every claim we do not need is one more thing to check.
 type Claims struct {
-	Sub string `json:"sub"` // username
+	Sub string `json:"sub"` // username (as stored)
+	Ver int64  `json:"ver"` // the user's token_version at issue; a bump revokes the token
 	Typ string `json:"typ"` // TypeAccess or TypeRefresh
 	IAT int64  `json:"iat"` // issued at, Unix seconds
 	Exp int64  `json:"exp"` // expires at, Unix seconds
@@ -69,8 +70,9 @@ func NewSigner(secret []byte) (*Signer, error) {
 	return &Signer{secret: cp, now: time.Now}, nil
 }
 
-// Issue returns a signed token for username with the given type and lifetime.
-func (s *Signer) Issue(username, typ string, ttl time.Duration) (string, error) {
+// Issue returns a signed token for username at token version ver, with the
+// given type and lifetime.
+func (s *Signer) Issue(username string, ver int64, typ string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("auth: generating token id: %w", err)
@@ -82,6 +84,7 @@ func (s *Signer) Issue(username, typ string, ttl time.Duration) (string, error) 
 	}
 	payload, err := json.Marshal(Claims{
 		Sub: username,
+		Ver: ver,
 		Typ: typ,
 		IAT: now.Unix(),
 		Exp: now.Add(ttl).Unix(),

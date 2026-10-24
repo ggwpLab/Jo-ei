@@ -18,17 +18,16 @@ path, replace dots with underscores, uppercase it, and prefix `JOEI_`.
 Only keys that appear in the YAML file can be overridden (the override
 replaces the file's value; it cannot introduce a key the file omits).
 
-Two special cases are read directly from the environment, not through this
+One special case is read directly from the environment, not through this
 mechanism:
 
-- **`JOEI_CONSOLE_AUTH_USERS`** — console credentials as
-  `username:bcrypt-hash`, multiple users separated by `;`. Merged with (and
-  taking precedence over) `console.auth.users` from the file. Preferred over
-  the file so password hashes stay out of version control.
 - **`JOEI_CONSOLE_JWT_SECRET`** — the HS256 key that signs console sessions,
   taking precedence over `console.auth.jwt_secret` from the file. Preferred
-  over the file for the same reason, and required to share sessions across
-  replicas (see `console` below).
+  over the file so the secret stays out of version control, and required to
+  share sessions across replicas (see `console` below).
+
+Console users are not configured through the file or the environment at all —
+they live in the database (see [Users and roles](#users-and-roles)).
 
 Validation runs at startup; an invalid config prints the offending key and the
 process exits non-zero.
@@ -41,6 +40,8 @@ process exits non-zero.
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
+| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. As with every key, the `JOEI_SERVER_TRUSTED_PROXIES` env override only applies when the key is present in `config.yaml` (an empty `trusted_proxies: []` is enough). |
+| `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`).
@@ -58,6 +59,35 @@ streamed through untouched rather than buffered. This applies to npm only —
 every other registry's metadata is proxied untouched regardless of this
 setting. It cannot help a lockfile-pinned install (`npm ci`): there is no
 range left to resolve, so a blocked exact version still fails with `423`.
+
+### Behind a reverse proxy
+
+Forwarding headers are believed only when the request's direct peer is listed in
+`trusted_proxies`; from any other peer they are ignored, since a client could
+forge them. With `trusted_proxies` empty, every client behind nginx or Traefik
+appears to come from the proxy's IP, so the per-IP console login limits are shared
+by all users. For `X-Forwarded-For` the right-most address that is not a trusted
+proxy is the client; client-supplied entries to the left of it are ignored, so a
+junk `X-Forwarded-For` sent by the client cannot hide its address. When a
+forwarding header arrives from an untrusted peer,
+Jō-ei logs a one-time warning mentioning `server.trusted_proxies` with the
+offending `peer`; seeing it means the proxy needs to be listed.
+
+Set it to the proxy's own address, or the network the proxy connects from — for
+example nginx on the Docker host reaching Jō-ei over the compose network:
+
+```yaml
+server:
+  trusted_proxies:
+    - 172.18.0.1        # the proxy's address as Jō-ei sees it
+    # - 172.18.0.0/16   # or the proxy's network, if its address changes
+  client_ip_header: X-Forwarded-For
+```
+
+> **Warning:** list only proxy addresses, never client ranges. Every peer in a
+> trusted range may set the forwarding header to any value, so a broad CIDR
+> (say `10.0.0.0/8` when your users also sit in it) lets those clients spoof
+> their IP and dodge the login limits.
 
 ## `tls`
 
@@ -322,12 +352,96 @@ an internal interface.
 
 | Key | Default | Description |
 |---|---|---|
-| `auth.users` | — | List of `{username, password_hash}` (bcrypt). Prefer `JOEI_CONSOLE_AUTH_USERS`. |
 | `auth.jwt_secret` | generated | HS256 key signing console sessions, at least 32 bytes. Prefer `JOEI_CONSOLE_JWT_SECRET`. Unset, Jōei generates one on first boot and stores it in the database, so sessions survive a restart; set it explicitly to share sessions across replicas. |
 | `auth.access_ttl_minutes` | `15` | Access-token lifetime. |
 | `auth.refresh_ttl_hours` | `168` | Refresh-token lifetime (7 days). |
 
-Generate a password hash: `printf '%s' 'your-password' | jo-ei hashpw`
+### Users and roles
+
+Console users are stored in the database and managed from the console's Users
+page (admins only): creating users, changing roles, resetting passwords and
+disabling, enabling or deleting users all happen there (or through the same
+API). The only CLI is the recovery command `jo-ei reset-admin-password`
+(below). There are two roles:
+
+| | `operator` | `admin` |
+|---|---|---|
+| View overview, requests, cache, policy, registries | yes | yes |
+| Add or remove allow/deny list entries | yes | yes |
+| Change policy mode, minimum age or CVE threshold (`PUT /api/policy`) | no | yes |
+| Change registries (`PUT /api/registries`) | no | yes |
+| Purge the cache (`POST /api/cache/cleanup`) | no | yes |
+| Manage users | no | yes |
+| Change own password | yes | yes |
+
+A forbidden call returns `403 {"error":"forbidden"}`. The last enabled admin
+cannot be disabled, demoted or deleted, and nobody can disable, demote or delete
+themselves.
+
+**First start.** When the users table is completely empty, Jōei creates the
+user `admin` (role admin) with a random 20-character temporary password
+(`A–Z a–z 0–9`) and logs it exactly once, as a `warn` line:
+
+```json
+{"level":"warn","component":"server","user":"admin","password":"<temporary>","hint":"temporary password: change it at first sign-in; lost it? run jo-ei reset-admin-password","time":"2026-10-24T10:00:00Z","message":"created initial admin user"}
+```
+
+Find it with:
+
+```sh
+docker compose logs jo-ei | grep "initial admin"
+```
+
+Sign in as `admin` with that password; the console makes you choose a new one
+before anything else. The line is written only when the user is created — later
+restarts never print a password. Once the table holds any user (even only
+disabled ones) nothing is created automatically. A `logging.level` of `error`
+hides the line; use `jo-ei reset-admin-password` then.
+
+> **Security:** the temporary password is in the logs, and in any log
+> aggregator they are shipped to, and it stays valid until `admin` signs in and
+> changes it. Sign in right after the first start; if the logs may have been
+> read by others before that, run `jo-ei reset-admin-password`.
+
+**Recovery.** `jo-ei reset-admin-password` gives `admin` a new temporary
+password and prints it — and only it — on stdout (messages go to stderr). It
+also re-enables `admin`, restores its admin role if it was demoted, revokes its
+sessions and requires a password change at next sign-in. If `admin` was deleted
+it is recreated as an admin. It opens the database directly, so it works while
+the server is running, and it refuses to run if the database file does not
+exist (a wrong `--config` would otherwise silently create an empty one).
+
+```sh
+jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
+```
+
+In the Docker image the binary is `/jo-ei` (not on `PATH`; the image has no
+shell) and `--config` defaults to `config.yaml` in the working directory, so
+name both:
+
+```sh
+docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml reset-admin-password
+```
+
+With no enabled users at all the console is locked (`/api/` answers 503) and
+the startup log points at this command.
+
+**Passwords** are 12 characters to 72 bytes (bcrypt's limit; longer is rejected,
+never truncated) and must not equal the username. There are no composition
+rules. An admin-created or reset password is temporary: the user must change it
+at next sign-in, and until then every other API call returns
+`403 {"error":"password_change_required"}`.
+
+**Sessions** are database-backed. Disabling a user, changing their role or
+resetting or changing their password revokes their sessions.
+
+**Login limits.** Per process and in memory: 5 failures per (username, client IP)
+per 15 minutes and 20 failures per client IP per 15 minutes. A blocked attempt
+gets `429` with `Retry-After` (seconds) even with the correct password; success
+resets that pair. The client IP is resolved as described in
+[Behind a reverse proxy](#behind-a-reverse-proxy) — set `server.trusted_proxies`
+or all users share one IP's budget. With several replicas the limits and the
+counters are per replica, not shared.
 
 **Sessions.** The console signs in at `POST /api/auth/login` and rides two
 HttpOnly, `SameSite=Strict` cookies (`joei_at`, `joei_rt`); the browser never
@@ -360,10 +474,9 @@ curl -H "Authorization: Bearer $TOKEN" "$JOEI/api/overview"
 
 HTTP Basic is no longer accepted.
 
-**Fail-closed:** with zero users configured, `/api/` returns HTTP 503 and no
+**Fail-closed:** with no enabled users, `/api/` returns HTTP 503 and no
 one can sign in; the console shell still loads (it is static UI), and the proxy
 data path and `/health` stay open.
 
-**Signing out** clears the cookies. Tokens are stateless, so a bearer token
-already issued stays valid until it expires (15 minutes by default); to end
-every session at once, change `auth.jwt_secret` and restart.
+**Signing out** clears the cookies and revokes the session. To end every
+session at once, change `auth.jwt_secret` and restart.

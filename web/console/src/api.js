@@ -1,6 +1,7 @@
 /* 浄衛 Jōei :: live API client — populates window.JOEI from the proxy API.
    Events: "joei:data" (full refresh), "joei:event" (one SSE event, detail = row),
-   "joei:policy" (policy changed), "joei:connection" (JOEI.connected flipped). */
+   "joei:policy" (policy changed), "joei:connection" (JOEI.connected flipped),
+   "joei:auth" (signed in/out, role or must-change-password flag changed). */
 (function () {
   "use strict";
 
@@ -52,7 +53,11 @@
     ready: false, // true once the initial load() has settled (either way)
     authenticated: false, // set by the boot probe, login, and any 401
     username: "",
+    role: "", // "admin" | "operator" | "" (signed out)
+    mustChangePassword: false, // signed in, but only the forced change screen is allowed
   });
+
+  J.isAdmin = () => J.role === "admin";
 
   function fire(name, detail) {
     window.dispatchEvent(new CustomEvent(name, { detail }));
@@ -62,17 +67,40 @@
     if (J.connected !== v) { J.connected = v; fire("joei:connection"); }
   }
 
-  function setAuthenticated(v, username) {
-    const changed = J.authenticated !== v;
+  // me: { username, role, must_change_password } from /api/auth/me, login or
+  // a password change. Signing out clears the whole identity.
+  function setAuthenticated(v, me) {
+    const next = v
+      ? {
+          username: (me && me.username) || J.username,
+          role: (me && me.role) || J.role,
+          mustChangePassword: me ? !!me.must_change_password : J.mustChangePassword,
+        }
+      : { username: "", role: "", mustChangePassword: false };
+    const changed = J.authenticated !== v || J.username !== next.username ||
+      J.role !== next.role || J.mustChangePassword !== next.mustChangePassword;
     J.authenticated = v;
-    J.username = v ? (username || J.username) : "";
+    J.username = next.username;
+    J.role = next.role;
+    J.mustChangePassword = next.mustChangePassword;
     if (changed) fire("joei:auth");
   }
+
+  // Only a signed-in user with no pending password change may call the data
+  // endpoints; for anyone else they answer 403 password_change_required.
+  const canLoad = () => J.authenticated && !J.mustChangePassword;
 
   // Raised when a call fails because the session is gone. The app shell shows
   // the login screen for it, rather than the "no connection" banner: an
   // expired session is not a dead proxy.
   class AuthError extends Error {}
+
+  // Catch handler for load(): an AuthError (401 -> login screen, 403
+  // password_change_required -> forced change screen) has already been routed
+  // by authFetch and must not also raise the "no connection" banner.
+  function offlineUnlessAuth(e) {
+    if (!(e instanceof AuthError)) setConnected(false);
+  }
 
   // One refresh at a time: a page load fires several requests at once and they
   // would otherwise race to rotate the refresh cookie, each invalidating the
@@ -89,7 +117,9 @@
   }
 
   // Every API call goes through here: on 401 it refreshes once and replays the
-  // request, and gives up to the login screen if that fails. A 503 is only
+  // request, and gives up to the login screen if that fails. A 403
+  // password_change_required sends the shell to the forced change screen; a
+  // 403 forbidden (role) becomes an error with status 403. A 503 is only
   // treated as "auth not configured" when the body actually says so — other
   // endpoints (e.g. PUT /api/registries) use 503 for their own reasons, and
   // those must reach the caller as a normal error, not a forced sign-out.
@@ -102,6 +132,20 @@
       disconnectEvents();
       setAuthenticated(false);
       throw new AuthError("unauthorized");
+    }
+    if (res.status === 403) {
+      let body = null;
+      try { body = await res.clone().json(); } catch (_) { /* non-JSON error body */ }
+      if (body && body.error === "password_change_required") {
+        disconnectEvents();
+        setAuthenticated(true, { username: J.username, role: J.role, must_change_password: true });
+        throw new AuthError("password_change_required");
+      }
+      if (body && body.error === "forbidden") {
+        const err = new Error("You don't have permission for this action");
+        err.status = 403;
+        throw err;
+      }
     }
     if (res.status === 503) {
       let body = null;
@@ -217,26 +261,51 @@
     };
   }
 
-  async function savePolicy(p) {
-    const body = {
-      mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on,
-      allowlist_supply: p.allowlist_supply, allowlist_cve: p.allowlist_cve, denylist: p.denylist,
-    };
-    const res = await authFetch("/api/policy", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  // Both policy writes answer with the full policy: apply it, or throw an
+  // error carrying the server's message, rejected field and status.
+  async function applyPolicyResponse(res, what) {
     let data = null;
     try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
     if (!res.ok) {
-      const err = new Error((data && data.message) || "policy update failed (HTTP " + res.status + ")");
+      const err = new Error((data && data.message) || what + " failed (HTTP " + res.status + ")");
       err.field = data && data.field;
+      err.status = res.status;
       throw err;
     }
     applyPolicy(data);
     fire("joei:policy");
     return J.policy;
+  }
+
+  // Settings only (admin): absent lists are kept server-side, so a settings
+  // save can never drop a list entry someone else just added.
+  async function savePolicy(p) {
+    const body = { mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on };
+    const res = await authFetch("/api/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return applyPolicyResponse(res, "policy update");
+  }
+
+  // Add (add=true) or remove one entry of allowlist_supply | allowlist_cve |
+  // denylist. The server edits each list atomically, but every response is a
+  // full-policy snapshot: run the edits one at a time, for every caller, so
+  // snapshots apply in request order and an older one can never win. A
+  // failed edit rejects only its own promise, never the chain.
+  let listChain = Promise.resolve();
+  function editList(list, entry, add) {
+    const run = listChain.then(async () => {
+      const res = await authFetch("/api/policy/lists/" + encodeURIComponent(list), {
+        method: add ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry }),
+      });
+      return applyPolicyResponse(res, "policy list update");
+    });
+    listChain = run.catch(() => {});
+    return run;
   }
 
   async function saveRegistries(list) {
@@ -271,17 +340,58 @@
     return data; // { removed, freed_bytes }
   }
 
+  /* ---------- users (admin only) ---------- */
+
+  // Users API calls throw an Error carrying the server's error code (code),
+  // rejected field, status and message, so the page can map codes to copy.
+  async function usersCall(path, opts, what) {
+    const res = await authFetch(path, opts);
+    if (res.status === 204) return null;
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+    if (!res.ok) {
+      const err = new Error((data && data.message) || what + " failed (HTTP " + res.status + ")");
+      err.code = data && data.error;
+      err.field = data && data.field;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  const userPath = (name) => "/api/users/" + encodeURIComponent(name);
+  const jsonBody = (method, body) => ({
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+
+  async function listUsers() {
+    return (await usersCall("/api/users", undefined, "user list")) || [];
+  }
+  function createUser({ username, role, password }) {
+    return usersCall("/api/users", jsonBody("POST", { username, role, password }), "user create");
+  }
+  // change: { role?, disabled? }
+  function updateUser(name, change) {
+    return usersCall(userPath(name), jsonBody("PATCH", change), "user update");
+  }
+  function resetUserPassword(name, password) {
+    return usersCall(userPath(name) + "/password", jsonBody("POST", { password }), "password reset");
+  }
+  function deleteUser(name) {
+    return usersCall(userPath(name), { method: "DELETE" }, "user delete");
+  }
+
   // An SSE drop alone does not mean the API is down: EventSource reconnects
   // transparently and every panel is refreshed by the 15s polls regardless.
   // Probe the API once per error burst; only a failing probe shows the
   // "no connection" banner.
   let probing = false;
   function probeConnection() {
-    if (probing || !J.authenticated) return;
+    if (probing || !canLoad()) return;
     probing = true;
     load()
       .then(() => connectEvents()) // no-op if a live stream is already open
-      .catch(() => setConnected(false))
+      .catch(offlineUnlessAuth)
       .finally(() => { probing = false; });
   }
 
@@ -332,11 +442,83 @@
     if (!res.ok) {
       const err = new Error((data && data.error) || "login_failed");
       err.status = res.status;
+      err.retryAfter = retryAfter(res);
       throw err;
     }
-    setAuthenticated(true, data.username);
-    await load().catch(() => setConnected(false));
+    setAuthenticated(true, data);
+    await startSession();
+    return J.username;
+  }
+
+  // Load the panels and open the stream, unless a password change is
+  // pending: every data endpoint would answer 403 until it is done.
+  async function startSession() {
+    if (!canLoad()) return;
+    try {
+      await load();
+    } catch (e) {
+      offlineUnlessAuth(e);
+      if (e instanceof AuthError) return; // no stream for a session that cannot load
+    }
     connectEvents();
+  }
+
+  function retryAfter(res) {
+    const n = parseInt(res.headers.get("Retry-After") || "", 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  // Change the caller's own password. The server re-issues this session's
+  // cookies and revokes every other session. Not routed through authFetch: a
+  // 401 invalid_credentials here means a wrong current password, not a lapsed
+  // session, and must neither be replayed nor sign the user out. Any other
+  // 401 is a lapsed access token (the forced screen loads nothing, so nothing
+  // else keeps it fresh): refresh once and replay, sign out only if that fails.
+  async function changePassword(current, next) {
+    const post = async () => {
+      let res;
+      try {
+        res = await fetch("/api/auth/password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ current, new: next }),
+        });
+      } catch (_) {
+        setConnected(false);
+        const err = new Error("Cannot reach the proxy. Check that it is running, then try again.");
+        err.status = 0;
+        throw err;
+      }
+      setConnected(true);
+      let data = null;
+      try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
+      return { res, data };
+    };
+    const lapsed = ({ res, data }) => res.status === 401 && !(data && data.error === "invalid_credentials");
+
+    let { res, data } = await post();
+    if (lapsed({ res, data }) && await refreshSession()) {
+      ({ res, data } = await post());
+    }
+    if (!res.ok) {
+      if (lapsed({ res, data })) {
+        disconnectEvents();
+        setAuthenticated(false);
+        throw new AuthError("unauthorized");
+      }
+      const err = new Error(
+        res.status === 401 ? "Current password is incorrect."
+        : res.status === 429 ? "Too many attempts, try again in " + retryAfter(res) + " s"
+        : (data && data.message) || "Password change failed (HTTP " + res.status + ")");
+      err.status = res.status;
+      err.retryAfter = retryAfter(res);
+      throw err;
+    }
+    const wasForced = J.mustChangePassword;
+    setAuthenticated(true, data);
+    // Leaving the forced screen: run the normal boot path now that the data
+    // endpoints accept this session.
+    if (wasForced) await startSession();
     return J.username;
   }
 
@@ -366,13 +548,16 @@
         return;
       }
       const me = await res.json();
-      setAuthenticated(true, me.username);
-      await load();
-      connectEvents();
-    } catch (_) {
-      // A throw here means the request never reached the proxy — that is a
-      // connectivity failure, not a lapsed session.
-      setConnected(false);
+      setAuthenticated(true, me);
+      if (canLoad()) {
+        await load();
+        connectEvents();
+      }
+    } catch (e) {
+      // Apart from an AuthError out of load() (handled by authFetch: login
+      // screen or forced change screen), a throw here means the request never
+      // reached the proxy — a connectivity failure, not a lapsed session.
+      offlineUnlessAuth(e);
     } finally {
       J.ready = true;
       fire("joei:data");
@@ -381,20 +566,30 @@
 
   J.load = load;
   J.savePolicy = savePolicy;
+  J.editList = editList;
+  J.changePassword = changePassword;
   J.pageRequests = pageRequests;
   J.saveRegistries = saveRegistries;
   J.cleanupCache = cleanupCache;
+  J.listUsers = listUsers;
+  J.createUser = createUser;
+  J.updateUser = updateUser;
+  J.resetUserPassword = resetUserPassword;
+  J.deleteUser = deleteUser;
+  // True for a failure authFetch has already routed (login screen or forced
+  // change screen): callers should not also report it.
+  J.isAuthError = (e) => e instanceof AuthError;
   J.login = login;
   J.logout = logout;
 
   boot();
   // Counters and quarantine are not pushed over SSE — refresh periodically.
   setInterval(() => {
-    if (!document.hidden && J.authenticated) load().catch(() => { if (J.authenticated) setConnected(false); });
+    if (!document.hidden && canLoad()) load().catch((e) => { if (canLoad()) offlineUnlessAuth(e); });
   }, 15000);
   // Returning to a backgrounded tab: timers were paused and the SSE socket may
   // have died silently — refresh now instead of waiting for the next poll.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && J.authenticated) load().catch(() => { if (J.authenticated) setConnected(false); });
+    if (!document.hidden && canLoad()) load().catch((e) => { if (canLoad()) offlineUnlessAuth(e); });
   });
 })();

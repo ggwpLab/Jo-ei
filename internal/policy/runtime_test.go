@@ -2,6 +2,7 @@ package policy_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -206,4 +207,85 @@ func TestRuntimeEmptyBlockOnDefaultsToLow(t *testing.T) {
 	assert.Equal(t, "LOW", p.CVEBlockOn)
 	// The boot params must round-trip through Apply unchanged.
 	require.NoError(t, r.Apply(p))
+}
+
+func TestEditList_AddRemoveIdempotent(t *testing.T) {
+	r := newRuntime(t, nil)
+	changed, err := r.EditList(policy.ListDenylist, " npm/evil ", true)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = r.EditList(policy.ListDenylist, "npm/evil", true)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, []string{"npm/evil"}, r.Current().Denylist)
+
+	changed, err = r.EditList(policy.ListDenylist, "npm/other", false)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	changed, err = r.EditList(policy.ListDenylist, "npm/evil", false)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, r.Current().Denylist)
+}
+
+func TestEditList_Validation(t *testing.T) {
+	r := newRuntime(t, nil)
+	_, err := r.EditList("bogus", "npm/x", true)
+	var verr *policy.ValidationError
+	require.ErrorAs(t, err, &verr)
+	assert.Equal(t, "list", verr.Field)
+
+	_, err = r.EditList(policy.ListAllowlistCVE, "no-slash", true)
+	require.ErrorAs(t, err, &verr)
+	assert.Equal(t, "entry", verr.Field)
+}
+
+func TestEditList_Persists(t *testing.T) {
+	fs := &fakeStore{}
+	r, err := policy.NewRuntimeWithStore(sc(), cve(), prof(), nil, fs)
+	require.NoError(t, err)
+	before := fs.saves
+	_, err = r.EditList(policy.ListAllowlistSupply, "pypi/foo@1.0", true)
+	require.NoError(t, err)
+	require.NotNil(t, fs.saved)
+	assert.Equal(t, []string{"pypi/foo@1.0"}, fs.saved.AllowlistSupply)
+	assert.Equal(t, before+1, fs.saves)
+
+	_, err = r.EditList(policy.ListAllowlistSupply, "pypi/foo@1.0", true) // no-op
+	require.NoError(t, err)
+	assert.Equal(t, before+1, fs.saves, "unchanged edit must not persist")
+}
+
+func TestRuntime_ConcurrentEditsNoLoss(t *testing.T) {
+	r := newRuntime(t, nil)
+	const n = 100
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := r.EditList(policy.ListDenylist, fmt.Sprintf("npm/pkg%d", i), true)
+			assert.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+	assert.Len(t, r.Current().Denylist, n)
+}
+
+func TestRuntimeApplyTrimsListEntries(t *testing.T) {
+	r := newRuntime(t, nil)
+	p := r.Current()
+	p.Denylist = []string{" npm/x "}
+	p.AllowlistSupply = []string{"\tpypi/a"}
+	p.AllowlistCVE = []string{"npm/b@1.0 "}
+	require.NoError(t, r.Apply(p))
+	got := r.Current()
+	assert.Equal(t, []string{"npm/x"}, got.Denylist)
+	assert.Equal(t, []string{"pypi/a"}, got.AllowlistSupply)
+	assert.Equal(t, []string{"npm/b@1.0"}, got.AllowlistCVE)
+
+	changed, err := r.EditList(policy.ListDenylist, "npm/x", false)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, r.Current().Denylist)
 }

@@ -6,6 +6,7 @@ const NAV = [
   { id: "quarantine", label: "Quarantine", icon: "quar", gold: true },
   { id: "policy", label: "Policy", icon: "policy" },
   { id: "registries", label: "Registries & Cache", icon: "registry" },
+  { id: "users", label: "Users", icon: "users", adminOnly: true },
 ];
 
 const PAGE_META = {
@@ -14,6 +15,7 @@ const PAGE_META = {
   quarantine: { kanji: "衛", title: "Quarantine" },
   policy:     { kanji: "法", title: "Policy Editor" },
   registries: { kanji: "蔵", title: "Registries & Cache" },
+  users:      { kanji: "人", title: "Users" },
 };
 
 /* ---------- toasts ---------- */
@@ -70,8 +72,10 @@ function LoginScreen() {
       .catch((ex) => {
         setErr(ex.status === 0
           ? "Cannot reach the proxy. Check that it is running, then try again."
+          : ex.status === 429
+          ? `Too many attempts, try again in ${ex.retryAfter} s`
           : ex.status === 503
-          ? "Authentication is not configured on this server. Add console.auth.users or JOEI_CONSOLE_AUTH_USERS and restart."
+          ? "No enabled console users on this server. Restore the admin account with jo-ei reset-admin-password."
           : "Incorrect username or password.");
         setPassword("");
       })
@@ -106,6 +110,107 @@ function LoginScreen() {
   );
 }
 
+/* ---------- change password (forced screen + sidebar modal) ---------- */
+function PasswordForm({ onDone, onCancel, submitLabel }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const ready = current && next && confirm;
+  const submit = (e) => {
+    e.preventDefault();
+    if (busy || !ready) return;
+    if (next !== confirm) { setErr("The new passwords do not match."); return; }
+    setBusy(true);
+    setErr("");
+    JOEI.changePassword(current, next)
+      .then(() => { setBusy(false); if (onDone) onDone(); })
+      .catch((ex) => {
+        setBusy(false);
+        // A lapsed session already sent the shell back to the login screen.
+        if (ex.message === "unauthorized") return;
+        setErr(String(ex.message || ex));
+        if (ex.status === 401) setCurrent("");
+      });
+  };
+
+  return (
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <label className="login-field">
+        <span>Current password</span>
+        <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+          autoFocus autoComplete="current-password" disabled={busy} />
+      </label>
+      <label className="login-field">
+        <span>New password</span>
+        <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+          autoComplete="new-password" disabled={busy} />
+      </label>
+      <label className="login-field">
+        <span>Confirm new password</span>
+        <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+          autoComplete="new-password" disabled={busy} />
+      </label>
+      <div className="faint" style={{ fontSize: 11 }}>At least 12 characters, and not your username.</div>
+
+      {err && <div className="login-err" role="alert">{err}</div>}
+
+      <div className="row" style={{ gap: 10 }}>
+        {onCancel && <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>Cancel</button>}
+        <button className="btn primary login-submit" style={{ marginTop: 0, flex: 1 }} type="submit" disabled={busy || !ready}>
+          {busy ? "Changing…" : submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ForcedPasswordScreen({ username }) {
+  return (
+    <div className="login-wrap">
+      <div className="card login-card">
+        <div className="login-mark"><ToriiMark size={44} /></div>
+        <div className="login-title kanji">浄衛 <small>Jōei</small></div>
+        <div className="login-sub">
+          Signed in as <b style={{ color: "var(--washi)" }}>{username}</b> · choose a new password to continue
+        </div>
+        <PasswordForm submitLabel="Change password" />
+        <button className="btn sm ghost" style={{ alignSelf: "center" }} onClick={() => JOEI.logout()}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
+function ChangePasswordModal({ onClose, notify }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div role="dialog" aria-modal="true" aria-label="Change password"
+        style={{ position: "fixed", inset: 0, zIndex: 41, display: "grid", placeItems: "center", padding: 24, pointerEvents: "none" }}>
+        <div className="card login-card" style={{ pointerEvents: "auto" }}>
+          <div className="row">
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Change password</div>
+            <button className="x-btn right" style={{ width: 24, height: 24 }} onClick={onClose} aria-label="close"><Icons.x /></button>
+          </div>
+          <div className="faint" style={{ fontSize: 11.5, marginTop: -6 }}>Your other sessions will be signed out.</div>
+          <PasswordForm submitLabel="Change password" onCancel={onClose}
+            onDone={() => {
+              onClose();
+              notify({ kind: "ok", code: "200 OK", title: "Password changed", msg: "Other sessions were signed out." });
+            }} />
+        </div>
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [page, setPage] = useState("overview");
   const [treatment, setTreatment] = useState("procession");
@@ -118,6 +223,9 @@ function App() {
   const [scanners, setScanners] = useState(JOEI.scanners);
   const [authed, setAuthed] = useState(JOEI.authenticated);
   const [username, setUsername] = useState(JOEI.username);
+  const [role, setRole] = useState(JOEI.role);
+  const [mustChange, setMustChange] = useState(JOEI.mustChangePassword);
+  const [pwModal, setPwModal] = useState(false);
   const tid = useRef(0);
 
   // The overlay is hidden by opacity alone, which does not stop its infinite
@@ -136,7 +244,13 @@ function App() {
   useEffect(() => {
     const onData = () => { setLoading(false); setPolicyState(JOEI.policy); setScanners(JOEI.scanners); };
     const onConn = () => setConnected(JOEI.connected);
-    const onAuth = () => { setAuthed(JOEI.authenticated); setUsername(JOEI.username); };
+    const onAuth = () => {
+      setAuthed(JOEI.authenticated);
+      setUsername(JOEI.username);
+      setRole(JOEI.role);
+      setMustChange(JOEI.mustChangePassword);
+      if (!JOEI.authenticated) setPwModal(false);
+    };
     window.addEventListener("joei:data", onData);
     window.addEventListener("joei:policy", onData);
     window.addEventListener("joei:connection", onConn);
@@ -162,16 +276,14 @@ function App() {
   }, []);
   const dismiss = (id) => setToasts((xs) => xs.filter((x) => x.id !== id));
 
-  // Saves are chained so each patch is computed AFTER the previous PUT has
-  // applied — rapid allow/deny clicks cannot overwrite each other.
-  const saveChain = useRef(Promise.resolve());
-  const saveLists = (patchFn, toast) => {
-    saveChain.current = saveChain.current
-      .then(() => JOEI.savePolicy({ ...JOEI.policy, ...patchFn() }))
+  // J.editList serialises every list edit (here and on the Policy page), so
+  // toasts arrive in click order and J.policy ends on the last response.
+  const editList = (list, entry, toast) => {
+    JOEI.editList(list, entry, true)
       .then(() => notify(toast))
       .catch((err) => notify({
-        kind: "block", code: "400 Bad Request", title: "Policy update failed",
-        msg: String(err.message || err),
+        kind: "block", code: err.status === 403 ? "403 Forbidden" : err.status === 413 ? "413 Payload Too Large" : "400 Bad Request",
+        title: "Policy update failed", msg: String(err.message || err),
       }));
   };
 
@@ -187,18 +299,22 @@ function App() {
   const onAllowlist = (target, gate) => {
     const { key, label } = GATE_LIST[gate] || GATE_LIST.supply;
     const t = `${target.eco}/${target.pkg}@${target.ver}`;
-    saveLists(() => {
-      const list = JOEI.policy[key];
-      return { [key]: list.includes(t) ? list : [...list, t] };
-    }, { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted at the {label}: <span className="t-pkg">{t}</span></> });
+    editList(key, t,
+      { kind: "ok", code: "200 OK", title: "Added to allowlist", msg: <>Now trusted at the {label}: <span className="t-pkg">{t}</span></> });
   };
   const onDenylist = (target) => {
-    saveLists(() => {
-      const list = JOEI.policy.denylist;
-      return { denylist: list.includes(target) ? list : [...list, target] };
-    }, { kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
+    editList("denylist", target,
+      { kind: "block", code: "403 Forbidden", title: "Added to denylist", msg: <>Will be blocked at the gate: <span className="t-pkg">{target}</span></> });
   };
   const openThreat = (r) => setThreat(r);
+
+  // Admin-only pages vanish from the nav for an operator; if the role drops
+  // while one is open, fall back to the overview.
+  const admin = role === "admin";
+  const nav = NAV.filter((n) => admin || !n.adminOnly);
+  useEffect(() => {
+    if (!admin && NAV.some((n) => n.id === page && n.adminOnly)) setPage("overview");
+  }, [admin, page]);
 
   const meta = PAGE_META[page];
 
@@ -230,6 +346,19 @@ function App() {
     );
   }
 
+  // Signed in with a temporary password: nothing but the change form until it
+  // is replaced (the API refuses everything else with 403).
+  if (mustChange) {
+    return (
+      <>
+        {!connected && (
+          <div className="conn-banner">&#9888; No connection to the proxy — check that it is running.</div>
+        )}
+        <ForcedPasswordScreen username={username} />
+      </>
+    );
+  }
+
   return (
     <div className="app">
       {showLoader && <PurifyLoader hide={!loading} />}
@@ -245,7 +374,7 @@ function App() {
         </div>
 
         <div className="nav-group-label">Console</div>
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <button key={n.id} className={`nav-item ${page === n.id ? "active" : ""}`} onClick={() => { setPage(n.id); }}>
             {Icons[n.icon]()}
             <span>{n.label}</span>
@@ -266,9 +395,15 @@ function App() {
               {username.slice(0, 2).toUpperCase()}
             </div>
             <div className="col" style={{ lineHeight: 1.25, minWidth: 0 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{username}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={`${username} · ${role}`}>
+                {username} <span className="faint" style={{ fontWeight: 500 }}>· {role}</span>
+              </span>
               <span className="faint" style={{ fontSize: 11 }}>signed in</span>
             </div>
+          </div>
+          <div className="row" style={{ gap: 6, padding: "0 8px" }}>
+            <button className="btn sm ghost" onClick={() => setPwModal(true)}>Change password</button>
             <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => JOEI.logout()}>Sign out</button>
           </div>
         </div>
@@ -299,10 +434,12 @@ function App() {
           {page === "quarantine" && <Quarantine onAllowlist={onAllowlist} />}
           {page === "policy" && <Policy notify={notify} />}
           {page === "registries" && <Registries notify={notify} />}
+          {page === "users" && admin && <Users notify={notify} />}
         </div>
       </div>
 
       {threat && <ThreatDrawer r={threat} onClose={() => setThreat(null)} onAllowlist={onAllowlist} onDenylist={onDenylist} />}
+      {pwModal && <ChangePasswordModal onClose={() => setPwModal(false)} notify={notify} />}
       <ToastHost toasts={toasts} dismiss={dismiss} />
     </div>
   );

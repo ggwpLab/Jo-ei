@@ -26,9 +26,9 @@ const jwtSecretSettingKey = "auth.jwt_secret"
 // precedence: JOEI_CONSOLE_JWT_SECRET, the config file, the settings store, or
 // a freshly generated key which is then persisted.
 //
-// The environment is read directly rather than through viper, exactly as
-// JOEI_CONSOLE_AUTH_USERS is: viper's AutomaticEnv only overrides keys that are
-// present in the config file, so an env-only secret would silently not apply.
+// The environment is read directly rather than through viper: viper's
+// AutomaticEnv only overrides keys that are present in the config file, so an
+// env-only secret would silently not apply.
 func resolveJWTSecret(fileValue string, st *settings.Store, logger zerolog.Logger) ([]byte, error) {
 	logger = logger.With().Str("component", "auth").Logger()
 	if v := strings.TrimSpace(os.Getenv("JOEI_CONSOLE_JWT_SECRET")); v != "" {
