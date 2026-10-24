@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-24
+
+### Security
+
+- Go toolchain bumped from 1.26.6 to 1.26.10 for standard-library advisories
+  reachable from this codebase (net/http, net/textproto, crypto/tls, fixed in
+  1.26.9; crypto/x509 GO-2026-6809, fixed in 1.26.10). `govulncheck` reports no
+  vulnerabilities reachable from this codebase.
+
 ### Added
 
 - **Prometheus metrics.** A dedicated listener (`metrics.listen`, default
@@ -43,9 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Request feed search covers the whole history.** The search box now queries
   the server (`GET /api/requests?q=`, a case-insensitive substring of
   `package@version` or the request ID, combinable with `verdict`, cursor-paged;
-  `limit` is now capped at 500)
-  instead of filtering only the rows already loaded in the browser. Hovering
-  the time in the feed shows the full date.
+  `limit` is now capped at 500) instead of filtering only the rows already
+  loaded in the browser. Hovering the time in the feed shows the full date.
 
 ### Changed
 
@@ -87,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Log queries keyed on the old messages or fields need updating; see
   [configuration › logging](docs/configuration.md#logging).
+
+- **`server.listen` defaults to `:8080`** and an empty value is rejected at
+  startup. The Docker image bundles Trivy 0.76.0 (was 0.74.0) and also
+  exposes the metrics port `9464`.
 
 ### Fixed
 
@@ -329,7 +341,8 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.3.0...v0.4.0
