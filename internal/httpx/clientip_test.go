@@ -66,6 +66,38 @@ func TestClientIP_MalformedFallsBackToPeer(t *testing.T) {
 	assert.Equal(t, "10.0.0.2", c.ClientIP(r))
 }
 
+func TestClientIP_MalformedLeftOfClientIsIgnored(t *testing.T) {
+	// nginx proxy_add_x_forwarded_for appends the real peer to whatever the
+	// client sent, so client junk sits to the left of the real address.
+	c := newResolver(t, []string{"10.0.0.0/8"}, "")
+	r := clientIPReq("10.0.0.2:1", httpx.HeaderXForwardedFor, "garbage, 198.51.100.9")
+	assert.Equal(t, "198.51.100.9", c.ClientIP(r))
+}
+
+func TestClientIP_MalformedBeforeAnyUntrustedFallsBackToPeer(t *testing.T) {
+	c := newResolver(t, []string{"10.0.0.0/8"}, "")
+	r := clientIPReq("10.0.0.2:1", httpx.HeaderXForwardedFor, "198.51.100.9, garbage")
+	assert.Equal(t, "10.0.0.2", c.ClientIP(r))
+}
+
+func TestClientIP_MalformedBehindTrustedHopFallsBackToPeer(t *testing.T) {
+	c := newResolver(t, []string{"10.0.0.0/8"}, "")
+	r := clientIPReq("10.0.0.2:1", httpx.HeaderXForwardedFor, "198.51.100.9, garbage, 10.0.0.5")
+	assert.Equal(t, "10.0.0.2", c.ClientIP(r))
+}
+
+func TestClientIP_ForwardedObfuscatedLeftOfClientIsIgnored(t *testing.T) {
+	c := newResolver(t, []string{"10.0.0.0/8"}, httpx.HeaderForwarded)
+	r := clientIPReq("10.0.0.2:1", httpx.HeaderForwarded, "for=_hidden, for=198.51.100.9")
+	assert.Equal(t, "198.51.100.9", c.ClientIP(r))
+}
+
+func TestClientIP_ForwardedObfuscatedNearestFallsBackToPeer(t *testing.T) {
+	c := newResolver(t, []string{"10.0.0.0/8"}, httpx.HeaderForwarded)
+	r := clientIPReq("10.0.0.2:1", httpx.HeaderForwarded, "for=198.51.100.9, for=unknown")
+	assert.Equal(t, "10.0.0.2", c.ClientIP(r))
+}
+
 func TestClientIP_WarnsOncePerProcess(t *testing.T) {
 	var buf bytes.Buffer
 	c, err := httpx.NewClientIPResolver(nil, "", zerolog.New(&buf))

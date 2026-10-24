@@ -101,16 +101,24 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 		return peer.String()
 	}
 
+	// Walk right to left: entries nearer the peer were written by proxies we
+	// trust; the first valid untrusted address is the client. Anything to its
+	// left is client-supplied and ignored, junk included. A malformed or
+	// obfuscated entry met before that address means the chain cannot be
+	// trusted, so the peer is used.
 	hops, ok := c.hops(r)
 	if !ok || len(hops) == 0 {
 		return peer.String()
 	}
 	for i := len(hops) - 1; i >= 0; i-- {
-		if !c.isTrusted(hops[i]) {
-			return hops[i].String()
+		if !hops[i].valid {
+			return peer.String()
+		}
+		if !c.isTrusted(hops[i].addr) {
+			return hops[i].addr.String()
 		}
 	}
-	return hops[0].String()
+	return hops[0].addr.String()
 }
 
 func (c *ClientIPResolver) hasForwardingHeader(r *http.Request) bool {
@@ -122,41 +130,50 @@ func (c *ClientIPResolver) hasForwardingHeader(r *http.Request) bool {
 	return false
 }
 
-// hops returns the addresses named by the configured header, left to right.
-// ok is false when the header is absent or any entry is malformed.
-func (c *ClientIPResolver) hops(r *http.Request) ([]netip.Addr, bool) {
+// hop is one forwarding-header entry; valid is false when it is not an IP
+// (malformed, empty, or an RFC 7239 obfuscated identifier like _hidden).
+type hop struct {
+	addr  netip.Addr
+	valid bool
+}
+
+// hops returns the entries named by the configured header, left to right.
+// ok is false when the header is absent, or for X-Real-IP when it does not
+// hold exactly one entry.
+func (c *ClientIPResolver) hops(r *http.Request) ([]hop, bool) {
 	values := r.Header.Values(c.header)
 	if len(values) == 0 {
 		return nil, false
 	}
-	var raw []string
+	var out []hop
 	for _, v := range values {
 		for _, part := range strings.Split(v, ",") {
 			part = strings.TrimSpace(part)
 			if c.header == HeaderForwarded {
-				part = forwardedFor(part)
-			}
-			if part == "" {
-				if c.header == HeaderForwarded {
+				if part == "" || !hasForParam(part) {
 					continue // element without a for= parameter
 				}
-				return nil, false
+				part = forwardedFor(part)
 			}
-			raw = append(raw, part)
+			a, valid := parseHop(part)
+			out = append(out, hop{addr: a, valid: valid})
 		}
 	}
-	if c.header == HeaderXRealIP && len(raw) != 1 {
+	if c.header == HeaderXRealIP && len(out) != 1 {
 		return nil, false
 	}
-	out := make([]netip.Addr, 0, len(raw))
-	for _, s := range raw {
-		a, ok := parseHop(s)
-		if !ok {
-			return nil, false
-		}
-		out = append(out, a)
-	}
 	return out, true
+}
+
+// hasForParam reports whether a Forwarded element carries a for= parameter.
+func hasForParam(element string) bool {
+	for _, param := range strings.Split(element, ";") {
+		k, _, found := strings.Cut(strings.TrimSpace(param), "=")
+		if found && strings.EqualFold(strings.TrimSpace(k), "for") {
+			return true
+		}
+	}
+	return false
 }
 
 // forwardedFor extracts the for= value of one RFC 7239 Forwarded element.
