@@ -194,11 +194,9 @@ type ConsoleConfig struct {
 	Auth AuthConfig `mapstructure:"auth"`
 }
 
-// AuthConfig holds the console/API credentials and JWT session parameters. An
-// empty Users list means authentication is unconfigured; the API then serves
-// 503 (fail-closed) while the console shell still loads its login screen.
+// AuthConfig holds the console JWT session parameters. Console users live in
+// the database (internal/users), not in the config.
 type AuthConfig struct {
-	Users []AuthUser `mapstructure:"users"`
 	// JWTSecret signs console session tokens (HS256). Empty means "resolve it
 	// elsewhere": JOEI_CONSOLE_JWT_SECRET, then the settings store, then a
 	// generated-and-persisted key. See cmd/jo-ei.
@@ -222,12 +220,6 @@ const (
 // MinJWTSecretLen mirrors auth.MinSecretLen. It is duplicated rather than
 // imported because config imports nothing from internal/.
 const MinJWTSecretLen = 32
-
-// AuthUser is one console credential: a username and a bcrypt password hash.
-type AuthUser struct {
-	Username     string `mapstructure:"username"`
-	PasswordHash string `mapstructure:"password_hash"`
-}
 
 type RegistriesConfig struct {
 	PyPI     RegistryConfig `mapstructure:"pypi"`

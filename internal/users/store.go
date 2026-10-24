@@ -102,7 +102,7 @@ func (s *Store) HasEnabledUsers() (bool, error) {
 }
 
 // HasAnyUsers reports whether the table holds at least one user, enabled or
-// not. It decides whether config/env bootstrap users still apply.
+// not. An empty table is what EnsureInitialAdmin fills.
 func (s *Store) HasAnyUsers() (bool, error) {
 	var n int
 	if err := s.db.SQL().QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
@@ -269,34 +269,77 @@ func (s *Store) TouchLogin(username string, at time.Time) error {
 	return nil
 }
 
-// ImportIfEmpty inserts us in one transaction when the table is empty and
-// returns the number inserted. Every user is validated first; any failure
-// imports nothing. A non-empty table returns 0 without writing.
-func (s *Store) ImportIfEmpty(us []User) (int, error) {
-	for _, u := range us {
-		if err := validateNew(u); err != nil {
-			return 0, fmt.Errorf("user %q: %w", u.Username, err)
-		}
-	}
+// EnsureInitialAdmin creates the initial admin account when the users table
+// is completely empty: user InitialAdminUsername, role admin, a generated
+// password (returned so the caller can show it once) and
+// must_change_password set. The emptiness check and the insert share one
+// transaction. A table with any row, even only disabled users, is left alone
+// and created is false.
+func (s *Store) EnsureInitialAdmin() (password string, created bool, err error) {
 	tx, err := s.db.SQL().Begin()
 	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
+		return "", false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var n int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("counting users: %w", err)
+		return "", false, fmt.Errorf("counting users: %w", err)
 	}
 	if n > 0 {
-		return 0, nil
+		return "", false, nil
 	}
-	for _, u := range us {
-		if err := insert(tx, u); err != nil {
-			return 0, fmt.Errorf("user %q: %w", u.Username, err)
-		}
+	password, err = GeneratePassword()
+	if err != nil {
+		return "", false, err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return "", false, fmt.Errorf("hashing password: %w", err)
+	}
+	if err := insert(tx, User{
+		Username: InitialAdminUsername, PasswordHash: hash, Role: RoleAdmin, MustChangePassword: true,
+	}); err != nil {
+		return "", false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return "", false, fmt.Errorf("commit: %w", err)
 	}
-	return len(us), nil
+	return password, true, nil
+}
+
+// ResetAdmin is the recovery path behind `jo-ei reset-admin-password`. In one
+// transaction it either restores the InitialAdminUsername account — new
+// password hash, must_change_password set, enabled, role admin, sessions
+// revoked by a token_version bump — or, when that account was deleted,
+// recreates it with the same properties (created is true). Restoring or
+// enabling an admin can only add admins, so the last-admin guard never
+// applies.
+func (s *Store) ResetAdmin(hash string) (created bool, err error) {
+	tx, err := s.db.SQL().Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(
+		`UPDATE users SET password_hash=?, must_change_password=1, disabled=0, role='admin', token_version=token_version+1
+		 WHERE username=?`, hash, InitialAdminUsername)
+	if err != nil {
+		return false, fmt.Errorf("resetting admin: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("resetting admin: %w", err)
+	}
+	if n == 0 {
+		if err := insert(tx, User{
+			Username: InitialAdminUsername, PasswordHash: hash, Role: RoleAdmin, MustChangePassword: true,
+		}); err != nil {
+			return false, err
+		}
+		created = true
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+	return created, nil
 }

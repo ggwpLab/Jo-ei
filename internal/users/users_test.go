@@ -1,6 +1,7 @@
 package users_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -42,4 +43,20 @@ func TestRoleValid(t *testing.T) {
 	assert.True(t, users.RoleAdmin.Valid())
 	assert.True(t, users.RoleOperator.Valid())
 	assert.False(t, users.Role("root").Valid())
+}
+
+func TestGeneratePassword(t *testing.T) {
+	a, err := users.GeneratePassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := users.GeneratePassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`^[A-Za-z0-9]{20}$`)
+	assert.Regexp(t, re, a)
+	assert.Regexp(t, re, b)
+	assert.NotEqual(t, a, b)
+	assert.NoError(t, users.ValidatePassword("admin", a), "a generated password passes the password policy")
 }

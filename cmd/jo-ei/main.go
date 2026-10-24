@@ -415,13 +415,13 @@ func run(ctx context.Context, cfgPath string) error {
 	// other path (registry prefixes, /health) falls through to the proxy mux
 	// untouched. Keeping the console in a parent mux leaves the proxy package
 	// and its routing free of UI concerns.
-	// Console users live in the database; config/env users only seed an empty
-	// table (bootstrapUsers); a broken entry fails startup only then.
+	// Console users live in the database. On an empty table the initial
+	// admin is created and its temporary password logged once.
 	userStore, err := users.New(sdb)
 	if err != nil {
 		return fmt.Errorf("console users: %w", err)
 	}
-	if err := bootstrapUsers(userStore, toAuthUsers(cfg.Console.Auth.Users), os.Getenv("JOEI_CONSOLE_AUTH_USERS"), serverLog); err != nil {
+	if err := ensureInitialAdmin(userStore, serverLog); err != nil {
 		return err
 	}
 	jwtSecret, err := resolveJWTSecret(cfg.Console.Auth.JWTSecret, settingsStore, logger)
@@ -442,7 +442,7 @@ func run(ctx context.Context, cfgPath string) error {
 		auth.WithClientIP(clientIP.ClientIP),
 		auth.WithLogger(logger))
 	if sessions.Locked() {
-		serverLog.Warn().Msg(`console auth not configured — no enabled users; /api/ is disabled (HTTP 503) until one is created with "jo-ei user create <name> --role admin" (or bootstrap via console.auth.users / JOEI_CONSOLE_AUTH_USERS on an empty database); the proxy continues to serve`)
+		serverLog.Warn().Msg(`console locked — no enabled users; /api/ is disabled (HTTP 503) until an admin is restored with "jo-ei reset-admin-password"; the proxy continues to serve`)
 	}
 
 	root := http.NewServeMux()
@@ -693,15 +693,6 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 		}
 	}
 	return nil
-}
-
-// toAuthUsers converts the config credential list into auth.User values.
-func toAuthUsers(in []config.AuthUser) []auth.User {
-	out := make([]auth.User, len(in))
-	for i, u := range in {
-		out[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
-	}
-	return out
 }
 
 // registryInfo flattens the registry config for GET /api/registries.

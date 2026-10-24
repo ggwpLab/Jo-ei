@@ -3,7 +3,10 @@
 package users
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
 	"time"
@@ -90,4 +93,30 @@ func HashPassword(password string) (string, error) {
 // never matches.
 func CheckPassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+}
+
+// InitialAdminUsername is the fixed name of the admin account created on first
+// start and restored by `jo-ei reset-admin-password`.
+const InitialAdminUsername = "admin"
+
+const (
+	generatedPasswordLen      = 20
+	generatedPasswordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+// GeneratePassword returns a random 20-character password over [A-Za-z0-9],
+// drawn from crypto/rand without modulo bias. It is the temporary password of
+// the initial admin and of `jo-ei reset-admin-password`.
+func GeneratePassword() (string, error) {
+	var b strings.Builder
+	b.Grow(generatedPasswordLen)
+	limit := big.NewInt(int64(len(generatedPasswordAlphabet)))
+	for i := 0; i < generatedPasswordLen; i++ {
+		n, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return "", fmt.Errorf("generating password: %w", err)
+		}
+		b.WriteByte(generatedPasswordAlphabet[n.Int64()])
+	}
+	return b.String(), nil
 }

@@ -300,32 +300,6 @@ func TestValidate_AcceptsGoodScanners(t *testing.T) {
 	assert.NoError(t, c.Validate())
 }
 
-func TestLoadConsoleAuthUsers(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	yaml := `
-console:
-  auth:
-    users:
-      - username: admin
-        password_hash: "$2a$10$abcdefghijklmnopqrstuv"
-      - username: alice
-        password_hash: "$2a$10$zyxwvutsrqponmlkjihgfe"
-database:
-  path: "/var/lib/jo-ei/jo-ei.db"
-`
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := config.Load(path)
-	require.NoError(t, err)
-	require.Len(t, cfg.Console.Auth.Users, 2)
-	assert.Equal(t, "admin", cfg.Console.Auth.Users[0].Username)
-	assert.Equal(t, "$2a$10$abcdefghijklmnopqrstuv", cfg.Console.Auth.Users[0].PasswordHash)
-	assert.Equal(t, "alice", cfg.Console.Auth.Users[1].Username)
-}
-
 func TestValidate_RejectsNegativeHealth(t *testing.T) {
 	c := &config.Config{}
 	c.Health.ProbeIntervalSeconds = -1

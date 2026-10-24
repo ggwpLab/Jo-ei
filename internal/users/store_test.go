@@ -155,27 +155,86 @@ func TestStore_TouchLogin(t *testing.T) {
 	assert.ErrorIs(t, s.TouchLogin("nobody", at), users.ErrNotFound)
 }
 
-func TestImportIfEmpty(t *testing.T) {
+func TestEnsureInitialAdmin_EmptyTable(t *testing.T) {
 	s := newStore(t)
-	n, err := s.ImportIfEmpty([]users.User{mk("a", users.RoleAdmin), mk("b", users.RoleOperator)})
+	pw, created, err := s.EnsureInitialAdmin()
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
-	n, err = s.ImportIfEmpty([]users.User{mk("c", users.RoleAdmin)})
+	require.True(t, created)
+	assert.Len(t, pw, 20)
+	u, err := s.Get(users.InitialAdminUsername)
 	require.NoError(t, err)
-	assert.Equal(t, 0, n)
-	list, _ := s.List()
-	assert.Len(t, list, 2)
+	assert.Equal(t, "admin", u.Username)
+	assert.Equal(t, users.RoleAdmin, u.Role)
+	assert.True(t, u.MustChangePassword)
+	assert.False(t, u.Disabled)
+	assert.True(t, users.CheckPassword(u.PasswordHash, pw))
+
+	pw2, created, err := s.EnsureInitialAdmin()
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Empty(t, pw2)
+	again, err := s.Get("admin")
+	require.NoError(t, err)
+	assert.Equal(t, u.PasswordHash, again.PasswordHash, "a second call changes nothing")
+	assert.Equal(t, u.TokenVersion, again.TokenVersion)
 }
 
-func TestImportIfEmpty_InvalidNameImportsNothing(t *testing.T) {
+func TestEnsureInitialAdmin_NonEmptyTable(t *testing.T) {
 	s := newStore(t)
-	n, err := s.ImportIfEmpty([]users.User{mk("ok", users.RoleAdmin), mk("ops+ci", users.RoleOperator)})
-	var ve *users.ValidationError
-	require.ErrorAs(t, err, &ve)
-	assert.Contains(t, err.Error(), "ops+ci")
-	assert.Equal(t, 0, n)
-	list, _ := s.List()
-	assert.Empty(t, list)
+	require.NoError(t, s.Create(users.User{Username: "ops", PasswordHash: "h", Role: users.RoleOperator, Disabled: true}))
+	pw, created, err := s.EnsureInitialAdmin()
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Empty(t, pw)
+	_, err = s.Get("admin")
+	assert.ErrorIs(t, err, users.ErrNotFound)
+}
+
+func TestResetAdmin_ExistingDemotedDisabled(t *testing.T) {
+	s := newStore(t)
+	require.NoError(t, s.Create(users.User{Username: "admin", PasswordHash: "old", Role: users.RoleOperator, Disabled: true}))
+	before, err := s.Get("admin")
+	require.NoError(t, err)
+
+	hash, err := users.HashPassword("brand-new-password-1")
+	require.NoError(t, err)
+	created, err := s.ResetAdmin(hash)
+	require.NoError(t, err)
+	assert.False(t, created)
+
+	u, err := s.Get("admin")
+	require.NoError(t, err)
+	assert.Equal(t, users.RoleAdmin, u.Role)
+	assert.False(t, u.Disabled)
+	assert.True(t, u.MustChangePassword)
+	assert.Greater(t, u.TokenVersion, before.TokenVersion, "sessions are revoked")
+	assert.True(t, users.CheckPassword(u.PasswordHash, "brand-new-password-1"))
+}
+
+func TestResetAdmin_MatchesCaseInsensitively(t *testing.T) {
+	s := newStore(t)
+	require.NoError(t, s.Create(users.User{Username: "Admin", PasswordHash: "old", Role: users.RoleAdmin}))
+	created, err := s.ResetAdmin("newhash")
+	require.NoError(t, err)
+	assert.False(t, created)
+	list, err := s.List()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, "newhash", list[0].PasswordHash)
+}
+
+func TestResetAdmin_MissingRecreates(t *testing.T) {
+	s := newStore(t)
+	require.NoError(t, s.Create(mk("alice", users.RoleAdmin)))
+	created, err := s.ResetAdmin("h-admin")
+	require.NoError(t, err)
+	assert.True(t, created)
+	u, err := s.Get("admin")
+	require.NoError(t, err)
+	assert.Equal(t, users.RoleAdmin, u.Role)
+	assert.True(t, u.MustChangePassword)
+	assert.False(t, u.Disabled)
+	assert.Equal(t, "h-admin", u.PasswordHash)
 }
 
 func TestStore_NotFound(t *testing.T) {

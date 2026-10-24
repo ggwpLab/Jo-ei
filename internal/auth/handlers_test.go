@@ -15,10 +15,19 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ggwpLab/Jo-ei/internal/auth"
 	"github.com/ggwpLab/Jo-ei/internal/users"
 )
+
+// hash returns a low-cost bcrypt hash of pw, for fast tests.
+func hash(t *testing.T, pw string) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.MinCost)
+	require.NoError(t, err)
+	return string(h)
+}
 
 func postJSON(t *testing.T, h http.Handler, path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
