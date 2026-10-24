@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 )
 
 // Attempt is one mirror's outcome. Status is the upstream HTTP status, or 0
@@ -88,6 +90,57 @@ func (a Attempts) AllNotFound() bool {
 		}
 	}
 	return true
+}
+
+// ThrottleLookup reports whether an upstream host is in a post-throttle
+// cooldown: the status that opened it (429 or 503) and the time left on it.
+// *httpx.CircuitBreaker implements it; host is in URL.Host form.
+type ThrottleLookup interface {
+	Throttle(host string) (status int, retryIn time.Duration, ok bool)
+}
+
+// Throttled reports whether the fetch failed only because some mirror was
+// throttling us: every attempt answered 404/410 or was throttled (an upstream
+// 429/503, or a circuit-breaker fast-fail), and at least one was throttled.
+// Such a failure is not proof of absence (the throttled mirror may have the
+// artifact) and not an outage either, so the proxy answers with the throttle
+// status instead of 404 or 502. status is 429 when any throttle was a 429,
+// else 503; a fast-failed mirror takes the status that opened its circuit
+// (429 when t is nil or does not know the host). retryAfter is the shortest
+// cooldown t reports among the throttled hosts, 0 when it knows none.
+func (a Attempts) Throttled(t ThrottleLookup) (status int, retryAfter time.Duration, ok bool) {
+	for _, at := range a {
+		s := at.Status
+		switch {
+		case s == http.StatusNotFound || s == http.StatusGone:
+			continue
+		case s == http.StatusTooManyRequests || s == http.StatusServiceUnavailable:
+		case s == 0 && errors.Is(at.Err, httpx.ErrCircuitOpen):
+			s = http.StatusTooManyRequests
+		default:
+			return 0, 0, false
+		}
+		if t != nil {
+			if u, err := url.Parse(at.URL); err == nil {
+				if ts, in, known := t.Throttle(u.Host); known {
+					if at.Status == 0 {
+						s = ts
+					}
+					if in > 0 && (retryAfter == 0 || in < retryAfter) {
+						retryAfter = in
+					}
+				}
+			}
+		}
+		if status != http.StatusTooManyRequests {
+			status = s
+		}
+		ok = true
+	}
+	if !ok {
+		return 0, 0, false
+	}
+	return status, retryAfter, true
 }
 
 // MarshalZerologArray renders the attempts as an array of objects.

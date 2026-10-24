@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
@@ -45,6 +46,10 @@ type HandlerConfig struct {
 	// transport caps per-host concurrency (shared with the adapters) so artifact
 	// downloads count against the same upstream rate limit as metadata fetches.
 	HTTPClient *http.Client
+	// Throttles reports upstream hosts in a post-throttle cooldown (the shared
+	// transport's circuit breaker). Optional: it only supplies Retry-After and
+	// the 429-versus-503 choice for circuit-open mirrors on a throttled answer.
+	Throttles upstream.ThrottleLookup
 }
 
 // hopByHopHeaders are connection-specific headers that must not be forwarded
@@ -182,8 +187,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !deferSC {
 		meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
 		if err != nil {
+			atts, hasAtts := upstream.AttemptsFrom(err)
+			if status, retry, ok := atts.Throttled(h.cfg.Throttles); hasAtts && ok {
+				log.Warn().Array("upstream_attempts", atts).Msg("upstream metadata unavailable: mirrors throttled")
+				record(gate.VerdictError, gate.GateSupply, "upstream_throttled", status, nil)
+				httpx.SetRetryAfter(w.Header(), retry)
+				h.writeError(w, requestID, ref, status, "upstream_throttled")
+				return
+			}
 			ev := log.Error().Err(err)
-			if atts, ok := upstream.AttemptsFrom(err); ok {
+			if hasAtts {
 				ev = ev.Array("upstream_attempts", atts)
 			}
 			ev.Msg("failed to fetch upstream metadata")
@@ -236,6 +249,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on any upstream")
 			record(gate.VerdictError, gate.GateSupply, "artifact_not_found", http.StatusNotFound, nil)
 			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
+			return
+		}
+		if status, retry, ok := atts.Throttled(h.cfg.Throttles); ok {
+			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on reachable upstreams; others throttled")
+			record(gate.VerdictError, gate.GateSupply, "upstream_throttled", status, nil)
+			httpx.SetRetryAfter(w.Header(), retry)
+			h.writeError(w, requestID, ref, status, "upstream_throttled")
 			return
 		}
 		log.Error().Err(err).Array("upstream_attempts", atts).Msg("failed to download artifact")
@@ -488,9 +508,11 @@ func (h *Handler) forwardUpstream(r *http.Request) (*http.Response, upstream.Att
 
 // writeForwardError answers a request that never got a usable upstream
 // response: 500 when no upstream is configured, 400 when the client's own
-// request body could not be read, 404 when every mirror said not-found, and
-// 502 for every other upstream failure.
+// request body could not be read, 404 when every mirror said not-found, 429 or
+// 503 when the rest were throttled (see upstream.Attempts.Throttled), and 502
+// for every other upstream failure.
 func (h *Handler) writeForwardError(w http.ResponseWriter, atts upstream.Attempts, err error, log zerolog.Logger) {
+	throttleStatus, retry, throttled := atts.Throttled(h.cfg.Throttles)
 	switch {
 	case errors.Is(err, errNoUpstreams):
 		log.Error().Msg("adapter returned no upstream URLs")
@@ -500,6 +522,10 @@ func (h *Handler) writeForwardError(w http.ResponseWriter, atts upstream.Attempt
 	case atts.AllNotFound():
 		log.Warn().Array("upstream_attempts", atts).Msg("not found on any upstream")
 		http.Error(w, "not found", http.StatusNotFound)
+	case throttled:
+		log.Warn().Array("upstream_attempts", atts).Msg("not found on reachable upstreams; others throttled")
+		httpx.SetRetryAfter(w.Header(), retry)
+		http.Error(w, "upstream throttled", throttleStatus)
 	default:
 		log.Error().Array("upstream_attempts", atts).Msg("no upstream available")
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)

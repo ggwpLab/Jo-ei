@@ -33,6 +33,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
+	"github.com/ggwpLab/Jo-ei/internal/upstream"
 	"github.com/ggwpLab/Jo-ei/internal/users"
 	"github.com/ggwpLab/Jo-ei/web"
 )
@@ -99,6 +100,9 @@ type sharedDeps struct {
 	// the same cap.
 	adapterClient  *http.Client
 	downloadClient *http.Client
+	// throttles is the shared transport's circuit breaker, read by handlers
+	// to answer 429/503 with Retry-After when the other mirrors returned 404.
+	throttles upstream.ThrottleLookup
 
 	cveRecheckTTL       time.Duration
 	malwareRecheckTTL   time.Duration
@@ -265,6 +269,7 @@ func run(ctx context.Context, cfgPath string) error {
 		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: store, Broadcaster: broadcaster}),
 		adapterClient:  adapterClient,
 		downloadClient: downloadClient,
+		throttles:      cb,
 
 		cveRecheckTTL:       time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
 		malwareRecheckTTL:   time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
@@ -388,6 +393,7 @@ func run(ctx context.Context, cfgPath string) error {
 			Recorder:      shared.recorder,
 			Logger:        logger,
 			HTTPClient:    dockerClient,
+			Throttles:     cb,
 			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 		})
 	}
@@ -606,6 +612,7 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		CVERecheckTTL:       shared.cveRecheckTTL,
 		MalwareRecheckTTL:   shared.malwareRecheckTTL,
 		HTTPClient:          shared.downloadClient,
+		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
 	})
 }

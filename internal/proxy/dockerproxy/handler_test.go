@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 )
 
@@ -346,5 +347,42 @@ func TestHandlerManifestUnknownReturns404(t *testing.T) {
 	}
 	if len(rec.events) != 1 || rec.events[0].HTTPStatus != http.StatusNotFound || rec.events[0].Reason != "manifest_not_found" {
 		t.Errorf("events = %+v, want one 404 manifest_not_found event", rec.events)
+	}
+}
+
+// A manifest absent from one mirror while another throttles is not
+// MANIFEST_UNKNOWN and not an outage: TOOMANYREQUESTS with Retry-After.
+func TestHandlerManifestNotFoundPlusThrottledReturns429(t *testing.T) {
+	srvURL, repo, _ := newGateTestServer(t)
+	throttled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "20")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(throttled.Close)
+
+	cb := httpx.NewCircuitBreaker(http.DefaultTransport, time.Millisecond, time.Minute)
+	adapter := NewAdapter([]string{srvURL, throttled.URL}, &http.Client{Transport: cb})
+	store := newVerdictStore(newFakeCache())
+	mgate := newManifestGate(gateDeps{
+		adapter: adapter, scanner: stubScanner{}, av: stubAV{},
+		filter: allowFilter{}, policy: findingPolicy{},
+		store: store, logger: zerolog.Nop(),
+	})
+	rec := &recspy{}
+	h := NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Recorder: rec, Logger: zerolog.Nop(), Throttles: cb})
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/sha256-deadbeef", nil))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "TOOMANYREQUESTS") {
+		t.Errorf("body = %s, want TOOMANYREQUESTS error code", w.Body.String())
+	}
+	if got := w.Header().Get("Retry-After"); got != "20" && got != "21" {
+		t.Errorf("Retry-After = %q, want ~20", got)
+	}
+	if len(rec.events) != 1 || rec.events[0].HTTPStatus != http.StatusTooManyRequests || rec.events[0].Reason != "upstream_throttled" {
+		t.Errorf("events = %+v, want one 429 upstream_throttled event", rec.events)
 	}
 }

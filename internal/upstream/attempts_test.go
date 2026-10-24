@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
@@ -126,5 +127,63 @@ func TestAttempts_EmptyErrorText(t *testing.T) {
 	var atts upstream.Attempts
 	if msg := atts.Error(); msg != "no upstream attempts were made" {
 		t.Fatalf("Error() = %q on an empty Attempts", msg)
+	}
+}
+
+// fakeThrottles maps host → (status that opened its circuit, time left).
+type fakeThrottles map[string]struct {
+	status  int
+	retryIn time.Duration
+}
+
+func (f fakeThrottles) Throttle(host string) (int, time.Duration, bool) {
+	t, ok := f[host]
+	return t.status, t.retryIn, ok
+}
+
+func TestAttempts_Throttled(t *testing.T) {
+	circuitOpen := fmt.Errorf("b.example: %w", httpx.ErrCircuitOpen)
+	type att struct {
+		url    string
+		status int
+		err    error
+	}
+	lookup := fakeThrottles{
+		"a.example":      {http.StatusTooManyRequests, 9 * time.Second},
+		"b.example":      {http.StatusServiceUnavailable, 4 * time.Second},
+		"c.example:8443": {http.StatusTooManyRequests, 2 * time.Second},
+	}
+	tests := []struct {
+		name       string
+		atts       []att
+		lookup     upstream.ThrottleLookup
+		wantOK     bool
+		wantStatus int
+		wantRetry  time.Duration
+	}{
+		{"404 plus 429 is a throttle", []att{{"https://x.example/p", 404, nil}, {"https://a.example/p", 429, nil}}, lookup, true, 429, 9 * time.Second},
+		{"404 plus 503 answers 503", []att{{"https://x.example/p", 404, nil}, {"https://b.example/p", 503, nil}}, lookup, true, 503, 4 * time.Second},
+		{"410 counts as absent", []att{{"https://x.example/p", 410, nil}, {"https://a.example/p", 429, nil}}, lookup, true, 429, 9 * time.Second},
+		{"any 429 wins over 503; shortest retry", []att{{"https://a.example/p", 429, nil}, {"https://b.example/p", 503, nil}}, lookup, true, 429, 4 * time.Second},
+		{"breaker fast-fail takes the status that opened it", []att{{"https://x.example/p", 404, nil}, {"https://b.example/p", 0, circuitOpen}}, lookup, true, 503, 4 * time.Second},
+		{"breaker fast-fail without a lookup reads as 429", []att{{"https://x.example/p", 404, nil}, {"https://b.example/p", 0, circuitOpen}}, nil, true, 429, 0},
+		{"host with a port, credentials stripped", []att{{"https://u:p@c.example:8443/p", 429, nil}}, lookup, true, 429, 2 * time.Second},
+		{"throttled host unknown to the lookup: no retry hint", []att{{"https://z.example/p", 429, nil}}, lookup, true, 429, 0},
+		{"a real 5xx keeps it a 502", []att{{"https://x.example/p", 502, nil}, {"https://a.example/p", 429, nil}}, lookup, false, 0, 0},
+		{"a connection error keeps it a 502", []att{{"https://x.example/p", 0, errors.New("dial tcp: refused")}, {"https://a.example/p", 429, nil}}, lookup, false, 0, 0},
+		{"every mirror 404 is not a throttle", []att{{"https://x.example/p", 404, nil}}, lookup, false, 0, 0},
+		{"no attempts", nil, lookup, false, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a upstream.Attempts
+			for _, at := range tt.atts {
+				a.Add(at.url, at.status, at.err, time.Millisecond)
+			}
+			status, retry, ok := a.Throttled(tt.lookup)
+			if ok != tt.wantOK || status != tt.wantStatus || retry != tt.wantRetry {
+				t.Fatalf("Throttled = (%d, %v, %v), want (%d, %v, %v)", status, retry, ok, tt.wantStatus, tt.wantRetry, tt.wantOK)
+			}
+		})
 	}
 }

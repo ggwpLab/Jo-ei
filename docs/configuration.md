@@ -44,7 +44,11 @@ process exits non-zero.
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
-with exponential cooldown (1s–20s, honoring `Retry-After`).
+with exponential cooldown (1s–20s, honoring `Retry-After`). When the other
+mirrors answered 404/410 and only throttled ones remain, the client gets 429
+(503 if no throttle was a 429) with `Retry-After` set to the shortest
+remaining cooldown, instead of a 502 — the artifact may well exist on the
+throttled mirror, so clients such as Maven back off and retry.
 
 npm resolves a version range from a package's metadata document before it ever
 requests a tarball, so a version blocked at download time gives it nowhere to
