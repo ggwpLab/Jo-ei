@@ -178,6 +178,11 @@ func (r *Runtime) Update(fn func(cur RuntimeParams) RuntimeParams) error {
 }
 
 func (r *Runtime) updateLocked(p RuntimeParams) error {
+	// Store entries trimmed, as EditList does, so an entry set via PUT can
+	// be removed by the list endpoint under the same spelling.
+	p.AllowlistSupply = trimEntries(p.AllowlistSupply)
+	p.AllowlistCVE = trimEntries(p.AllowlistCVE)
+	p.Denylist = trimEntries(p.Denylist)
 	if err := validateParams(p); err != nil {
 		return err
 	}
@@ -225,6 +230,19 @@ func (r *Runtime) EditList(list, entry string, add bool) (changed bool, err erro
 		return false, err
 	}
 	return true, nil
+}
+
+// trimEntries returns a copy of entries with surrounding whitespace removed;
+// nil stays nil.
+func trimEntries(entries []string) []string {
+	if entries == nil {
+		return nil
+	}
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = strings.TrimSpace(e)
+	}
+	return out
 }
 
 func validateParams(p RuntimeParams) error {

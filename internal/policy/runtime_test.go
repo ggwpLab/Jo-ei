@@ -271,3 +271,21 @@ func TestRuntime_ConcurrentEditsNoLoss(t *testing.T) {
 	wg.Wait()
 	assert.Len(t, r.Current().Denylist, n)
 }
+
+func TestRuntimeApplyTrimsListEntries(t *testing.T) {
+	r := newRuntime(t, nil)
+	p := r.Current()
+	p.Denylist = []string{" npm/x "}
+	p.AllowlistSupply = []string{"\tpypi/a"}
+	p.AllowlistCVE = []string{"npm/b@1.0 "}
+	require.NoError(t, r.Apply(p))
+	got := r.Current()
+	assert.Equal(t, []string{"npm/x"}, got.Denylist)
+	assert.Equal(t, []string{"pypi/a"}, got.AllowlistSupply)
+	assert.Equal(t, []string{"npm/b@1.0"}, got.AllowlistCVE)
+
+	changed, err := r.EditList(policy.ListDenylist, "npm/x", false)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, r.Current().Denylist)
+}

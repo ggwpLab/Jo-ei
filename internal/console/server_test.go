@@ -703,3 +703,27 @@ func TestPutPolicy_PresentEmptyListClears(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Empty(t, body.Denylist)
 }
+
+func TestPutPolicy_PaddedEntryStoredTrimmedAndRemovable(t *testing.T) {
+	h := listHandler(t, zerolog.Nop(), opID)
+	rec := doBody(h, adminID, http.MethodPut, "/api/policy",
+		`{"mode":"enforce","min_age_hours":24,"cve_block_on":"HIGH","denylist":[" npm/x "],"allowlist_supply":["  pypi/a"],"allowlist_cve":["npm/b@1.0 "]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var body struct {
+		Denylist        []string `json:"denylist"`
+		AllowlistSupply []string `json:"allowlist_supply"`
+		AllowlistCVE    []string `json:"allowlist_cve"`
+	}
+	rec = doBody(h, opID, http.MethodGet, "/api/policy", "")
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, []string{"npm/x"}, body.Denylist)
+	assert.Equal(t, []string{"pypi/a"}, body.AllowlistSupply)
+	assert.Equal(t, []string{"npm/b@1.0"}, body.AllowlistCVE)
+
+	rec = doBody(h, opID, http.MethodDelete, "/api/policy/lists/denylist", `{"entry":"npm/x"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body.Denylist = nil
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Denylist)
+}
