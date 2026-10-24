@@ -383,7 +383,7 @@ user `admin` (role admin) with a random 20-character temporary password
 (`A–Z a–z 0–9`) and logs it exactly once, as a `warn` line:
 
 ```json
-{"level":"warn","component":"server","time":"2026-10-24T10:00:00Z","user":"admin","password":"<temporary>","hint":"temporary password: change it at first sign-in; lost it? run jo-ei reset-admin-password","message":"created initial admin user"}
+{"level":"warn","component":"server","user":"admin","password":"<temporary>","hint":"temporary password: change it at first sign-in; lost it? run jo-ei reset-admin-password","time":"2026-10-24T10:00:00Z","message":"created initial admin user"}
 ```
 
 Find it with:
