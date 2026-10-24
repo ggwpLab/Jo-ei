@@ -63,7 +63,7 @@ func TestResetAdminPassword_ResetsExistingAdmin(t *testing.T) {
 
 	out, errOut, err := runResetAdmin(t, db)
 	require.NoError(t, err)
-	assert.Regexp(t, onePasswordLine, out, "stdout carries only the password")
+	require.Regexp(t, onePasswordLine, out, "stdout carries only the password")
 	assert.NotContains(t, errOut, out[:20], "the password goes to stdout only")
 	pw := out[:20]
 

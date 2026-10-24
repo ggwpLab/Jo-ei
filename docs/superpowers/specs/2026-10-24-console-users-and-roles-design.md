@@ -218,9 +218,11 @@ operator. Quarantine/drawer `saveLists` also switches to the list endpoints.
 *Owner decision, 2026-10-24.* This replaces the earlier draft, which imported
 config/env users into an empty table and kept a `jo-ei user` CLI.
 
-- Startup: open DB, run migrations. If the `users` table has no rows at all
-  (`Store.HasAnyUsers` false), `Store.EnsureInitialAdmin` creates, in one
-  transaction that re-checks emptiness, user `admin` with role `admin`,
+- Startup: open DB, run migrations, call `Store.EnsureInitialAdmin`. If the
+  `users` table has no rows at all it creates — with a single
+  `INSERT ... WHERE NOT EXISTS (SELECT 1 FROM users)` statement, so two
+  processes starting on the same empty database cannot both create it or fail
+  with "database is locked" — user `admin` with role `admin`,
   `must_change_password = true` and a random 20-character password
   (`A–Z a–z 0–9`, crypto/rand, unbiased — `users.GeneratePassword`).
 - The password is logged exactly once, at creation, as one `warn` line:
@@ -233,8 +235,11 @@ config/env users into an empty table and kept a `jo-ei user` CLI.
   warning points at `jo-ei reset-admin-password`.
 - `console.auth.users`, `JOEI_CONSOLE_AUTH_USERS`, `auth.ParseBootstrapUsers`
   and `Store.ImportIfEmpty` are removed outright — no compatibility handling and
-  no warning. Existing installs keep their users (they are already in the
-  database); a fresh or empty database no longer reads config/env users.
+  no warning. A database that already holds users keeps them; a fresh or empty
+  database no longer reads config/env users. Upgrading from 0.5.x: the users
+  table is new, so the accounts defined in `console.auth.users` /
+  `JOEI_CONSOLE_AUTH_USERS` are not imported — a fresh `admin` with a generated
+  password is created and the other people are re-created on the Users page.
 - Security trade-off, documented: the temporary password lands in the logs (and
   any log aggregator) and stays valid until `admin` signs in and changes it.
 - `Users` is DB-backed; `Locked()` = no enabled users.

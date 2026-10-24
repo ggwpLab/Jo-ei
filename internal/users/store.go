@@ -101,16 +101,6 @@ func (s *Store) HasEnabledUsers() (bool, error) {
 	return n > 0, nil
 }
 
-// HasAnyUsers reports whether the table holds at least one user, enabled or
-// not. An empty table is what EnsureInitialAdmin fills.
-func (s *Store) HasAnyUsers() (bool, error) {
-	var n int
-	if err := s.db.SQL().QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
-		return false, fmt.Errorf("counting users: %w", err)
-	}
-	return n > 0, nil
-}
-
 func validateNew(u User) error {
 	if err := ValidateUsername(u.Username); err != nil {
 		return err
@@ -272,21 +262,22 @@ func (s *Store) TouchLogin(username string, at time.Time) error {
 // EnsureInitialAdmin creates the initial admin account when the users table
 // is completely empty: user InitialAdminUsername, role admin, a generated
 // password (returned so the caller can show it once) and
-// must_change_password set. The emptiness check and the insert share one
-// transaction. A table with any row, even only disabled users, is left alone
-// and created is false.
+// must_change_password set. A table with any row, even only disabled users, is
+// left alone and created is false.
+//
+// The emptiness check and the insert are one INSERT ... WHERE NOT EXISTS
+// statement, which takes the write lock up front (waiting out busy_timeout)
+// instead of upgrading a read transaction — the upgrade fails at once with
+// "database is locked" when two processes start on the same empty database.
+// created is true only for the process whose statement inserted the row, so
+// only that one ever sees (and logs) a password.
 func (s *Store) EnsureInitialAdmin() (password string, created bool, err error) {
-	tx, err := s.db.SQL().Begin()
-	if err != nil {
-		return "", false, fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+	if err := s.db.SQL().QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
 		return "", false, fmt.Errorf("counting users: %w", err)
 	}
 	if n > 0 {
-		return "", false, nil
+		return "", false, nil // the common case: skip hashing on every start
 	}
 	password, err = GeneratePassword()
 	if err != nil {
@@ -296,13 +287,21 @@ func (s *Store) EnsureInitialAdmin() (password string, created bool, err error) 
 	if err != nil {
 		return "", false, fmt.Errorf("hashing password: %w", err)
 	}
-	if err := insert(tx, User{
-		Username: InitialAdminUsername, PasswordHash: hash, Role: RoleAdmin, MustChangePassword: true,
-	}); err != nil {
-		return "", false, err
+	now := time.Now()
+	// token_version starts time-derived, as in insert.
+	res, err := s.db.SQL().Exec(
+		`INSERT INTO users (username, password_hash, role, disabled, must_change_password, token_version, created_at)
+		 SELECT ?, ?, ?, 0, 1, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)`,
+		InitialAdminUsername, hash, string(RoleAdmin), now.UnixNano(), now.Unix())
+	if err != nil {
+		return "", false, fmt.Errorf("creating the initial admin: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return "", false, fmt.Errorf("commit: %w", err)
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		return "", false, fmt.Errorf("creating the initial admin: %w", err)
+	}
+	if inserted == 0 {
+		return "", false, nil // another process filled the table first
 	}
 	return password, true, nil
 }

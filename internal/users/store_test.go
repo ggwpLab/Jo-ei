@@ -2,6 +2,7 @@ package users_test
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,6 +180,46 @@ func TestEnsureInitialAdmin_EmptyTable(t *testing.T) {
 	assert.Equal(t, u.TokenVersion, again.TokenVersion)
 }
 
+// Two processes starting on the same empty database: exactly one creates the
+// admin (and so logs the password), the other sees created=false, and neither
+// fails with "database is locked".
+func TestEnsureInitialAdmin_ConcurrentProcesses(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		path := filepath.Join(t.TempDir(), "shared.db")
+		stores := make([]*users.Store, 2)
+		for j := range stores {
+			db, err := storage.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			stores[j], err = users.New(db)
+			require.NoError(t, err)
+		}
+		var wg sync.WaitGroup
+		created := make([]bool, 2)
+		pws := make([]string, 2)
+		errs := make([]error, 2)
+		for j, st := range stores {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				pws[j], created[j], errs[j] = st.EnsureInitialAdmin()
+			}()
+		}
+		wg.Wait()
+		require.NoError(t, errs[0])
+		require.NoError(t, errs[1])
+		require.NotEqual(t, created[0], created[1], "exactly one process creates the admin")
+		winner := 0
+		if created[1] {
+			winner = 1
+		}
+		assert.Empty(t, pws[1-winner], "the loser reports no password")
+		u, err := stores[0].Get("admin")
+		require.NoError(t, err)
+		assert.True(t, users.CheckPassword(u.PasswordHash, pws[winner]), "the logged password is the stored one")
+	}
+}
+
 func TestEnsureInitialAdmin_NonEmptyTable(t *testing.T) {
 	s := newStore(t)
 	require.NoError(t, s.Create(users.User{Username: "ops", PasswordHash: "h", Role: users.RoleOperator, Disabled: true}))
@@ -245,15 +286,4 @@ func TestStore_NotFound(t *testing.T) {
 	assert.ErrorIs(t, s.Delete("x"), users.ErrNotFound)
 	assert.ErrorIs(t, s.SetDisabled("x", true), users.ErrNotFound)
 	assert.ErrorIs(t, s.SetPassword("x", "h", false), users.ErrNotFound)
-}
-
-func TestStore_HasAnyUsers(t *testing.T) {
-	s := newStore(t)
-	has, err := s.HasAnyUsers()
-	require.NoError(t, err)
-	assert.False(t, has)
-	require.NoError(t, s.Create(users.User{Username: "d", PasswordHash: "h", Role: users.RoleOperator, Disabled: true}))
-	has, err = s.HasAnyUsers()
-	require.NoError(t, err)
-	assert.True(t, has, "a disabled user still makes the table non-empty")
 }
