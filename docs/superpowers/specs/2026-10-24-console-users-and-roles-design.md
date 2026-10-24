@@ -239,7 +239,10 @@ The CLI writes to SQLite while the server may be running (WAL mode, the server
 reads users per request, so changes apply live). It is the recovery path for
 "every admin is locked out"; it is not subject to the last-admin or self
 guards except that `create` refuses an existing name. Docs show the Docker form
-(`docker compose exec jo-ei jo-ei user reset-password admin`).
+(`docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin --generate`:
+the distroless image has no shell and `/jo-ei` is not on `PATH`, `--config`
+defaults to `config.yaml` in the working directory, and `-T` is needed to pipe a
+password on stdin).
 
 ### Console
 

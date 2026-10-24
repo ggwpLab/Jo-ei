@@ -373,8 +373,16 @@ the first with `jo-ei user create <name> --role admin`.
 also re-enables a disabled user and revokes their sessions:
 
 ```sh
-jo-ei user reset-password admin
-docker compose exec jo-ei jo-ei user reset-password admin
+jo-ei user reset-password admin --generate
+```
+
+In the Docker image the binary is `/jo-ei` (not on `PATH`; the image has no
+shell) and `--config` defaults to `config.yaml` in the working directory, so
+name both. `-T` gives the command a plain stdin, needed when piping a password:
+
+```sh
+docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin --generate
+printf '%s\n' 'new-password-here' | docker compose exec -T jo-ei /jo-ei --config /etc/jo-ei/config.yaml user reset-password admin
 ```
 
 The password is read from the first line of stdin (or pass `--generate` to have
