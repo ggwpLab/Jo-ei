@@ -85,7 +85,9 @@ type Config struct {
 	// is gated on image-scan at boot).
 	ImageScanEnabled bool
 	Health           ScannerHealthProvider // optional; nil reports no scanners
-	Logger           zerolog.Logger
+	// Users backs the /api/users routes; nil answers 503 users_unavailable.
+	Users  UserAdmin
+	Logger zerolog.Logger
 	// SSEHeartbeat is the idle keep-alive interval for /api/events. With no
 	// traffic the stream is otherwise silent for hours and intermediaries
 	// (Docker port-forwards, AV web filters) drop the idle connection.
@@ -139,6 +141,11 @@ func NewHandler(cfg Config) http.Handler {
 	admin("PUT /api/registries", s.putRegistries)
 	admin("POST /api/cache/cleanup", s.cacheCleanup)
 	operator("GET /api/metrics/daily", s.dailyMetrics)
+	admin("GET /api/users", s.listUsers)
+	admin("POST /api/users", s.createUser)
+	admin("PATCH /api/users/{name}", s.patchUser)
+	admin("POST /api/users/{name}/password", s.resetUserPassword)
+	admin("DELETE /api/users/{name}", s.deleteUser)
 	return mux
 }
 
