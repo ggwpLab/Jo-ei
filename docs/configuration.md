@@ -343,7 +343,9 @@ an internal interface.
 ### Users and roles
 
 Console users are stored in the database and managed from the console's Users
-page (admins only) or the CLI (`jo-ei user create|list|role|disable|enable|reset-password|delete`).
+page (admins only). The CLI covers only the basics: `jo-ei user create|reset-password|list`
+(reset-password also re-enables a disabled user). Changing a role and disabling,
+enabling or deleting a user are Users-page / API operations, not CLI ones.
 There are two roles:
 
 | | `operator` | `admin` |

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Console users and roles.** Users now live in the database with an `admin` or
   `operator` role, managed from a new Users page in the console or with
-  `jo-ei user create|list|role|disable|enable|reset-password|delete`. Sessions
+  `jo-ei user create|reset-password|list`. Sessions
   are revocable, passwords are 12 characters to 72 bytes, and temporary
   passwords force a change at next sign-in. Sign-in is rate limited (5 failures
   per user and IP, 20 per IP, per 15 minutes; `429` with `Retry-After`). New
