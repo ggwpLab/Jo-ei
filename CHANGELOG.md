@@ -32,9 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config/env console users are bootstrap-only.** `console.auth.users` and
   `JOEI_CONSOLE_AUTH_USERS` are imported as admins once, into an empty users
   table; editing them after first boot no longer changes who can log in (a
-  warning is logged). `PUT /api/policy` and `POST /api/cache/cleanup` are now
-  admin-only, and `PUT /api/policy` keeps allow/deny lists that are absent from
-  the body.
+  warning is logged). `PUT /api/policy`, `PUT /api/registries` and
+  `POST /api/cache/cleanup` are now admin-only, and `PUT /api/policy` keeps
+  allow/deny lists that are absent from the body.
+
+  **Upgrade warning:** usernames must now be 1–64 characters of
+  `[A-Za-z0-9._@-]`. On the first boot of this version — only while the users
+  table is still empty — a `console.auth.users` or `JOEI_CONSOLE_AUTH_USERS`
+  name that breaks this rule (e.g. `ivan petrov`, `ops+ci`) stops startup.
+  Rename it before upgrading.
 
 - **One log format across the proxy.** Package downloads, metadata filtering,
   transparent proxying, Docker, the console API, telemetry and startup used to

@@ -68,9 +68,27 @@ Forwarding headers are believed only when the request's direct peer is listed in
 forge them. With `trusted_proxies` empty, every client behind nginx or Traefik
 appears to come from the proxy's IP, so the per-IP console login limits are shared
 by all users. For `X-Forwarded-For` the right-most address that is not a trusted
-proxy is the client. When a forwarding header arrives from an untrusted peer,
+proxy is the client; client-supplied entries to the left of it are ignored, so a
+junk `X-Forwarded-For` sent by the client cannot hide its address. When a
+forwarding header arrives from an untrusted peer,
 Jō-ei logs a one-time warning mentioning `server.trusted_proxies` with the
 offending `peer`; seeing it means the proxy needs to be listed.
+
+Set it to the proxy's own address, or the network the proxy connects from — for
+example nginx on the Docker host reaching Jō-ei over the compose network:
+
+```yaml
+server:
+  trusted_proxies:
+    - 172.18.0.1        # the proxy's address as Jō-ei sees it
+    # - 172.18.0.0/16   # or the proxy's network, if its address changes
+  client_ip_header: X-Forwarded-For
+```
+
+> **Warning:** list only proxy addresses, never client ranges. Every peer in a
+> trusted range may set the forwarding header to any value, so a broad CIDR
+> (say `10.0.0.0/8` when your users also sit in it) lets those clients spoof
+> their IP and dodge the login limits.
 
 ## `tls`
 
@@ -352,7 +370,8 @@ There are two roles:
 |---|---|---|
 | View overview, requests, cache, policy, registries | yes | yes |
 | Add or remove allow/deny list entries | yes | yes |
-| Change policy mode or minimum age (`PUT /api/policy`) | no | yes |
+| Change policy mode, minimum age or CVE threshold (`PUT /api/policy`) | no | yes |
+| Change registries (`PUT /api/registries`) | no | yes |
 | Purge the cache (`POST /api/cache/cleanup`) | no | yes |
 | Manage users | no | yes |
 | Change own password | yes | yes |
