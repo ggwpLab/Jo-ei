@@ -82,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`docker pull` works with containerd-based clients.** Docker Desktop's
+  default (containerd) image store also fetches an image's BuildKit
+  attestation blobs (SBOM/provenance). Their manifests were served
+  un-gated, but the blobs were never cached, so every pull of an official
+  image failed with "could not fetch content descriptor … not found" right
+  after the image itself passed the gate. The proxy now remembers the config
+  and non-filesystem layers of each attestation manifest it serves and
+  relays exactly those blobs from upstream — capped at 16 MB, verified
+  against their digest, not cached. Filesystem layers are still served only
+  after scanning.
 - **Stopping the proxy no longer hangs on an open console tab.** The live
   event stream held the graceful shutdown until its 30 s deadline, which then
   failed with an error — and Compose had already killed the container after
