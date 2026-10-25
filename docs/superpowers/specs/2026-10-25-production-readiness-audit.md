@@ -105,7 +105,7 @@ first anyway — in-flight downloads are cut, nothing is drained.
   shutdown) to end SSE streams; set `stop_grace_period` in compose above the
   drain timeout; make the drain timeout configurable.
 
-### 4. Behind the reverse proxy, the login limiter keys every client on the proxy IP
+### 4. Behind the reverse proxy, the login limiter keys every client on the proxy IP — FIXED (`fix/proxy-trust-osv-backup`)
 The login limiter counts failures per IP as well as per (user, IP). With
 `server.trusted_proxies` unset (the shipped default), every client is the
 reverse proxy's address, so anyone hammering the login locks **all** admins
@@ -154,14 +154,14 @@ layers land on the overlay filesystem of the VM's root disk, and `Put` then
 cache path (same FS → `rename`, also needed for fix #2) and allow
 `read_only: true` for the container.
 
-### 9. No backup/restore story for the SQLite state
+### 9. No backup/restore story for the SQLite state — FIXED (`fix/proxy-trust-osv-backup`)
 Two databases: `/var/lib/jo-ei/jo-ei.db` (users, JWT secret, policy,
 registries, telemetry) and `<cache>/index.db`. Copying a WAL database while it
 is being written is not safe. Provide `jo-ei backup <path>` (`VACUUM INTO`) or
 document the procedure; document that the cache volume is disposable but
 `index.db` must match the artifact files.
 
-### 10. OSV scanner bypasses the shared upstream transport
+### 10. OSV scanner bypasses the shared upstream transport — FIXED (`fix/proxy-trust-osv-backup`)
 `scanner.NewOSVScanner` builds `&http.Client{Timeout: 15s}` on the default
 transport: it ignores `tls.ca_files`, the rate/concurrency caps and the
 upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails

@@ -511,6 +511,24 @@ reverse proxy:
 - **Scanner images** are pinned (`clamav/clamav:1.5`, `aquasec/trivy:0.76.1`
   — the Trivy server must match the client in the Jō-ei image).
 
+### Backup and restore
+
+The state worth backing up is one SQLite file, `database.path`
+(`/var/lib/jo-ei/jo-ei.db` in the image): console users, the session signing
+key, policy and registry edits, and telemetry. Copying it while the proxy runs
+is not safe (WAL mode), so take an online backup with the binary:
+
+```bash
+docker compose exec jo-ei /jo-ei --config /etc/jo-ei/config.yaml backup --output /var/lib/jo-ei/backup-$(date +%F).db
+docker compose cp jo-ei:/var/lib/jo-ei/backup-$(date +%F).db .
+```
+
+`backup` refuses to overwrite an existing file. To restore: stop Jō-ei, put
+the backup in place of `jo-ei.db` in the `jo-ei-db` volume, delete any
+`jo-ei.db-wal` / `jo-ei.db-shm` next to it, and start again. The artifact
+cache volume needs no backup — it is a cache; if you reset it, remove the
+whole volume (artifacts and `index.db` together) rather than either half.
+
 ## Monitoring
 
 Jō-ei exposes Prometheus metrics (requests, upstreams, scanners, verdicts, cache)

@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distroless image, and the compose file uses it as the container healthcheck.
 - **`server.shutdown_timeout_seconds`** (default 30) bounds how long a stopping
   server drains in-flight requests.
+- **`jo-ei backup --output <file>`** writes a consistent online copy of the
+  state database (users, signing key, policy, telemetry) while the proxy runs
+  (SQLite `VACUUM INTO`); it never overwrites an existing file. The README
+  documents backup and restore.
 
 ### Changed
 
@@ -82,6 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`server.trusted_proxies` can be set from the environment.** The key was
+  only commented out in `config.yaml`, and environment overrides only reach
+  keys the file contains, so `JOEI_SERVER_TRUSTED_PROXIES` was silently
+  ignored — behind a reverse proxy, every client then shared the proxy's
+  login-throttling bucket. `trusted_proxies` and `client_ip_header` are now
+  real keys, and the README explains the reverse-proxy setup.
+- **CVE lookups honour `tls.ca_files` and the upstream limits.** The OSV
+  scanner used its own HTTP client, so behind a TLS-inspecting corporate proxy
+  every lookup failed — and the fail-closed CVE gate answered 503 for every
+  uncached download. It now uses the shared upstream transport.
 - **`docker pull` works with containerd-based clients.** Docker Desktop's
   default (containerd) image store also fetches an image's BuildKit
   attestation blobs (SBOM/provenance). Their manifests were served
