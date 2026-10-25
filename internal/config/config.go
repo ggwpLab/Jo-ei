@@ -372,9 +372,12 @@ type LoggingConfig struct {
 
 // Load reads a YAML config file and returns a Config.
 // Environment variables prefixed with JOEI_ override file values: the variable
-// name is the config key path with dots replaced by underscores, e.g.
-// JOEI_LOGGING_LEVEL overrides logging.level and JOEI_CVE_BLOCK_ON overrides
-// cve.block_on. Only keys present in the file can be overridden.
+// name is the config key path uppercased with dots replaced by underscores,
+// e.g. JOEI_LOGGING_LEVEL sets logging.level and JOEI_CACHE_LOCAL_MAX_SIZE_GB
+// sets cache.local.max_size_gb — for every scalar and string-list key, whether
+// or not the file contains it (lists are comma-separated). Lists of objects
+// and maps (malware.scanners, policy.profiles) can only be set in the file.
+// A JOEI_* variable that sets nothing fails the load.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
@@ -389,6 +392,9 @@ func Load(path string) (*Config, error) {
 	v.SetEnvPrefix("JOEI")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	if err := bindEnv(v, environ()); err != nil {
+		return nil, err
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("reading config %q: %w", path, err)

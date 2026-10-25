@@ -15,8 +15,25 @@ path, replace dots with underscores, uppercase it, and prefix `JOEI_`.
 | `cve.block_on` | `JOEI_CVE_BLOCK_ON` |
 | `supply_chain.min_age_hours` | `JOEI_SUPPLY_CHAIN_MIN_AGE_HOURS` |
 
-Only keys that appear in the YAML file can be overridden (the override
-replaces the file's value; it cannot introduce a key the file omits).
+This works for every scalar and string-list key, whether or not the file
+contains it. String lists are comma- (or, for `server.trusted_proxies`,
+space-) separated, e.g.
+`JOEI_REGISTRIES_PYPI_UPSTREAMS=https://pypi.org,https://mirror.example`.
+Lists of objects and maps — `malware.scanners` and `policy.profiles` — can
+only be set in the file.
+
+A `JOEI_*` variable that sets nothing stops startup with an error naming it —
+a misspelt name, or one aimed at `malware.scanners` / `policy.profiles` —
+instead of being silently ignored. Two kinds of `JOEI_*` variables are not
+configuration keys and are accepted: `JOEI_CONSOLE_JWT_SECRET` (below), and
+the service links Kubernetes injects for a Service named `joei`
+(`JOEI_SERVICE_HOST`, `JOEI_SERVICE_PORT…`, `JOEI_PORT…`).
+
+The config file is still required (`--config`): built-in defaults do not yet
+cover everything the shipped `config.yaml` sets, such as registry upstreams
+and policy profiles. Policy and registry settings edited in the console are
+stored in the database and take precedence over both the file and the
+environment after first boot.
 
 One special case is read directly from the environment, not through this
 mechanism:

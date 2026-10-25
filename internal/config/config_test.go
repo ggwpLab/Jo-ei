@@ -781,3 +781,57 @@ func TestShippedConfig_HasTrustedProxiesKey(t *testing.T) {
 		assert.Equal(t, []string{"10.0.0.1", "10.0.0.0/8"}, cfg.Server.TrustedProxies, env)
 	}
 }
+
+const minimalYAML = "server:\n  listen: \":8080\"\ndatabase:\n  path: \"/tmp/x.db\"\n"
+
+// Every scalar or string-list key can be set from the environment, whether or
+// not the file mentions it.
+func TestLoad_EnvSetsKeysAbsentFromFile(t *testing.T) {
+	t.Setenv("JOEI_CACHE_LOCAL_MAX_SIZE_GB", "7")
+	t.Setenv("JOEI_SERVER_SHUTDOWN_TIMEOUT_SECONDS", "5")
+	t.Setenv("JOEI_METRICS_ENABLED", "false")
+	t.Setenv("JOEI_REGISTRIES_PYPI_UPSTREAMS", "https://a.example,https://b.example")
+	t.Setenv("JOEI_REGISTRIES_PYPI_ENABLED", "true")
+	t.Setenv("JOEI_CVE_BLOCK_ON", "CRITICAL")
+
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+
+	assert.Equal(t, 7, cfg.Cache.Local.MaxSizeGB)
+	assert.Equal(t, 5, cfg.Server.ShutdownTimeoutSeconds)
+	assert.False(t, cfg.Metrics.Enabled)
+	assert.Equal(t, []string{"https://a.example", "https://b.example"}, cfg.Registries.PyPI.Upstreams)
+	assert.True(t, cfg.Registries.PyPI.Enabled)
+	assert.Equal(t, "CRITICAL", cfg.CVE.BlockOn)
+}
+
+// A misspelt variable must stop startup instead of being silently ignored.
+func TestLoad_UnknownEnvFails(t *testing.T) {
+	t.Setenv("JOEI_CACHE_LOCAL_MAX_SIZE_G", "1")
+	_, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JOEI_CACHE_LOCAL_MAX_SIZE_G")
+}
+
+// Lists of objects and maps cannot be expressed as one variable; say so.
+func TestLoad_EnvForObjectListOrMapFails(t *testing.T) {
+	for _, name := range []string{"JOEI_MALWARE_SCANNERS_0_TYPE", "JOEI_POLICY_PROFILES_PRODUCTION_CVE_BLOCK"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "x")
+			_, err := config.Load(writeTempConfig(t, minimalYAML))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), name)
+			assert.Contains(t, err.Error(), "config file")
+		})
+	}
+}
+
+// Variables read directly by the code, and the service links Kubernetes
+// injects for a Service named "joei", are not configuration keys.
+func TestLoad_NonKeyEnvAllowed(t *testing.T) {
+	for _, name := range []string{"JOEI_CONSOLE_JWT_SECRET", "JOEI_SERVICE_HOST", "JOEI_SERVICE_PORT", "JOEI_SERVICE_PORT_HTTP", "JOEI_PORT", "JOEI_PORT_8080_TCP_ADDR"} {
+		t.Setenv(name, "x")
+	}
+	_, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+}
