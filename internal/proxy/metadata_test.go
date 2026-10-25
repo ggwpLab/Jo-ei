@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
@@ -170,4 +172,29 @@ func TestHandler_VersionDecider(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deadlineRecorder records the write deadlines http.ResponseController arms.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
+	d.deadlines = append(d.deadlines, t)
+	return nil
+}
+
+// A filtered document can be many MB; a client that stops reading must not pin
+// the serving goroutine and the buffered document forever.
+func TestWriteMetadataDocument_BoundsTheWrite(t *testing.T) {
+	w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	body := bytes.Repeat([]byte("x"), 1<<20)
+	r := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
+
+	writeMetadataDocument(w, r, http.Header{}, http.StatusOK, body, true, zerolog.Nop())
+
+	require.NotEmpty(t, w.deadlines, "no write deadline was armed")
+	assert.False(t, w.deadlines[0].IsZero())
+	assert.Equal(t, len(body), w.Body.Len())
 }

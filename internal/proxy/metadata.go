@@ -439,7 +439,7 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(status)
-	if _, err := w.Write(payload); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, bytes.NewReader(payload), httpx.DefaultWriteIdleTimeout); err != nil {
 		// The flight's own fetch context is detached from any one caller's
 		// disconnect (see fetchMetadataDocument), so an aborted npm install no
 		// longer shows up as a cancelled read — it shows up here instead, as a

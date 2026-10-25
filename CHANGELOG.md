@@ -38,10 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Large artifacts and cold Docker pulls no longer time out.** Artifact
   downloads and Docker blobs were capped at 60 s and 120 s in total, and the
   server cut every request at 120 s, so a multi-GB wheel or image layer failed
-  on every attempt. Upstream fetches are now aborted only after 60 s without a
-  byte, the server no longer limits how long a gated request may run, and
-  writes to clients are bounded per 256 KiB chunk (60 s) so a client that stops
-  reading is still dropped. Clients with short read timeouts may need a longer
+  on every attempt. Artifact and Docker fetches are now aborted only after 60 s
+  without a byte (metadata fetches keep their 30 s cap), the server no longer
+  limits how long a gated request may run, and slow clients are bounded by
+  progress instead: a request body that sends nothing for 60 s fails, and
+  every artifact, blob, manifest and metadata response is written in chunks
+  that must each complete within 60 s, so a client that stops reading is
+  still dropped. Clients with short read timeouts may need a longer
   one for multi-GB first downloads, since the proxy checks an artifact before
   sending its first byte (for example `pip --timeout 600`).
 - **Concurrent first requests for one artifact can no longer corrupt the

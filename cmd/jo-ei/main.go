@@ -13,6 +13,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/metrics"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
@@ -144,7 +145,8 @@ func run(ctx context.Context, cfgPath string) error {
 		metricsAddr = cfg.Metrics.Listen + cfg.Metrics.Path
 	}
 
-	servers, err := bindServers(a, cfg, logx.Middleware(mx.WrapHandler(root, metrics.NewRouteFunc(routes.prefixes()))), mx)
+	handler := httpx.BodyReadDeadline(root, httpx.DefaultBodyReadIdleTimeout)
+	servers, err := bindServers(a, cfg, logx.Middleware(mx.WrapHandler(handler, metrics.NewRouteFunc(routes.prefixes()))), mx)
 	if err != nil {
 		return err
 	}

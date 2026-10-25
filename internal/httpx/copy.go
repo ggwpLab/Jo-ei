@@ -14,7 +14,7 @@ const DefaultWriteIdleTimeout = 60 * time.Second
 // copyChunk is the unit each write deadline covers.
 const copyChunk = 256 << 10
 
-// CopyWithWriteDeadline copies src to w in 256 KiB chunks, arming a write
+// CopyWithWriteDeadline copies src to w in chunks of up to 256 KiB, arming a write
 // deadline of idle before each chunk, so a transfer is bounded by progress
 // rather than total time: a multi-GB artifact to a slow but reading client
 // succeeds, a stalled client is dropped after idle. A writer without deadline
@@ -32,7 +32,9 @@ func CopyWithWriteDeadline(w http.ResponseWriter, src io.Reader, idle time.Durat
 	buf := make([]byte, copyChunk)
 	var written int64
 	for {
-		n, rerr := io.ReadFull(src, buf)
+		// One Read per chunk, not ReadFull: a streamed response must reach
+		// the client as it arrives rather than once a whole chunk piles up.
+		n, rerr := src.Read(buf)
 		if n > 0 {
 			arm(time.Now().Add(idle))
 			m, werr := w.Write(buf[:n])
@@ -42,7 +44,7 @@ func CopyWithWriteDeadline(w http.ResponseWriter, src io.Reader, idle time.Durat
 			}
 		}
 		switch {
-		case rerr == io.EOF || errors.Is(rerr, io.ErrUnexpectedEOF):
+		case rerr == io.EOF:
 			return written, nil
 		case rerr != nil:
 			return written, rerr

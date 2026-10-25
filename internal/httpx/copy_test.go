@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,3 +54,40 @@ func TestCopyWithWriteDeadline_ArmsDeadlinePerChunk(t *testing.T) {
 }
 
 var _ http.ResponseWriter = (*deadlineWriter)(nil)
+
+// firstWrite signals when the first bytes reach the client.
+type firstWrite struct {
+	httptest.ResponseRecorder
+	got chan []byte
+}
+
+func (f *firstWrite) Write(p []byte) (int, error) {
+	select {
+	case f.got <- append([]byte(nil), p...):
+	default:
+	}
+	return len(p), nil
+}
+
+// SetWriteDeadline puts firstWrite on the deadline-armed path.
+func (f *firstWrite) SetWriteDeadline(time.Time) error { return nil }
+
+// A streamed upstream response must reach the client as it arrives, not once a
+// whole chunk has accumulated: a slow mirror would otherwise starve a client
+// with a short read timeout.
+func TestCopyWithWriteDeadline_ForwardsPartialReadsAtOnce(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	w := &firstWrite{ResponseRecorder: *httptest.NewRecorder(), got: make(chan []byte, 1)}
+	go func() { _, _ = CopyWithWriteDeadline(w, pr, time.Second) }()
+
+	_, err := pw.Write([]byte("first bytes"))
+	require.NoError(t, err)
+
+	select {
+	case got := <-w.got:
+		assert.Equal(t, "first bytes", string(got))
+	case <-time.After(time.Second):
+		t.Fatal("partial read was held back instead of forwarded")
+	}
+}
