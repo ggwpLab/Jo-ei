@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -72,7 +73,7 @@ func TestHubRecordsAndPublishes(t *testing.T) {
 
 	hub.Record(evt("r1", gate.VerdictCache, gate.GateCache, "cache_hit"))
 
-	require.Len(t, store.Recent(0), 1)
+	require.Len(t, store.Recent(context.Background(), 0), 1)
 	select {
 	case got := <-ch:
 		assert.Equal(t, "r1", got.RequestID)

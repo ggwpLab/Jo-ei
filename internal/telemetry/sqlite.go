@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -96,7 +97,7 @@ func NewSQLiteRepo(db *storage.DB, eventRetentionDays, dailyRetentionDays int) (
 // same read/write code works inside and outside a transaction.
 type querier interface {
 	Exec(query string, args ...any) (sql.Result, error)
-	QueryRow(query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func unixNanoOrZero(t time.Time) int64 {
@@ -145,7 +146,7 @@ func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
 		return err
 	}
 
-	counters, err := readCounters(tx)
+	counters, err := readCounters(context.Background(), tx)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
 	}
 
 	day := dayKey(ev)
-	dailyAgg, err := readDaily(tx, day)
+	dailyAgg, err := readDaily(context.Background(), tx, day)
 	if err != nil {
 		return err
 	}
@@ -167,10 +168,10 @@ func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
 	return tx.Commit()
 }
 
-func readCounters(q querier) (*aggregate, error) {
+func readCounters(ctx context.Context, q querier) (*aggregate, error) {
 	var snap Snapshot
 	var gatesJSON string
-	err := q.QueryRow(`
+	err := q.QueryRowContext(ctx, `
 		SELECT requests, cache_hits, blocked, errors, supply_blocked,
 		       cve_blocked, malware_blocked, denylisted, gates_json
 		FROM counters WHERE id = 1`).Scan(
@@ -208,10 +209,10 @@ func upsertCounters(q querier, s Snapshot) error {
 	return err
 }
 
-func readDaily(q querier, day string) (*aggregate, error) {
+func readDaily(ctx context.Context, q querier, day string) (*aggregate, error) {
 	var d DailyMetric
 	var gatesJSON string
-	err := q.QueryRow(`
+	err := q.QueryRowContext(ctx, `
 		SELECT day, requests, cache_hits, blocked, errors, supply_blocked,
 		       cve_blocked, malware_blocked, denylisted, gates_json
 		FROM daily_metrics WHERE day = ?`, day).Scan(
@@ -248,22 +249,22 @@ func upsertDaily(q querier, d DailyMetric) error {
 	return err
 }
 
-func (r *sqliteRepo) Snapshot(started time.Time) (Snapshot, error) {
-	agg, err := readCounters(r.db)
+func (r *sqliteRepo) Snapshot(ctx context.Context, started time.Time) (Snapshot, error) {
+	agg, err := readCounters(ctx, r.db)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	return agg.snapshot(started), nil
 }
 
-func (r *sqliteRepo) Recent(limit int) ([]gate.Event, error) {
+func (r *sqliteRepo) Recent(ctx context.Context, limit int) ([]gate.Event, error) {
 	query := `SELECT detail_json FROM events ORDER BY ts DESC, id DESC`
 	var args []any
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)
 	}
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +284,7 @@ func (r *sqliteRepo) Recent(limit int) ([]gate.Event, error) {
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) Page(verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {
+func (r *sqliteRepo) Page(ctx context.Context, verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {
 	var (
 		conds []string
 		args  []any
@@ -316,7 +317,7 @@ func (r *sqliteRepo) Page(verdict, text string, cursor Cursor, limit int) ([]gat
 		args = append(args, limit+1)
 	}
 
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, Cursor{}, err
 	}
@@ -361,8 +362,8 @@ func (r *sqliteRepo) Page(verdict, text string, cursor Cursor, limit int) ([]gat
 	return out, next, nil
 }
 
-func (r *sqliteRepo) Quarantine(now time.Time) ([]gate.Event, error) {
-	rows, err := r.db.Query(`
+func (r *sqliteRepo) Quarantine(ctx context.Context, now time.Time) ([]gate.Event, error) {
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT detail_json FROM events
 		WHERE verdict = ? AND gate = ?
 		ORDER BY ts DESC, id DESC`, gate.VerdictBlock, gate.GateSupply)
@@ -396,7 +397,7 @@ func (r *sqliteRepo) Quarantine(now time.Time) ([]gate.Event, error) {
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) DailyMetrics(days int) ([]DailyMetric, error) {
+func (r *sqliteRepo) DailyMetrics(ctx context.Context, days int) ([]DailyMetric, error) {
 	query := `
 		SELECT day, requests, cache_hits, blocked, errors, supply_blocked,
 		       cve_blocked, malware_blocked, denylisted, gates_json
@@ -406,7 +407,7 @@ func (r *sqliteRepo) DailyMetrics(days int) ([]DailyMetric, error) {
 		query += ` LIMIT ?`
 		args = append(args, days)
 	}
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -427,13 +428,13 @@ func (r *sqliteRepo) DailyMetrics(days int) ([]DailyMetric, error) {
 	return out, rows.Err()
 }
 
-func (r *sqliteRepo) Prune() error {
+func (r *sqliteRepo) Prune(ctx context.Context) error {
 	eventCutoff := time.Now().Add(-r.eventRetention).UnixNano()
-	if _, err := r.db.Exec(`DELETE FROM events WHERE ts < ?`, eventCutoff); err != nil {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM events WHERE ts < ?`, eventCutoff); err != nil {
 		return err
 	}
 	dayCutoff := time.Now().Add(-r.dailyRetention).UTC().Format("2006-01-02")
-	if _, err := r.db.Exec(`DELETE FROM daily_metrics WHERE day < ?`, dayCutoff); err != nil {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM daily_metrics WHERE day < ?`, dayCutoff); err != nil {
 		return err
 	}
 	return nil

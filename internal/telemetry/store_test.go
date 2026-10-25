@@ -1,6 +1,8 @@
 package telemetry_test
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -43,12 +45,12 @@ func TestStoreRecentOrderAndLimit(t *testing.T) {
 		s.Record(evt(fmt.Sprintf("r%d", i), gate.VerdictPass, gate.GateSupply, "ok"))
 	}
 
-	got := s.Recent(10)
+	got := s.Recent(context.Background(), 10)
 	require.Len(t, got, 6, "all events are retained (no ring buffer)")
 	assert.Equal(t, "r6", got[0].RequestID, "newest first")
 	assert.Equal(t, "r5", got[1].RequestID)
 
-	got = s.Recent(2)
+	got = s.Recent(context.Background(), 2)
 	require.Len(t, got, 2)
 	assert.Equal(t, "r6", got[0].RequestID)
 	assert.Equal(t, "r5", got[1].RequestID)
@@ -64,7 +66,7 @@ func TestStoreCounters(t *testing.T) {
 	s.Record(evt("r6", gate.VerdictBlock, gate.GateMalware, "malware_found"))
 	s.Record(evt("r7", gate.VerdictError, gate.GateSupply, "upstream_metadata_unavailable"))
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(context.Background())
 	assert.Equal(t, uint64(7), snap.Requests)
 	assert.Equal(t, uint64(1), snap.CacheHits)
 	assert.Equal(t, uint64(4), snap.Blocked)
@@ -85,7 +87,7 @@ func TestStoreCacheScanFailedBlockDoesNotCountPipelinePasses(t *testing.T) {
 	s := newStore(t)
 	s.Record(evt("r1", gate.VerdictBlock, gate.GateCache, "scan_failed"))
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(context.Background())
 	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateCache])
 	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateSupply])
 	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateCVE])
@@ -110,7 +112,7 @@ func TestStoreQuarantine(t *testing.T) {
 
 	s.Record(evt("r4", gate.VerdictPass, gate.GateSupply, "ok"))
 
-	q := s.Quarantine(now)
+	q := s.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)
 	assert.Equal(t, "r3", q[0].RequestID, "newest duplicate wins")
 	assert.Equal(t, "requests", q[0].Package)
@@ -119,7 +121,7 @@ func TestStoreQuarantine(t *testing.T) {
 	gone.RequestID = "r5"
 	gone.BlockUntil = now.Add(-time.Minute)
 	s.Record(gone)
-	assert.Empty(t, s.Quarantine(now))
+	assert.Empty(t, s.Quarantine(context.Background(), now))
 }
 
 func TestStoreConcurrent(t *testing.T) {
@@ -137,14 +139,14 @@ func TestStoreConcurrent(t *testing.T) {
 					ev.Version = fmt.Sprintf("1.0.%d", i)
 				}
 				s.Record(ev)
-				s.Recent(10)
-				s.Snapshot()
-				s.Quarantine(time.Now())
+				s.Recent(context.Background(), 10)
+				s.Snapshot(context.Background())
+				s.Quarantine(context.Background(), time.Now())
 			}
 		}(g)
 	}
 	wg.Wait()
-	assert.Equal(t, uint64(1600), s.Snapshot().Requests)
+	assert.Equal(t, uint64(1600), s.Snapshot(context.Background()).Requests)
 }
 
 func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
@@ -155,7 +157,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	s.Record(gate.Event{Time: day1, Verdict: gate.VerdictPass, Gate: gate.GateMalware})
 	s.Record(gate.Event{Time: day2, Verdict: gate.VerdictCache, Gate: gate.GateCache})
 
-	daily, err := s.DailyMetrics(0)
+	daily, err := s.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 2)
 	assert.Equal(t, "2026-01-02", daily[0].Day) // newest first
@@ -165,7 +167,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	assert.Equal(t, uint64(1), daily[1].CacheHits)
 	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, daily[1].Gates[gate.GateCache])
 
-	limited, err := s.DailyMetrics(1)
+	limited, err := s.DailyMetrics(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, limited, 1)
 	assert.Equal(t, "2026-01-02", limited[0].Day)
@@ -174,7 +176,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 	s := newStore(t)
 	s.Record(gate.Event{Verdict: gate.VerdictError}) // zero Time
-	daily, err := s.DailyMetrics(0)
+	daily, err := s.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
 	today := time.Now().UTC().Format("2006-01-02")
@@ -204,20 +206,20 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 
-	snap := s2.Snapshot()
+	snap := s2.Snapshot(context.Background())
 	assert.Equal(t, uint64(2), snap.Requests)
 	assert.Equal(t, uint64(1), snap.CacheHits)
 	assert.Equal(t, uint64(1), snap.Blocked)
 	assert.Equal(t, uint64(1), snap.SupplyBlocked)
 	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateSupply])
 
-	require.Len(t, s2.Recent(0), 2)
+	require.Len(t, s2.Recent(context.Background(), 0), 2)
 
-	q := s2.Quarantine(now)
+	q := s2.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)
 	assert.Equal(t, "p", q[0].Package)
 
-	daily, err := s2.DailyMetrics(0)
+	daily, err := s2.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
 	assert.Equal(t, uint64(2), daily[0].Requests)
@@ -235,13 +237,34 @@ func TestStorePageFiltersAndPages(t *testing.T) {
 	s.Record(evt("block1", gate.VerdictBlock, gate.GateCVE, "cve_found"))
 	s.Record(evt("block2", gate.VerdictBlock, gate.GateSupply, "young"))
 
-	evs, next := s.Page(gate.VerdictBlock, "", telemetry.Cursor{}, 1)
+	evs, next := s.Page(context.Background(), gate.VerdictBlock, "", telemetry.Cursor{}, 1)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "block2", evs[0].RequestID, "newest first")
 	require.False(t, next.Zero(), "more pages remain")
 
-	evs2, next2 := s.Page(gate.VerdictBlock, "", next, 1)
+	evs2, next2 := s.Page(context.Background(), gate.VerdictBlock, "", next, 1)
 	require.Len(t, evs2, 1)
 	assert.Equal(t, "block1", evs2[0].RequestID)
 	assert.True(t, next2.Zero(), "last page")
+}
+
+// The feed aborts in-flight fetches while the user types; each abort must not
+// become a warning in the log.
+func TestStore_CancelledReadIsNotAWarning(t *testing.T) {
+	var logBuf bytes.Buffer
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := telemetry.Open(db, 30, 365, zerolog.New(&logBuf))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s.Page(ctx, "", "x", telemetry.Cursor{}, 10)
+	s.Recent(ctx, 10)
+	s.Quarantine(ctx, time.Now())
+	s.Snapshot(ctx)
+
+	assert.NotContains(t, logBuf.String(), `"level":"warn"`)
 }

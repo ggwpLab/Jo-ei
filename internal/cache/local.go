@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -30,6 +31,10 @@ type LocalCache struct {
 	evictions atomic.Int64 // entries evicted by evictToSize since process start
 	workerWG  sync.WaitGroup
 	closeOnce sync.Once
+	// workerCtx is the eviction worker's context; stopWorker (called by
+	// Close) cancels it so an eviction sweep in progress stops promptly.
+	workerCtx  context.Context
+	stopWorker context.CancelFunc
 }
 
 // NewLocalCache creates a LocalCache rooted at cfg.RootPath.
@@ -48,6 +53,7 @@ func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
 	}
 
 	lc := &LocalCache{cfg: cfg, index: idx, evictCh: make(chan struct{}, 1)}
+	lc.workerCtx, lc.stopWorker = context.WithCancel(context.Background())
 	lc.workerWG.Add(1)
 	go lc.evictWorker()
 	return lc, nil
@@ -162,7 +168,7 @@ func (lc *LocalCache) staleCutoff() int64 {
 
 // Stats returns aggregate cache statistics.
 func (lc *LocalCache) Stats() (CacheStats, error) {
-	size, err := lc.index.TotalSizeBytes()
+	size, err := lc.index.TotalSizeBytes(context.Background())
 	if err != nil {
 		return CacheStats{}, err
 	}
@@ -183,11 +189,15 @@ const purgeBatch = 100
 // PurgeStale removes every entry idle longer than cfg.StaleAfter and returns
 // how many entries were removed and their total size. Individual failures are
 // skipped (same policy as evictToSize); a round that makes no progress aborts
-// instead of spinning on undeletable rows.
-func (lc *LocalCache) PurgeStale() (removed, freedBytes int64, err error) {
+// instead of spinning on undeletable rows. A cancelled ctx stops the purge
+// between rounds (what was removed so far stays removed).
+func (lc *LocalCache) PurgeStale(ctx context.Context) (removed, freedBytes int64, err error) {
 	cutoff := lc.staleCutoff()
 	for {
-		candidates, err := lc.index.StaleCandidates(cutoff, purgeBatch)
+		if err := ctx.Err(); err != nil {
+			return removed, freedBytes, err
+		}
+		candidates, err := lc.index.StaleCandidates(ctx, cutoff, purgeBatch)
 		if err != nil {
 			return removed, freedBytes, err
 		}
@@ -217,27 +227,28 @@ func (lc *LocalCache) PurgeStale() (removed, freedBytes int64, err error) {
 func (lc *LocalCache) evictWorker() {
 	defer lc.workerWG.Done()
 	for range lc.evictCh {
-		lc.evictIfNeeded()
+		lc.evictIfNeeded(lc.workerCtx)
 	}
 }
 
 // evictIfNeeded evicts LRU entries until the cache is under MaxSizeGB.
-func (lc *LocalCache) evictIfNeeded() {
+func (lc *LocalCache) evictIfNeeded(ctx context.Context) {
 	maxBytes := int64(lc.cfg.MaxSizeGB) * 1024 * 1024 * 1024
 	if maxBytes == 0 {
 		return
 	}
-	lc.evictToSize(maxBytes)
+	lc.evictToSize(ctx, maxBytes)
 }
 
-// evictToSize removes LRU entries until total size is at or below maxBytes.
-func (lc *LocalCache) evictToSize(maxBytes int64) {
-	total, err := lc.index.TotalSizeBytes()
+// evictToSize removes LRU entries until total size is at or below maxBytes,
+// or ctx is cancelled (Close cancels the worker's context).
+func (lc *LocalCache) evictToSize(ctx context.Context, maxBytes int64) {
+	total, err := lc.index.TotalSizeBytes(ctx)
 	if err != nil || total <= maxBytes {
 		return
 	}
-	for total > maxBytes {
-		candidates, err := lc.index.LRUCandidates(10)
+	for total > maxBytes && ctx.Err() == nil {
+		candidates, err := lc.index.LRUCandidates(ctx, 10)
 		if err != nil || len(candidates) == 0 {
 			return
 		}
@@ -254,7 +265,7 @@ func (lc *LocalCache) evictToSize(maxBytes int64) {
 		if !progress {
 			return
 		}
-		total, _ = lc.index.TotalSizeBytes()
+		total, _ = lc.index.TotalSizeBytes(ctx)
 	}
 }
 
@@ -272,6 +283,7 @@ func (lc *LocalCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) err
 func (lc *LocalCache) Close() error {
 	var closeErr error
 	lc.closeOnce.Do(func() {
+		lc.stopWorker()
 		close(lc.evictCh)
 		lc.workerWG.Wait()
 		closeErr = lc.index.Close()

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -118,7 +119,7 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 	require.Equal(t, int64(3), before)
 
 	// 1-byte budget forces eviction of everything over the limit.
-	lc.evictToSize(1)
+	lc.evictToSize(context.Background(), 1)
 
 	after, err := lc.index.Count()
 	require.NoError(t, err)
@@ -192,7 +193,7 @@ func TestLocalCache_EvictionsAreCounted(t *testing.T) {
 	before, err := lc.index.Count()
 	require.NoError(t, err)
 
-	lc.evictToSize(1)
+	lc.evictToSize(context.Background(), 1)
 
 	after, err := lc.index.Count()
 	require.NoError(t, err)
@@ -226,7 +227,7 @@ func TestLocalCache_PurgeStale(t *testing.T) {
 		}))
 	}
 
-	removed, freed, err := lc.PurgeStale()
+	removed, freed, err := lc.PurgeStale(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), removed)
 	assert.Equal(t, int64(100), freed)
@@ -267,7 +268,7 @@ func TestLocalCache_EvictToSizeBailsOnZeroProgress(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		lc.evictToSize(1) // 1-byte budget: every entry is over budget, forcing eviction attempts.
+		lc.evictToSize(context.Background(), 1) // 1-byte budget: every entry is over budget, forcing eviction attempts.
 		close(done)
 	}()
 
@@ -308,4 +309,26 @@ func TestLocalCache_PurgeStaleSkipsAlreadyGoneRows(t *testing.T) {
 	ok, err := lc.invalidate(ref)
 	require.NoError(t, err)
 	assert.False(t, ok, "deleting a nonexistent row must report no deletion")
+}
+
+// The console's Clean up request carries its context: a cancelled request (or
+// the server closing connections after its drain deadline) stops the purge
+// instead of finishing a long sweep.
+func TestLocalCache_PurgeStaleHonoursContext(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
+	require.NoError(t, err)
+	defer lc.Close()
+	p := filepath.Join(lc.cfg.RootPath, "s.bin")
+	require.NoError(t, os.WriteFile(p, []byte("stale"), 0644))
+	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "s", Version: "1.0"}
+	require.NoError(t, lc.index.Insert(ref, &CacheEntry{ArtifactPath: p, StoredAt: time.Now().UTC().Add(-2 * time.Hour), SizeBytes: 5}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	removed, _, err := lc.PurgeStale(ctx)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, removed)
+	_, found := lc.index.Get(ref)
+	assert.True(t, found, "nothing is purged under a cancelled context")
 }

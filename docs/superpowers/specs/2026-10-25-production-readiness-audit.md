@@ -231,6 +231,12 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
     `proxy.Handler.ServeHTTP`.
 - Proposal: add `errorlint`, `bodyclose`, `wastedassign`, `unconvert` to CI
   now; `noctx` after the context migration.
+- DONE (`chore/static-analysis`): the four linters are in CI and their
+  findings fixed. Owner chose targeted context threading (2026-10-25): the
+  console's telemetry reads (feed search/paging, quarantine, daily metrics,
+  snapshot), the telemetry prune, the cache purge and the eviction sweep
+  now honour cancellation; hot-path single-row queries stay context-free, so
+  `noctx` stays off.
 
 ## `main.go` split
 

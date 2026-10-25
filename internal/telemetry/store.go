@@ -5,6 +5,8 @@
 package telemetry
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -59,9 +61,12 @@ type Store struct {
 	logger  zerolog.Logger
 	started time.Time
 
-	stop      chan struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	stop chan struct{}
+	// pruneCtx is cancelled by Close, aborting a prune in progress.
+	pruneCtx    context.Context
+	cancelPrune context.CancelFunc
+	wg          sync.WaitGroup
+	closeOnce   sync.Once
 }
 
 // New returns a Store backed by repo and starts its background prune loop.
@@ -72,6 +77,7 @@ func New(repo Repo, logger zerolog.Logger) *Store {
 		started: time.Now(),
 		stop:    make(chan struct{}),
 	}
+	s.pruneCtx, s.cancelPrune = context.WithCancel(context.Background())
 	s.wg.Add(1)
 	go s.pruneLoop()
 	return s
@@ -98,10 +104,10 @@ func (s *Store) Record(ev gate.Event) {
 
 // Snapshot returns the cumulative counters. A read error logs and yields a
 // zero snapshot (the overview must not 500 on a transient read failure).
-func (s *Store) Snapshot() Snapshot {
-	snap, err := s.repo.Snapshot(s.started)
+func (s *Store) Snapshot(ctx context.Context) Snapshot {
+	snap, err := s.repo.Snapshot(ctx, s.started)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading snapshot")
+		s.readFailed(err, "reading snapshot")
 		return Snapshot{StartedAt: s.started, Gates: map[string]GateCounts{}}
 	}
 	return snap
@@ -109,10 +115,10 @@ func (s *Store) Snapshot() Snapshot {
 
 // Recent returns up to limit events, newest first (limit ≤ 0 → all). A read
 // error logs and yields nil.
-func (s *Store) Recent(limit int) []gate.Event {
-	evs, err := s.repo.Recent(limit)
+func (s *Store) Recent(ctx context.Context, limit int) []gate.Event {
+	evs, err := s.repo.Recent(ctx, limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading recent events")
+		s.readFailed(err, "reading recent events")
 		return nil
 	}
 	return evs
@@ -123,10 +129,10 @@ func (s *Store) Recent(limit int) []gate.Event {
 // older than cursor (zero cursor = newest), plus the cursor for the next call
 // (zero when there are no more pages). A read error logs and yields nil with a
 // zero cursor, so the console degrades to an empty page rather than failing.
-func (s *Store) Page(verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
-	evs, next, err := s.repo.Page(verdict, text, cursor, limit)
+func (s *Store) Page(ctx context.Context, verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
+	evs, next, err := s.repo.Page(ctx, verdict, text, cursor, limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("paging events")
+		s.readFailed(err, "paging events")
 		return nil, Cursor{}
 	}
 	return evs, next
@@ -134,18 +140,29 @@ func (s *Store) Page(verdict, text string, cursor Cursor, limit int) ([]gate.Eve
 
 // Quarantine returns the active supply-chain holds. A read error logs and
 // yields nil.
-func (s *Store) Quarantine(now time.Time) []gate.Event {
-	evs, err := s.repo.Quarantine(now)
+func (s *Store) Quarantine(ctx context.Context, now time.Time) []gate.Event {
+	evs, err := s.repo.Quarantine(ctx, now)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading quarantine")
+		s.readFailed(err, "reading quarantine")
 		return nil
 	}
 	return evs
 }
 
 // DailyMetrics returns per-UTC-day tallies, newest first (days ≤ 0 → all).
-func (s *Store) DailyMetrics(days int) ([]DailyMetric, error) {
-	return s.repo.DailyMetrics(days)
+func (s *Store) DailyMetrics(ctx context.Context, days int) ([]DailyMetric, error) {
+	return s.repo.DailyMetrics(ctx, days)
+}
+
+// readFailed logs a failed console read. A cancelled request — the console
+// aborts in-flight fetches on navigation and while the user types — is not
+// worth a warning.
+func (s *Store) readFailed(err error, msg string) {
+	ev := s.logger.Warn()
+	if errors.Is(err, context.Canceled) {
+		ev = s.logger.Debug()
+	}
+	ev.Err(err).Msg(msg)
 }
 
 func (s *Store) pruneLoop() {
@@ -157,7 +174,8 @@ func (s *Store) pruneLoop() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			if err := s.repo.Prune(); err != nil {
+			// A prune cut short by Close is not a failure.
+			if err := s.repo.Prune(s.pruneCtx); err != nil && s.pruneCtx.Err() == nil {
 				s.logger.Warn().Err(err).Msg("pruning")
 			}
 		}
@@ -167,6 +185,7 @@ func (s *Store) pruneLoop() {
 // Close stops the prune loop. Safe to call multiple times.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
+		s.cancelPrune()
 		close(s.stop)
 		s.wg.Wait()
 	})

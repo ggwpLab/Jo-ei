@@ -8,6 +8,10 @@ linters:
     - unused
     - misspell
     - gosec
+    - errorlint
+    - bodyclose
+    - wastedassign
+    - unconvert
   settings:
     gosec:
       excludes:
@@ -25,11 +29,13 @@ linters:
   exclusions:
     rules:
       # Tests deliberately ignore many error returns (mock servers, cleanup)
-      # and freely use variable URLs, loose file modes and local listeners.
+      # and freely use variable URLs, loose file modes and local listeners;
+      # their fake round-trippers return responses with no body to close.
       - path: _test\.go
         linters:
           - errcheck
           - gosec
+          - bodyclose
 formatters:
   enable:
     - gofmt

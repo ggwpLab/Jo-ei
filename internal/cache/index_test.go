@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -205,7 +206,7 @@ func TestIndex_LRUCandidates(t *testing.T) {
 	}
 
 	// LRUCandidates should return entries ordered oldest-first.
-	candidates, err := idx.LRUCandidates(2)
+	candidates, err := idx.LRUCandidates(context.Background(), 2)
 	require.NoError(t, err)
 	require.Len(t, candidates, 2)
 	assert.Equal(t, "a", candidates[0].Name)

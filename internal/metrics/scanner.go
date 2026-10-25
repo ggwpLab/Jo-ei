@@ -191,7 +191,8 @@ func (c *scannerUpCollector) Collect(ch chan<- prometheus.Metric) {
 		if !sh.Enabled || sh.Status == health.StatusUnknown {
 			continue
 		}
-		name, engine := sh.Name, ""
+		name := sh.Name
+		var engine string
 		if t, ok := c.types[name]; ok {
 			engine = oneOf(t, knownScanners)
 		} else {
