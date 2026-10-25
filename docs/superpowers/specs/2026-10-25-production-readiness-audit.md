@@ -26,7 +26,7 @@ Not reviewed in depth (second wave): registry adapters' parsing,
 
 ## P0 — breaks real traffic
 
-### 0. pip downloads bypass the proxy entirely (found 2026-10-25, during manual testing)
+### 0. pip downloads bypass the proxy entirely (found 2026-10-25, during manual testing) — FIXED (`fix/pypi-index-rewrite`; e2e: pip on a network reaching only the proxy downloads and `--require-hashes`-installs six 1.16.0, PASS/CACHE recorded)
 PyPI simple-index pages are proxied untouched (`proxyTransparent`), and
 pypi.org's pages link every file with an **absolute** URL
 (`https://files.pythonhosted.org/packages/...`). pip follows those links
@@ -78,6 +78,17 @@ checksum). Same pattern in the Docker blob store.
 - Fix: write to a temp file in the **same directory**, fsync, `os.Rename` onto
   the final path (atomic; open readers keep the old inode). Optionally coalesce
   first downloads per key with singleflight (also saves duplicate scans).
+
+### 0b. npm installs through the proxy fail (found 2026-10-25, e2e)
+npm ≥ 9's default `replace-registry-host=npmjs` swaps only the **origin** of
+`https://registry.npmjs.org/...` tarball URLs for the configured registry's,
+dropping its path: with `--registry http://jo-ei:8080/npm/`, the tarball is
+fetched from `http://jo-ei:8080/left-pad/-/left-pad-1.3.0.tgz` → `404
+unknown_registry` (observed with node 22 / npm 10, `npm pack left-pad@1.3.0`).
+With `replace-registry-host=never` the absolute URL is followed instead —
+straight to registry.npmjs.org, around every gate. Same root cause as #0:
+packument `dist.tarball` must be rewritten to the proxy (a relative URL or one
+built from the request). yarn and pnpm not yet verified.
 
 ## P1 — fix before release
 

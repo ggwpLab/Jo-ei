@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **pip downloads now go through the proxy's gates.** PyPI index pages were
+  proxied untouched, and pypi.org links every file by absolute URL on
+  `files.pythonhosted.org`, so pip, uv and poetry fetched packages straight
+  from the file host: no supply-chain, CVE or malware check ran, and nothing
+  was cached or recorded. Simple-index pages (PEP 503 HTML and PEP 691 JSON)
+  and the JSON API (`/pypi/<project>/json`) are now served with every
+  `/packages/` link rewritten to a relative link to the proxy, hash fragments
+  kept. A link to any other host is removed and logged, an index the proxy
+  cannot rewrite (unparseable, undecodable, over 64 MB) is answered with
+  `502 index_rewrite_failed` instead of being served as-is, and client
+  validators are no longer forwarded upstream, so a page cached before the
+  upgrade cannot be revalidated back into use.
+
 ### Changed
 
 - **Antivirus engines scan in parallel.** Every engine in `malware.scanners[]`

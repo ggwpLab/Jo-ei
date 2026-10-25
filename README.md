@@ -111,6 +111,11 @@ index-url = http://localhost:8080/pypi/simple/
 trusted-host = localhost
 ```
 
+Index pages are served with their download links rewritten to point back at
+the proxy, so every file pip, uv or poetry fetches goes through the gates; an
+index the proxy cannot rewrite fails with `502` rather than being passed
+through.
+
 **Maven**:
 Add Jōei mirror for your repositories, configured on either project `pom.xml`:
 ```xml
