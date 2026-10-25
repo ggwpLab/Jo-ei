@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,7 +40,7 @@ func (t *IdleTimeout) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.next.RoundTrip(req.WithContext(ctx))
 	if err != nil {
 		timer.Stop()
-		idled := context.Cause(ctx) == errIdle
+		idled := errors.Is(context.Cause(ctx), errIdle)
 		cancel(nil)
 		if idled {
 			return nil, errIdle
@@ -68,9 +69,9 @@ func (b *idleBody) Read(p []byte) (int, error) {
 		b.timer.Reset(b.idle)
 	}
 	switch {
-	case err == io.EOF:
+	case errors.Is(err, io.EOF):
 		b.timer.Stop()
-	case err != nil && context.Cause(b.ctx) == b.errIdle:
+	case err != nil && errors.Is(context.Cause(b.ctx), b.errIdle):
 		return n, b.errIdle
 	}
 	return n, err

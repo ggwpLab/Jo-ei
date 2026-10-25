@@ -46,7 +46,7 @@ func TestAttempts_ErrorMentionsEveryMirror(t *testing.T) {
 	atts.Add("https://mirror-a", 0, errors.New("x509: certificate signed by unknown authority"), 11*time.Millisecond)
 	atts.Add("https://mirror-b", http.StatusNotFound, errors.New("upstream returned HTTP 404"), 92*time.Millisecond)
 
-	msg := upstream.Attempts(atts).Error()
+	msg := atts.Error()
 	for _, want := range []string{"all 2 upstreams failed", "mirror-a", "x509", "mirror-b", "HTTP 404"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("Error() = %q, missing %q", msg, want)

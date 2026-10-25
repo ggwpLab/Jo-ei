@@ -3,6 +3,7 @@ package scanner
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -134,7 +135,7 @@ func parseICAPResponse(r *bufio.Reader) (*gate.AVResult, error) {
 		return nil, err
 	}
 	hdr, err := tp.ReadMIMEHeader()
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("reading icap headers: %w", err)
 	}
 
