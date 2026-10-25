@@ -826,3 +826,24 @@ func TestEventsSSE_EndsWhenSessionNoLongerValid(t *testing.T) {
 	require.NoError(t, err, "the server must close the stream, not leave it hanging")
 	assert.NotContains(t, string(rest), "data:")
 }
+
+// A client that leaves during Clean up is not a server failure: no 500, no
+// error log, and the partial result is still recorded.
+func TestCacheCleanup_ClientGoneIsNotAFailure(t *testing.T) {
+	var logBuf bytes.Buffer
+	h := newHandler(console.Config{
+		Store:       newTelemetryStore(t),
+		Broadcaster: telemetry.NewBroadcaster(),
+		Purger:      &fakePurger{removed: 3, freed: 300, err: context.Canceled},
+		Logger:      zerolog.New(&logBuf),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/cache/cleanup", nil).WithContext(ctx))
+
+	assert.NotEqual(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, logBuf.String(), `"level":"error"`)
+	assert.Contains(t, logBuf.String(), `"removed":3`)
+}

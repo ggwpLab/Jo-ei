@@ -299,9 +299,9 @@ func TestSQLiteRepo_PageTextPagesWithCursor(t *testing.T) {
 	assert.Equal(t, []string{"r6", "r4", "r2"}, ids)
 }
 
-// The console's reads and the prune can be long scans; a cancelled request
-// (or a stopping server) must abort them instead of holding the database's
-// single connection until they finish.
+// The console's reads and the prune can be long scans; a cancelled request (or
+// the server closing connections after its drain deadline) must abort them
+// instead of holding the database's single connection until they finish.
 func TestSQLiteRepo_HeavyReadsHonourContext(t *testing.T) {
 	repo := newRepo(t)
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "r1", Time: time.Now(), Ecosystem: "pypi", Package: "x", Version: "1", Verdict: gate.VerdictPass}))

@@ -6,6 +6,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -106,7 +107,7 @@ func (s *Store) Record(ev gate.Event) {
 func (s *Store) Snapshot(ctx context.Context) Snapshot {
 	snap, err := s.repo.Snapshot(ctx, s.started)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading snapshot")
+		s.readFailed(err, "reading snapshot")
 		return Snapshot{StartedAt: s.started, Gates: map[string]GateCounts{}}
 	}
 	return snap
@@ -117,7 +118,7 @@ func (s *Store) Snapshot(ctx context.Context) Snapshot {
 func (s *Store) Recent(ctx context.Context, limit int) []gate.Event {
 	evs, err := s.repo.Recent(ctx, limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading recent events")
+		s.readFailed(err, "reading recent events")
 		return nil
 	}
 	return evs
@@ -131,7 +132,7 @@ func (s *Store) Recent(ctx context.Context, limit int) []gate.Event {
 func (s *Store) Page(ctx context.Context, verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor) {
 	evs, next, err := s.repo.Page(ctx, verdict, text, cursor, limit)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("paging events")
+		s.readFailed(err, "paging events")
 		return nil, Cursor{}
 	}
 	return evs, next
@@ -142,7 +143,7 @@ func (s *Store) Page(ctx context.Context, verdict, text string, cursor Cursor, l
 func (s *Store) Quarantine(ctx context.Context, now time.Time) []gate.Event {
 	evs, err := s.repo.Quarantine(ctx, now)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("reading quarantine")
+		s.readFailed(err, "reading quarantine")
 		return nil
 	}
 	return evs
@@ -151,6 +152,17 @@ func (s *Store) Quarantine(ctx context.Context, now time.Time) []gate.Event {
 // DailyMetrics returns per-UTC-day tallies, newest first (days ≤ 0 → all).
 func (s *Store) DailyMetrics(ctx context.Context, days int) ([]DailyMetric, error) {
 	return s.repo.DailyMetrics(ctx, days)
+}
+
+// readFailed logs a failed console read. A cancelled request — the console
+// aborts in-flight fetches on navigation and while the user types — is not
+// worth a warning.
+func (s *Store) readFailed(err error, msg string) {
+	ev := s.logger.Warn()
+	if errors.Is(err, context.Canceled) {
+		ev = s.logger.Debug()
+	}
+	ev.Err(err).Msg(msg)
 }
 
 func (s *Store) pruneLoop() {
@@ -162,7 +174,8 @@ func (s *Store) pruneLoop() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			if err := s.repo.Prune(s.pruneCtx); err != nil {
+			// A prune cut short by Close is not a failure.
+			if err := s.repo.Prune(s.pruneCtx); err != nil && s.pruneCtx.Err() == nil {
 				s.logger.Warn().Err(err).Msg("pruning")
 			}
 		}

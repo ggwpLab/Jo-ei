@@ -312,7 +312,8 @@ func TestLocalCache_PurgeStaleSkipsAlreadyGoneRows(t *testing.T) {
 }
 
 // The console's Clean up request carries its context: a cancelled request (or
-// a stopping server) stops the purge instead of finishing a long sweep.
+// the server closing connections after its drain deadline) stops the purge
+// instead of finishing a long sweep.
 func TestLocalCache_PurgeStaleHonoursContext(t *testing.T) {
 	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)

@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -245,4 +246,25 @@ func TestStorePageFiltersAndPages(t *testing.T) {
 	require.Len(t, evs2, 1)
 	assert.Equal(t, "block1", evs2[0].RequestID)
 	assert.True(t, next2.Zero(), "last page")
+}
+
+// The feed aborts in-flight fetches while the user types; each abort must not
+// become a warning in the log.
+func TestStore_CancelledReadIsNotAWarning(t *testing.T) {
+	var logBuf bytes.Buffer
+	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	s, err := telemetry.Open(db, 30, 365, zerolog.New(&logBuf))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	s.Page(ctx, "", "x", telemetry.Cursor{}, 10)
+	s.Recent(ctx, 10)
+	s.Quarantine(ctx, time.Now())
+	s.Snapshot(ctx)
+
+	assert.NotContains(t, logBuf.String(), `"level":"warn"`)
 }

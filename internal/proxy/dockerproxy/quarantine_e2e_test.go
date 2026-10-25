@@ -61,7 +61,7 @@ func youngRegistry(t *testing.T, age time.Duration) (url, repo, tag string) {
 
 // TestDockerSupplyBlockReachesQuarantine drives the FULL pipeline: a young image
 // pulled through the Docker handler with the REAL supply-chain filter and the
-// REAL SQLite telemetry store, then asserts it appears in Store.Quarantine(context.Background()).
+// REAL SQLite telemetry store, then asserts it appears in Store.Quarantine().
 func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 	srvURL, repo, tag := youngRegistry(t, 1*time.Hour) // 1h old < 24h min-age → blocked
 

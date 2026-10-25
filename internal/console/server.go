@@ -238,6 +238,13 @@ func (s *server) cacheCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	removed, freed, err := s.cfg.Purger.PurgeStale(r.Context())
+	if err != nil && r.Context().Err() != nil {
+		// The client left (or the server is closing): what was purged stays
+		// purged, nobody is waiting for the answer, and it is no failure.
+		s.log(r).Info().Int64("removed", removed).Int64("freed_bytes", freed).
+			Msg("cache cleanup interrupted")
+		return
+	}
 	if err != nil {
 		s.log(r).Error().Err(err).Msg("cache cleanup failed")
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "purge_failed"})
@@ -263,6 +270,10 @@ func (s *server) dailyMetrics(w http.ResponseWriter, r *http.Request) {
 		days = n
 	}
 	daily, err := s.cfg.Store.DailyMetrics(r.Context(), days)
+	if err != nil && r.Context().Err() != nil {
+		s.log(r).Debug().Err(err).Msg("daily metrics request cancelled")
+		return
+	}
 	if err != nil {
 		s.log(r).Error().Err(err).Msg("reading daily metrics")
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "metrics_unavailable"})
