@@ -4,7 +4,42 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/ggwpLab/Jo-ei/internal/config"
 )
+
+// setupLogging sets the global level and builds the base logger every
+// subsystem tags with its own component, plus serverLog for startup and wiring
+// messages. A log file is registered for closing on a. An unknown level falls
+// back to info with a warning.
+func setupLogging(a *app, cfg config.LoggingConfig) (base, serverLog zerolog.Logger, err error) {
+	level, levelErr := zerolog.ParseLevel(cfg.Level)
+	if levelErr != nil {
+		level = zerolog.InfoLevel
+	}
+	zerolog.SetGlobalLevel(level)
+
+	logOut, closeLog, err := logWriter(cfg.Output)
+	if err != nil {
+		return zerolog.Logger{}, zerolog.Logger{}, err
+	}
+	a.onClose(closeLog)
+
+	if cfg.Format == "text" {
+		base = zerolog.New(zerolog.ConsoleWriter{Out: logOut, TimeFormat: time.RFC3339}).
+			With().Timestamp().Logger()
+	} else {
+		base = zerolog.New(logOut).With().Timestamp().Logger()
+	}
+	serverLog = base.With().Str("component", "server").Logger()
+	if levelErr != nil {
+		serverLog.Warn().Str("value", cfg.Level).Msg("unknown log level; defaulting to info")
+	}
+	return base, serverLog, nil
+}
 
 // logWriter resolves a logging.output value to a writer and a close function.
 // "" or "stderr" → os.Stderr, "stdout" → os.Stdout, anything else → a file

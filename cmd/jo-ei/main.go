@@ -48,14 +48,6 @@ const defaultOSVBaseURL = "https://api.osv.dev"
 // worker pool so bursts don't queue past the per-scan deadline.
 const defaultMaxConcurrentScans = 8
 
-// Upstream 429/503 circuit-breaker cooldown bounds (see httpx.CircuitBreaker).
-// The cooldown honors Retry-After when sent; these bound the fallback
-// exponential cooldown when it is absent.
-const (
-	upstreamRetryBaseDelay = 1 * time.Second
-	upstreamRetryMaxDelay  = 20 * time.Second
-)
-
 // Build metadata, overridden at release time via
 // -ldflags "-X main.version=… -X main.commit=… -X main.date=…" (see
 // .goreleaser.yaml). Defaults identify a from-source build.
@@ -124,30 +116,9 @@ func run(ctx context.Context, cfgPath string) error {
 	a := &app{}
 	defer a.close()
 
-	level, levelErr := zerolog.ParseLevel(cfg.Logging.Level)
-	if levelErr != nil {
-		level = zerolog.InfoLevel
-	}
-	zerolog.SetGlobalLevel(level)
-
-	logOut, closeLog, err := logWriter(cfg.Logging.Output)
+	logger, serverLog, err := setupLogging(a, cfg.Logging)
 	if err != nil {
 		return err
-	}
-	a.onClose(closeLog)
-
-	var logger zerolog.Logger
-	if cfg.Logging.Format == "text" {
-		logger = zerolog.New(zerolog.ConsoleWriter{Out: logOut, TimeFormat: time.RFC3339}).
-			With().Timestamp().Logger()
-	} else {
-		logger = zerolog.New(logOut).With().Timestamp().Logger()
-	}
-	// logger is the base every subsystem tags with its own component;
-	// serverLog is the one for startup and wiring messages.
-	serverLog := logger.With().Str("component", "server").Logger()
-	if levelErr != nil {
-		serverLog.Warn().Str("value", cfg.Logging.Level).Msg("unknown log level; defaulting to info")
 	}
 
 	// mx stays nil when metrics are disabled; every Wrap*/Register* method on
@@ -209,68 +180,19 @@ func run(ctx context.Context, cfgPath string) error {
 	a.onClose(store.Close)
 	broadcaster := telemetry.NewBroadcaster()
 
-	// One shared upstream transport for every client (metadata, download,
-	// transparent proxy, Docker): a per-host request-rate cap (the primary 429
-	// defense — registries throttle by rate) over a per-host concurrency cap
-	// (complementary, bounds parallelism). Shared so all traffic to a host counts
-	// against the same caps.
-	maxConc := cfg.Server.UpstreamMaxConcurrent
-	if maxConc <= 0 {
-		maxConc = config.DefaultUpstreamMaxConcurrent
-	}
-	rate := cfg.Server.UpstreamRatePerSecond
-	if rate <= 0 {
-		rate = config.DefaultUpstreamRatePerSecond
-	}
-
-	// Upstream TLS trust: the system roots plus any operator-supplied CA files,
-	// so mirrors with a corporate or self-signed certificate can be fetched. A
-	// bad CA file stops startup here rather than becoming an x509 error on the
-	// first pull.
-	rootPool, addedCAs, err := httpx.RootPool(cfg.TLS.CAFiles)
+	up, err := buildUpstream(cfg, mx, serverLog)
 	if err != nil {
-		return fmt.Errorf("upstream TLS trust: %w", err)
+		return err
 	}
-	if addedCAs > 0 {
-		serverLog.Info().
-			Int("certificates", addedCAs).
-			Int("sources", len(cfg.TLS.CAFiles)).
-			Msg("added CA certificates to the upstream trust pool")
-	}
-
-	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
-	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
-	// skipped immediately in favor of a mirror instead of being retried/hammered.
-	// Inner: a coarse rate cap, then a concurrency cap, over a transport carrying
-	// the configured CA trust pool. Metrics instrument the whole chain from the
-	// outside, so rate-limit waits and circuit-open fast-fails are visible.
-	cb := httpx.NewCircuitBreaker(
-		httpx.NewRateLimiter(
-			httpx.NewConcurrencyLimiter(httpx.NewTransport(rootPool), maxConc),
-			float64(rate), 2*rate,
-		),
-		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
-	)
-	// cfg.Registries already carries the stored overlay (applyStoredRegistries
-	// above), so these are the effective upstream hosts.
-	hosts := metrics.UpstreamHosts(
-		cfg.Registries.PyPI.Upstreams, cfg.Registries.NPM.Upstreams, cfg.Registries.Maven.Upstreams,
-		cfg.Registries.RubyGems.Upstreams, cfg.Registries.Go.Upstreams, cfg.Registries.Docker.Upstreams,
-	)
-	upstreamLimiter := mx.WrapTransport(cb, hosts)
-	mx.RegisterCircuitBreaker(cb, hosts)
-	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
-	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}
-	dockerClient := &http.Client{Timeout: 120 * time.Second, Transport: upstreamLimiter}
 
 	shared := sharedDeps{
 		filter:         policyRuntime,
 		cache:          cache.AsArtifactCache(artifactCache),
 		logger:         logger,
 		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: store, Broadcaster: broadcaster}),
-		adapterClient:  adapterClient,
-		downloadClient: downloadClient,
-		throttles:      cb,
+		adapterClient:  up.adapter,
+		downloadClient: up.download,
+		throttles:      up.breaker,
 
 		cveRecheckTTL:       time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
 		malwareRecheckTTL:   time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
@@ -393,8 +315,8 @@ func run(ctx context.Context, cfgPath string) error {
 			MaxLayerBytes: cfg.ImageScan.MaxLayerBytes,
 			Recorder:      shared.recorder,
 			Logger:        logger,
-			HTTPClient:    dockerClient,
-			Throttles:     cb,
+			HTTPClient:    up.docker,
+			Throttles:     up.breaker,
 			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 		})
 	}
