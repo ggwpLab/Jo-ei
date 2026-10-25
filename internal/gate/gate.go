@@ -116,6 +116,32 @@ type MetadataFilterer interface {
 	FilterVersions(doc []byte, decide VersionDecider) (FilteredDocument, error)
 }
 
+// IndexRewriter is an optional RegistryAdapter capability for registries whose
+// index documents link downloads by absolute URL (PyPI links every file on
+// files.pythonhosted.org). Served untouched, such an index sends the client
+// straight to the file host and around every gate, so the proxy serves it only
+// rewritten, and fails the request when it cannot rewrite it.
+type IndexRewriter interface {
+	// IsIndexRequest reports whether r asks for an index document.
+	IsIndexRequest(r *http.Request) bool
+
+	// RewriteIndex points doc's download links at the proxy. requestPath is
+	// the registry-relative request path the links are resolved against, and
+	// contentType the upstream Content-Type. An error means the document
+	// cannot be made safe to serve.
+	RewriteIndex(doc []byte, contentType, requestPath string) (IndexRewrite, error)
+}
+
+// IndexRewrite is a rewritten index document.
+type IndexRewrite struct {
+	Body []byte
+	// Rewritten counts links now pointing at the proxy.
+	Rewritten int
+	// Dropped lists absolute links that could not be pointed at the proxy and
+	// were removed instead.
+	Dropped []string
+}
+
 // ── CVE / scan types ────────────────────────────────────────────────────────
 
 // Severity represents a CVE severity level.
