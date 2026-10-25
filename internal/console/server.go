@@ -6,6 +6,7 @@ package console
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +36,7 @@ type CacheStatsProvider interface {
 // CachePurger deletes stale cache entries on demand; *cache.LocalCache
 // satisfies it.
 type CachePurger interface {
-	PurgeStale() (removed int64, freedBytes int64, err error)
+	PurgeStale(ctx context.Context) (removed int64, freedBytes int64, err error)
 }
 
 // RegistryInfo describes one configured registry for GET /api/registries.
@@ -236,7 +237,7 @@ func (s *server) cacheCleanup(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, r, http.StatusNotFound, map[string]any{"error": "no_cache"})
 		return
 	}
-	removed, freed, err := s.cfg.Purger.PurgeStale()
+	removed, freed, err := s.cfg.Purger.PurgeStale(r.Context())
 	if err != nil {
 		s.log(r).Error().Err(err).Msg("cache cleanup failed")
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "purge_failed"})

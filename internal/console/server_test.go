@@ -60,7 +60,7 @@ type fakePurger struct {
 	calls          int
 }
 
-func (f *fakePurger) PurgeStale() (int64, int64, error) {
+func (f *fakePurger) PurgeStale(context.Context) (int64, int64, error) {
 	f.calls++
 	return f.removed, f.freed, f.err
 }

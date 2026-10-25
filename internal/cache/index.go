@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -290,8 +291,8 @@ func (idx *Index) Delete(ref *gate.PackageRef) (int64, error) {
 }
 
 // LRUCandidates returns up to n entries sorted by last_hit ascending (LRU first).
-func (idx *Index) LRUCandidates(n int) ([]gate.PackageRef, error) {
-	rows, err := idx.db.Query(
+func (idx *Index) LRUCandidates(ctx context.Context, n int) ([]gate.PackageRef, error) {
+	rows, err := idx.db.QueryContext(ctx,
 		`SELECT ecosystem, name, version, classifier FROM artifacts ORDER BY last_hit ASC LIMIT ?`, n,
 	)
 	if err != nil {
@@ -319,8 +320,8 @@ type StaleCandidate struct {
 
 // StaleCandidates returns up to n entries whose last_hit is older than cutoff,
 // oldest first.
-func (idx *Index) StaleCandidates(cutoff int64, n int) ([]StaleCandidate, error) {
-	rows, err := idx.db.Query(`
+func (idx *Index) StaleCandidates(ctx context.Context, cutoff int64, n int) ([]StaleCandidate, error) {
+	rows, err := idx.db.QueryContext(ctx, `
 		SELECT ecosystem, name, version, classifier, size_bytes
 		FROM artifacts WHERE last_hit < ? ORDER BY last_hit ASC LIMIT ?`, cutoff, n,
 	)
@@ -341,9 +342,9 @@ func (idx *Index) StaleCandidates(cutoff int64, n int) ([]StaleCandidate, error)
 }
 
 // TotalSizeBytes returns the sum of size_bytes for all entries.
-func (idx *Index) TotalSizeBytes() (int64, error) {
+func (idx *Index) TotalSizeBytes(ctx context.Context) (int64, error) {
 	var total int64
-	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts`).Scan(&total)
+	err := idx.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM artifacts`).Scan(&total)
 	return total, err
 }
 
