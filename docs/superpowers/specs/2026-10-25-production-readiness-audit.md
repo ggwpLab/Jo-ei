@@ -26,7 +26,28 @@ Not reviewed in depth (second wave): registry adapters' parsing,
 
 ## P0 — breaks real traffic
 
-### 1. Timeouts cut large artifacts and cold Docker pulls
+### 0. pip downloads bypass the proxy entirely (found 2026-10-25, during manual testing)
+PyPI simple-index pages are proxied untouched (`proxyTransparent`), and
+pypi.org's pages link every file with an **absolute** URL
+(`https://files.pythonhosted.org/packages/...`). pip follows those links
+straight to Fastly, so with the default `https://pypi.org` upstream no pip
+download ever reaches `/pypi/packages/...`: no supply-chain, CVE or malware
+gate runs, nothing is cached or recorded. Observed: `pip download torch`
+against the proxy held a connection to 151.101.64.223 while the proxy's temp
+dir stayed empty. The gates only work for clients that request
+`/pypi/packages/...` themselves, or for an upstream mirror that emits relative
+links (devpi, Nexus). npm is believed unaffected — npm ≥ 9 rewrites
+`registry.npmjs.org` tarball URLs to the configured registry
+(`replace-registry-host=npmjs`) — but this needs verifying, as do yarn and
+pnpm, RubyGems and Go.
+- Fix shape: rewrite file URLs in simple-index responses (HTML and PEP 691
+  JSON) whose host is a known upstream file host to the proxy's
+  `/pypi/packages/...`, keeping the `#sha256=` fragment; same treatment for
+  the JSON API `urls[].url` if clients use it. Add an end-to-end test that
+  drives real pip through the proxy.
+
+
+### 1. Timeouts cut large artifacts and cold Docker pulls — FIXED (`fix/large-artifacts-and-cache-writes`)
 - `http.Client.Timeout` covers reading the **body**. Package downloads use
   `downloadClient` with 60 s (`cmd/jo-ei/main.go`, `adapterClient`/`downloadClient`),
   Docker uses 120 s (`dockerClient`) for every blob fetch in
@@ -46,7 +67,7 @@ Not reviewed in depth (second wave): registry adapters' parsing,
   extend it per request with `http.ResponseController`, as the SSE handler
   already does.
 
-### 2. Concurrent cold requests can corrupt a served artifact
+### 2. Concurrent cold requests can corrupt a served artifact — FIXED (`fix/large-artifacts-and-cache-writes`)
 `LocalCache.Put` writes straight into the final path with `os.Create`
 (truncate in place). Two cold requests for the same artifact (a CI fleet
 resolving one lockfile) both download, both `Put`: the second `Create`
@@ -112,7 +133,7 @@ sits in local/CI build cache.
 - Nothing in compose or docs configures or mentions either. Ship a
   `clamd.conf` override (or env) in compose and document the trade-off.
 
-### 8. Temp files live on the container's writable layer
+### 8. Temp files live on the container's writable layer — FIXED (`fix/large-artifacts-and-cache-writes`; `read_only: true` still to do with #5)
 `os.CreateTemp("", …)` → `/tmp` inside the container: not a volume, so 2 GB
 layers land on the overlay filesystem of the VM's root disk, and `Put` then
 *copies* across filesystems into the cache volume. Use a temp dir under the
