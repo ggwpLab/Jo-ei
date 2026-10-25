@@ -12,6 +12,12 @@ server:
   # one the policy allows instead of failing the whole install. Default 32
   # when unset; set to 0 to disable metadata filtering entirely.
   metadata_filter_max_mb: 32
+  # Largest package artifact (wheel, tarball, jar, gem, module zip) the proxy
+  # downloads, in MB; a larger one is refused with 403 artifact_too_large
+  # before it can fill the cache volume. Default 2048 — the ClamAV stream limit
+  # the compose file sets, so anything bigger could not be scanned anyway.
+  # 0 = unlimited. (Docker layers use image_scan.max_layer_bytes.)
+  max_artifact_mb: 2048
   # Seconds a stopping server waits for in-flight requests (a gated download
   # can take a while) before closing the rest. Keep it below the container's
   # stop grace period (docker-compose.yaml: stop_grace_period). Default 30.

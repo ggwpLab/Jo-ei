@@ -42,6 +42,8 @@ type sharedDeps struct {
 	metadataFilterMaxMB int
 	// tempDir holds downloads while they are checked (on the cache volume).
 	tempDir string
+	// maxArtifactBytes caps a package artifact download (0 = unlimited).
+	maxArtifactBytes int64
 }
 
 // proxyRoutes are the registry handlers keyed by URL prefix: package
@@ -167,5 +169,6 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
 		TempDir:             shared.tempDir,
+		MaxArtifactBytes:    shared.maxArtifactBytes,
 	})
 }
