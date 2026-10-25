@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every config key can be set from the environment.** `JOEI_*` variables
+  used to override only keys present in the config file, so setting one for a
+  key the file left out (or commented out) was silently ignored. Every scalar
+  and string-list key is now settable whether or not the file mentions it
+  (lists comma-separated); lists of objects and maps (`malware.scanners`,
+  `policy.profiles`) can only be defined in the file, though a field of a
+  profile the file defines can still be overridden. **A non-empty `JOEI_*`
+  variable that sets nothing now stops the server from starting** with an
+  error naming it — check for leftover variables (for example the removed
+  `JOEI_CONSOLE_AUTH_USERS`) before upgrading; the CLI tools only warn, and
+  empty variables and Kubernetes service links for Services named `joei` /
+  `joei-…` are ignored.
 - **The compose file is safe to run in production as shipped.** Port 8080 is
   published on `127.0.0.1` only (put a reverse proxy in front); every service
   rotates its logs (50 MB × 5); the Trivy server is pinned to the client

@@ -258,9 +258,14 @@ handling, nonroot distroless image, state confined to two volumes, JWT secret
 auto-generated and persisted.
 
 Gaps:
-- **Env config is partial**: only keys present in `config.yaml` can be
-  overridden; lists (`malware.scanners`, `registries.*.upstreams`,
-  `trusted_proxies`) can't be set from env at all.
+- **Env config is partial** — PARTLY FIXED (`feat/env-binds-all-keys`): every
+  scalar and string-list key is now settable from env whether or not the file
+  has it, and unknown `JOEI_*` variables fail startup. **Backlog (owner,
+  2026-10-25), with HA/S3:** env-only configuration without a file (Spring-
+  style): built-in defaults for registries/profiles, indexed lists of objects
+  (`JOEI_MALWARE_SCANNERS_0_TYPE`), map keys (`JOEI_POLICY_PROFILES_<NAME>_*`),
+  a Helm chart, and a decision on DB-vs-config precedence for console-edited
+  policy and registries.
 - **Config is not the source of truth**: policy and registries persist in the
   DB and override `config.yaml` after first boot — drift for GitOps-style
   deployments.

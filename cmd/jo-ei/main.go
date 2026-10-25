@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,6 +63,9 @@ func run(ctx context.Context, cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
+	}
+	if len(cfg.UnknownEnv) > 0 {
+		return fmt.Errorf("environment: %s", strings.Join(cfg.UnknownEnv, "; "))
 	}
 	a := &app{}
 	defer a.close()

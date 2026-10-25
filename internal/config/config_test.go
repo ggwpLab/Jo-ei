@@ -781,3 +781,89 @@ func TestShippedConfig_HasTrustedProxiesKey(t *testing.T) {
 		assert.Equal(t, []string{"10.0.0.1", "10.0.0.0/8"}, cfg.Server.TrustedProxies, env)
 	}
 }
+
+const minimalYAML = "server:\n  listen: \":8080\"\ndatabase:\n  path: \"/tmp/x.db\"\n"
+
+// Every scalar or string-list key can be set from the environment, whether or
+// not the file mentions it.
+func TestLoad_EnvSetsKeysAbsentFromFile(t *testing.T) {
+	t.Setenv("JOEI_CACHE_LOCAL_MAX_SIZE_GB", "7")
+	t.Setenv("JOEI_SERVER_SHUTDOWN_TIMEOUT_SECONDS", "5")
+	t.Setenv("JOEI_METRICS_ENABLED", "false")
+	t.Setenv("JOEI_REGISTRIES_PYPI_UPSTREAMS", "https://a.example,https://b.example")
+	t.Setenv("JOEI_REGISTRIES_PYPI_ENABLED", "true")
+	t.Setenv("JOEI_CVE_BLOCK_ON", "CRITICAL")
+
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+
+	assert.Equal(t, 7, cfg.Cache.Local.MaxSizeGB)
+	assert.Equal(t, 5, cfg.Server.ShutdownTimeoutSeconds)
+	assert.False(t, cfg.Metrics.Enabled)
+	assert.Equal(t, []string{"https://a.example", "https://b.example"}, cfg.Registries.PyPI.Upstreams)
+	assert.True(t, cfg.Registries.PyPI.Enabled)
+	assert.Equal(t, "CRITICAL", cfg.CVE.BlockOn)
+}
+
+// A misspelt variable is reported, not silently ignored. Load itself does
+// not fail — the server refuses to start on it, the CLI tools only warn — so
+// a stray variable cannot lock out reset-admin-password.
+func TestLoad_UnknownEnvReported(t *testing.T) {
+	t.Setenv("JOEI_CACHE_LOCAL_MAX_SIZE_G", "1")
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	require.Len(t, cfg.UnknownEnv, 1)
+	assert.Contains(t, cfg.UnknownEnv[0], "JOEI_CACHE_LOCAL_MAX_SIZE_G")
+}
+
+// A variable aimed at a list of objects or a map key the file does not have
+// cannot be applied; say so.
+func TestLoad_EnvForObjectListOrMapReported(t *testing.T) {
+	for _, name := range []string{"JOEI_MALWARE_SCANNERS_0_TYPE", "JOEI_POLICY_PROFILES_PRODUCTION_CVE_BLOCK"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "x")
+			cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+			require.NoError(t, err)
+			require.Len(t, cfg.UnknownEnv, 1)
+			assert.Contains(t, cfg.UnknownEnv[0], name)
+			assert.Contains(t, cfg.UnknownEnv[0], "config file")
+		})
+	}
+}
+
+// Overriding a field of a profile the file defines worked before and must keep
+// working: the key exists once the file is read.
+func TestLoad_EnvOverridesExistingProfileField(t *testing.T) {
+	yaml := minimalYAML + "policy:\n  active_profile: dev\n  profiles:\n    dev:\n      cve_block: true\n"
+	t.Setenv("JOEI_POLICY_PROFILES_DEV_CVE_BLOCK", "false")
+	cfg, err := config.Load(writeTempConfig(t, yaml))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.UnknownEnv)
+	assert.False(t, cfg.Policy.Profiles["dev"].CVEBlock)
+}
+
+// Compose .env templates leave variables empty; an empty value sets nothing
+// and is not reported, as viper itself ignores it.
+func TestLoad_EmptyUnknownEnvIgnored(t *testing.T) {
+	t.Setenv("JOEI_CONSOLE_AUTH_USERS", "")
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.UnknownEnv)
+}
+
+// Variables read directly by the code, and the service links Kubernetes
+// injects for a Service named "joei", are not configuration keys.
+func TestLoad_NonKeyEnvAllowed(t *testing.T) {
+	for _, name := range []string{
+		"JOEI_CONSOLE_JWT_SECRET",
+		"JOEI_SERVICE_HOST", "JOEI_SERVICE_PORT", "JOEI_SERVICE_PORT_HTTP", "JOEI_PORT", "JOEI_PORT_8080_TCP_ADDR",
+		// Services named joei-metrics, joei-trivy, or a release "joei" of chart "jo-ei".
+		"JOEI_METRICS_SERVICE_HOST", "JOEI_METRICS_PORT", "JOEI_METRICS_PORT_9464_TCP", "JOEI_TRIVY_SERVICE_PORT",
+		"JOEI_JO_EI_SERVICE_HOST", "JOEI_JO_EI_PORT_8080_TCP_PROTO",
+	} {
+		t.Setenv(name, "x")
+	}
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.UnknownEnv)
+}

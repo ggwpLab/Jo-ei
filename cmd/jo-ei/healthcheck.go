@@ -31,6 +31,7 @@ func newHealthcheckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			warnUnknownEnv(cmd, cfg)
 			url, err := healthcheckURL(cfg.Server.Listen, ready)
 			if err != nil {
 				return err
@@ -82,4 +83,13 @@ func probe(ctx context.Context, url string) error {
 		return fmt.Errorf("probing %s: HTTP %d", url, resp.StatusCode)
 	}
 	return nil
+}
+
+// warnUnknownEnv tells a CLI user about JOEI_* variables that set nothing
+// without failing the command: the server refuses to start on them, but a
+// recovery tool must still work.
+func warnUnknownEnv(cmd *cobra.Command, cfg *config.Config) {
+	for _, p := range cfg.UnknownEnv {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: environment:", p)
+	}
 }
