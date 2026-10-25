@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -269,4 +270,26 @@ func TestOSVHealth_CacheHitDoesNotUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, calls, "second Scan should be served from cache")
 	assert.Equal(t, first, s.Health(), "cache hit must not update health")
+}
+
+// countingTransport counts the requests that pass through it.
+type countingTransport struct{ n atomic.Int32 }
+
+func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n.Add(1)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// OSV lookups must go through the client the proxy hands in (the shared
+// upstream transport carrying tls.ca_files and the rate limits), not a private
+// default one.
+func TestOSV_UsesGivenClient(t *testing.T) {
+	srv := newMockOSV(t, map[string]string{"PyPI/requests@2.31.0": `{"vulns":[]}`})
+	defer srv.Close()
+	tr := &countingTransport{}
+
+	sc := scanner.NewOSVScanner(srv.URL, time.Minute, scanner.WithOSVHTTPClient(&http.Client{Transport: tr}))
+	_, err := sc.Scan(context.Background(), &gate.PackageRef{Ecosystem: "pypi", Name: "requests", Version: "2.31.0"})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), tr.n.Load())
 }

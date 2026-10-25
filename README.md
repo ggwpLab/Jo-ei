@@ -480,6 +480,26 @@ reverse proxy:
 - **Port 8080 is published on loopback only** (`127.0.0.1:8080`). Point your
   reverse proxy (TLS, access control) at it; publishing it on all interfaces
   would let clients reach the proxy and the admin console around it.
+- **Tell Jō-ei which proxy to trust.** Behind a reverse proxy every request
+  arrives from the proxy's address, so console login throttling would lump all
+  clients into one bucket. Set `server.trusted_proxies` to the one address the
+  reverse proxy connects from, and have it set `X-Forwarded-For` (or pick
+  `X-Real-IP` / `Forwarded` with `server.client_ip_header`). Anyone else who
+  connects from a trusted address can forge that header and pick their own
+  throttling bucket, so trust as little as possible:
+  - *Preferred:* run the reverse proxy in the compose project, give the
+    network a fixed subnet and the proxy a fixed address (`ipam` +
+    `ipv4_address`), trust exactly that address, and drop the `ports` entry.
+  - *Reverse proxy on the host:* it reaches the container from the compose
+    network's gateway (`docker network inspect <project>_default`), so you
+    would trust that gateway — acceptable **only** while 8080 is published on
+    `127.0.0.1`, and every local process can then forge the header. Never do
+    this with a non-loopback publish, or on Docker Desktop / rootless Docker,
+    where every client of a published port appears as the gateway. The
+    gateway address also changes if the network is recreated.
+
+  Jō-ei logs a warning the first time it sees a forwarding header from an
+  untrusted peer.
 - **Health:** `GET /health` answers while the process is up; `GET /ready`
   answers 200 only when the database responds and no attached scanner is down
   (503 lists what is failing). The compose healthcheck runs
@@ -500,6 +520,38 @@ reverse proxy:
 - **Logs** rotate at 50 MB × 5 files per service.
 - **Scanner images** are pinned (`clamav/clamav:1.5`, `aquasec/trivy:0.76.1`
   — the Trivy server must match the client in the Jō-ei image).
+
+### Backup and restore
+
+The state worth backing up is one SQLite file, `database.path`
+(`/var/lib/jo-ei/jo-ei.db` in the image): console users, the session signing
+key, policy and registry edits, and telemetry. Copying it while the proxy runs
+is not safe (WAL mode), so take an online backup with the binary, copy it out,
+and remove the copy from the volume — it holds password hashes and the
+signing key (the file is created owner-only):
+
+```bash
+docker compose exec jo-ei /jo-ei --config /etc/jo-ei/config.yaml backup --output /var/lib/jo-ei/backup.db
+docker compose cp jo-ei:/var/lib/jo-ei/backup.db ./jo-ei-$(date +%F).db
+docker run --rm -v <project>_jo-ei-db:/db busybox rm /db/backup.db
+```
+
+`backup` never overwrites an existing file. To restore, stop Jō-ei and put the
+backup in place with a helper container (the image has no shell, and the file
+must belong to the non-root user, UID 65532), removing the old WAL files:
+
+```bash
+docker compose stop jo-ei
+docker run --rm -v <project>_jo-ei-db:/db -v "$PWD":/in:ro busybox sh -c \
+  'cp /in/jo-ei-2026-10-25.db /db/jo-ei.db && rm -f /db/jo-ei.db-wal /db/jo-ei.db-shm && chown 65532:65532 /db/jo-ei.db && chmod 600 /db/jo-ei.db'
+docker compose start jo-ei
+```
+
+`<project>` is the compose project name (the directory name by default; see
+`docker volume ls`). Restoring brings back that backup's session signing key,
+so sessions signed with it become valid again — unless the key comes from
+`JOEI_CONSOLE_JWT_SECRET`. The artifact cache volume needs no backup; if you
+reset it, remove the whole volume (artifacts and `index.db` together).
 
 ## Monitoring
 

@@ -29,6 +29,13 @@ type upstreamClients struct {
 	adapter  *http.Client // upstream metadata
 	download *http.Client // artifact downloads and transparent proxying
 	docker   *http.Client // Docker registry API and blobs
+	// osv queries the CVE database. It shares the CA trust and the idle
+	// timeout but not the registry limiters or circuit breaker: osv.dev has
+	// no mirror to fail over to, so a breaker would only turn one 503 into a
+	// cooldown that fails every lookup (and, fail-closed, every uncached
+	// download), and a per-host rate cap would throttle all ecosystems'
+	// lookups through one bucket.
+	osv *http.Client
 }
 
 // buildUpstream wires the shared upstream transport and the clients over it.
@@ -93,5 +100,14 @@ func buildUpstream(cfg *config.Config, mx *metrics.Metrics, serverLog zerolog.Lo
 	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
 	downloadClient := &http.Client{Transport: upstreamLimiter}
 	dockerClient := &http.Client{Transport: upstreamLimiter}
-	return upstreamClients{breaker: cb, adapter: adapterClient, download: downloadClient, docker: dockerClient}, nil
+	osvBase := cfg.CVE.BaseURL
+	if osvBase == "" {
+		osvBase = defaultOSVBaseURL
+	}
+	osvTransport := mx.WrapTransport(
+		httpx.NewIdleTimeout(httpx.NewTransport(rootPool), httpx.DefaultUpstreamIdleTimeout),
+		metrics.UpstreamHosts([]string{osvBase}),
+	)
+	osvClient := &http.Client{Timeout: osvTimeout, Transport: osvTransport}
+	return upstreamClients{breaker: cb, adapter: adapterClient, download: downloadClient, docker: dockerClient, osv: osvClient}, nil
 }

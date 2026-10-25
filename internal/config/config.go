@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/viper"
 )
@@ -397,10 +398,25 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
+	cfg.Server.TrustedProxies = splitList(cfg.Server.TrustedProxies)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 	return &cfg, nil
+}
+
+// splitList flattens list entries that hold several values separated by
+// commas or whitespace. An environment override arrives as one string, which
+// viper splits on commas only; accepting spaces too means
+// JOEI_SERVER_TRUSTED_PROXIES="10.0.0.1 10.0.0.0/8" works as written.
+func splitList(entries []string) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, strings.FieldsFunc(e, func(r rune) bool {
+			return r == ',' || unicode.IsSpace(r)
+		})...)
+	}
+	return out
 }
 
 // validateTrustedProxy accepts a CIDR or a bare IP address.
