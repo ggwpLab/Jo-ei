@@ -61,3 +61,27 @@ func TestReady_DatabaseClosed(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, code)
 	assert.Contains(t, body["failing"], "database")
 }
+
+// A passively tracked engine (osv.dev) reports its last lookup, which on an
+// idle instance can stay "down" for hours after one timeout; it must not hold
+// readiness down.
+func TestReady_PassiveDownDoesNotFail(t *testing.T) {
+	code, body := ready(t, openTestDB(t), []health.ScannerHealth{
+		{Name: "osv.dev", Enabled: true, Passive: true, Status: health.StatusDown},
+	})
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "ready", body["status"])
+}
+
+// /ready is public; probes in quick succession share one evaluation instead of
+// each taking the single SQLite connection.
+func TestReady_CachesBriefly(t *testing.T) {
+	calls := 0
+	h := readinessHandler(openTestDB(t), func() []health.ScannerHealth { calls++; return nil })
+	for range 5 {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+	assert.Equal(t, 1, calls)
+}

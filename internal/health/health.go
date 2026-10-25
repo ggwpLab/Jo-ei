@@ -35,6 +35,9 @@ type ScannerHealth struct {
 	Enabled   bool   `json:"enabled"`
 	Status    Status `json:"status"`
 	LatencyMS int64  `json:"latency_ms"`
+	// Passive is true for an engine tracked by its own last outcome (osv.dev)
+	// rather than probed: its status only changes when traffic does.
+	Passive bool `json:"-"`
 }
 
 // classify maps a raw Sample to a Status + latency in milliseconds. Latency is
@@ -135,7 +138,7 @@ func (m *Monitor) AddActive(name, detail string, enabled bool, probe Probe) {
 func (m *Monitor) AddPassive(name, detail string, enabled bool, report Reporter) {
 	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
-		meta:   ScannerHealth{Name: name, Detail: detail, Enabled: enabled},
+		meta:   ScannerHealth{Name: name, Detail: detail, Enabled: enabled, Passive: true},
 		kind:   kindPassive,
 		report: report,
 	})
