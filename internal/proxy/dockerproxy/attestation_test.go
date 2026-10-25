@@ -130,23 +130,62 @@ func TestHandlerServesAttestationBlobs(t *testing.T) {
 	}
 }
 
-// A passthrough manifest that also lists a filesystem layer must not open an
-// unscanned route to that layer: tar layers are only ever served from the
-// gated cache.
-func TestHandlerAttestationNeverServesFilesystemLayer(t *testing.T) {
-	tarLayer := []byte("pretend-this-is-a-tar.gz")
-	up := &attestationUpstream{repo: "library/test", config: attConfig, layers: []attLayer{
-		{"application/vnd.oci.image.layer.v1.tar+gzip", tarLayer},
-		{inTotoType, sbom},
-	}}
-	h := attHandler(up.start(t), newFakeCache())
-	get(h, "/library/test/manifests/att")
+// Only a manifest whose every layer is in-toto is an attestation. Anything
+// else — a canonical tar layer, or a layer type the gate's list does not know
+// (which containerd may still unpack) — is gated like an image, and none of its
+// blobs is ever relayed unscanned.
+func TestHandlerNonAttestationLayersNeverRelayed(t *testing.T) {
+	for _, mt := range []string{
+		"application/vnd.oci.image.layer.v1.tar+gzip",
+		"application/vnd.docker.image.rootfs.diff.tar",
+		"application/vnd.oci.image.layer.v1.tar+gzip; foo=bar",
+		"application/vnd.oci.image.layer.v1.TAR+gzip",
+		"application/vnd.oci.image.layer.nondistributable.v1.tar+zstd",
+		"application/vnd.oci.image.layer.v1.tar+gzip+encrypted",
+		"",
+		"application/octet-stream",
+		"application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+	} {
+		layer := []byte("layer-bytes-for " + mt)
+		for _, layers := range [][]attLayer{{{mt, layer}}, {{mt, layer}, {inTotoType, sbom}}} {
+			up := &attestationUpstream{repo: "evil/img", config: attConfig, layers: layers}
+			h := attHandler(up.start(t), newFakeCache())
 
-	if w := get(h, "/library/test/blobs/"+sha(tarLayer)); w.Code != http.StatusNotFound {
-		t.Errorf("filesystem layer status = %d, want 404", w.Code)
+			get(h, "/evil/img/manifests/att")
+			if w := get(h, "/evil/img/blobs/"+sha(layer)); w.Code == http.StatusOK {
+				t.Errorf("type %q (%d layers): layer relayed unscanned", mt, len(layers))
+			}
+			if w := get(h, "/evil/img/blobs/"+sha(attConfig)); w.Code == http.StatusOK {
+				t.Errorf("type %q (%d layers): config relayed for a non-attestation manifest", mt, len(layers))
+			}
+		}
 	}
-	if w := get(h, "/library/test/blobs/"+sha(sbom)); w.Code != http.StatusOK {
-		t.Errorf("in-toto layer status = %d, want 200", w.Code)
+}
+
+func TestIsAttestationManifest(t *testing.T) {
+	mk := func(types ...string) []byte {
+		var ls []map[string]string
+		for i, mt := range types {
+			ls = append(ls, map[string]string{"mediaType": mt, "digest": fmt.Sprintf("sha256:%d", i)})
+		}
+		b, _ := json.Marshal(map[string]any{"layers": ls})
+		return b
+	}
+	for _, tc := range []struct {
+		body []byte
+		want bool
+	}{
+		{mk(inTotoType), true},
+		{mk(inTotoType, "application/vnd.in-toto+json"), true},
+		{mk(" Application/VND.IN-TOTO+JSON ; charset=utf-8"), true},
+		{mk(inTotoType, "application/vnd.oci.image.layer.v1.tar+gzip"), false},
+		{mk("application/vnd.docker.image.rootfs.diff.tar"), false},
+		{mk(), false},
+		{mk(make([]string, maxAttestationLayers+1)...), false},
+	} {
+		if got := isAttestationManifest(tc.body); got != tc.want {
+			t.Errorf("isAttestationManifest(%s) = %v, want %v", tc.body, got, tc.want)
+		}
 	}
 }
 

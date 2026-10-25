@@ -87,11 +87,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attestation blobs (SBOM/provenance). Their manifests were served
   un-gated, but the blobs were never cached, so every pull of an official
   image failed with "could not fetch content descriptor … not found" right
-  after the image itself passed the gate. The proxy now remembers the config
-  and non-filesystem layers of each attestation manifest it serves and
-  relays exactly those blobs from upstream — capped at 16 MB, verified
-  against their digest, not cached. Filesystem layers are still served only
-  after scanning.
+  after the image itself passed the gate. For an attestation manifest — every
+  layer an in-toto statement — the proxy now relays its config and in-toto
+  blobs from upstream, unscanned (they are JSON documents, not filesystems):
+  capped at 4 MiB, verified against their digest, not cached.
+- **Manifests with unrecognised layer types are gated, not passed through.**
+  A manifest counted as a pass-through "attestation" whenever any layer had a
+  media type outside a short list of tar types, so an image could avoid the
+  gate by naming a layer `application/vnd.docker.image.rootfs.diff.tar`, with
+  a parameter or in upper case — types containerd still unpacks. Only a
+  manifest whose every layer is in-toto passes through now; everything else
+  is gated (and fails closed if it cannot be scanned).
 - **Stopping the proxy no longer hangs on an open console tab.** The live
   event stream held the graceful shutdown until its 30 s deadline, which then
   failed with an error — and Compose had already killed the container after

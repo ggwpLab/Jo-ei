@@ -1,6 +1,7 @@
 package dockerproxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -141,7 +142,10 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.Reason == reasonAttestationPassthrough && h.cfg.Attest != nil {
 		// Re-read on every serve, cached verdict included, so the blobs stay
 		// servable across restarts.
-		if body, err := os.ReadFile(v.ManifestPath); err == nil { // #nosec G304 -- path from the verdict store, inside the cache root
+		body, err := os.ReadFile(v.ManifestPath) // #nosec G304 -- path from the verdict store, inside the cache root
+		if err != nil {
+			log.Debug().Err(err).Msg("reading attestation manifest to remember its blobs")
+		} else {
 			h.cfg.Attest.remember(pp.Repo, body)
 		}
 	}
@@ -227,7 +231,16 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, pp ParsedPat
 // verified against its digest, not cached. Only blobs remembered from an
 // attestation manifest's config and non-filesystem layers reach this.
 func (h *Handler) serveAttestationBlob(w http.ResponseWriter, r *http.Request, pp ParsedPath, log zerolog.Logger) {
-	body, err := fetchAttestationBlob(r.Context(), h.cfg.Adapter, pp.Repo, pp.Reference)
+	// Coalesced per blob; the flight is detached from any one client so a
+	// disconnecting leader does not fail the others.
+	ctx := context.WithoutCancel(r.Context())
+	res, err, _ := h.cfg.Attest.fetches.Do(pp.Repo+"@"+pp.Reference, func() (any, error) {
+		return fetchAttestationBlob(ctx, h.cfg.Adapter, pp.Repo, pp.Reference)
+	})
+	var body []byte
+	if err == nil {
+		body = res.([]byte)
+	}
 	switch {
 	case errors.Is(err, errAttestationBlobRejected):
 		log.Warn().Err(err).Msg("refusing attestation blob")
