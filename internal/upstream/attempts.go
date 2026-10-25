@@ -1,7 +1,6 @@
 // Package upstream records one entry per attempted upstream mirror so a fetch
-// that failed across every mirror can be logged with each mirror's own error.
-// Retry loops used to keep a single lastErr variable, which meant a mirror's
-// TLS or DNS failure was silently replaced by the next mirror's plain 404.
+// that failed across every mirror can be logged with each mirror's own error —
+// one mirror's TLS or DNS failure stays visible next to another's plain 404.
 package upstream
 
 import (

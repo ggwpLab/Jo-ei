@@ -164,7 +164,7 @@ the leaf and the trust anchor — list it directly.
 
 ## `registries`
 
-Five fixed ecosystems: `pypi`, `npm`, `maven`, `rubygems`, `docker`. Each:
+Six fixed ecosystems: `pypi`, `npm`, `maven`, `rubygems`, `go`, `docker`. Each:
 
 | Key | Default | Description |
 |---|---|---|
@@ -504,8 +504,6 @@ TOKEN=$(curl -sX POST "$JOEI/api/auth/login" \
   -d '{"username":"ops","password":"…"}' | jq -r .access_token)
 curl -H "Authorization: Bearer $TOKEN" "$JOEI/api/overview"
 ```
-
-HTTP Basic is no longer accepted.
 
 **Fail-closed:** with no enabled users, `/api/` returns HTTP 503 and no
 one can sign in; the console shell still loads (it is static UI), and the proxy

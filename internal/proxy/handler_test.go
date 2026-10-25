@@ -839,7 +839,7 @@ func TestHandler_AllMirrors404Yields404(t *testing.T) {
 }
 
 // A transparent (non-intercepted) request that fails everywhere must leave a
-// log trail. It previously produced a silent 502.
+// log trail, not a silent 502.
 func TestHandler_TransparentProxyLogsAttempts(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	deadURL := dead.URL

@@ -111,8 +111,8 @@ func (a *MavenAdapter) FetchMetadata(_ context.Context, _ *gate.PackageRef) (*ga
 // MetadataFromHeader derives package metadata from an artifact download
 // response. Maven Central serves artifacts as static files, so the .jar's
 // Last-Modified is a sound proxy for the publish date used by the supply-chain
-// age check. A missing/unparseable header yields a zero PublishedAt (treated as
-// old), matching the previous behavior when the .pom carried no Last-Modified.
+// age check. A missing/unparseable header yields a zero PublishedAt, which the
+// age check treats as old.
 func (a *MavenAdapter) MetadataFromHeader(h http.Header) *gate.PackageMetadata {
 	meta := &gate.PackageMetadata{}
 	if lm := h.Get("Last-Modified"); lm != "" {
