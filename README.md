@@ -394,8 +394,8 @@ Every package download goes through this pipeline:
    HTTP **403 Forbidden**. Results are cached in memory for `cve.cache_ttl_minutes`.
 
 4. **Malware Scan** — the artifact is downloaded to a temp file and scanned by
-   every configured engine in `malware.scanners[]` (native ClamAV `INSTREAM`, or
-   any ICAP server such as Kaspersky / Dr.Web). If any engine reports a signature,
+   every configured engine in `malware.scanners[]` in parallel (native ClamAV
+   `INSTREAM`, or any ICAP server such as Kaspersky / Dr.Web). If any engine reports a signature,
    the package is rejected with HTTP **403 Forbidden** (`reason: malware_found`)
    and the artifact is not cached.
 

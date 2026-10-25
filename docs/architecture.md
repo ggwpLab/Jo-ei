@@ -51,7 +51,7 @@ that is what makes the graph acyclic.
 | `internal/proxy/adapters` | One `RegistryAdapter` per ecosystem: PyPI, npm (+ Yarn alias), Maven, RubyGems. Adapters normalize download URLs to a `PackageRef`, fetch publish metadata, and enumerate upstream URLs (multi-upstream failover). |
 | `internal/proxy/dockerproxy` | Docker Registry v2 pull-through proxy: manifest gate (Trivy + malware engines over config blob and layers), blob cache, tag index, quarantine. Verdicts are decided on the manifest request. Trivy here is the CVE gate's engine for images (policy shared with package CVE decisions). |
 | `internal/supplychain` | Min-age filter (configurable `min_age_hours`, 24 h by default) with per-gate allowlist. |
-| `internal/scanner` | `CVEScanner` (osv.dev with TTL cache), `AVScanner`s (ClamAV clamd protocol, ICAP RFC 3507), `MultiScanner` fan-out, `LimitedScanner` concurrency semaphore, health probes. |
+| `internal/scanner` | `CVEScanner` (osv.dev with TTL cache), `AVScanner`s (ClamAV clamd protocol, ICAP RFC 3507), `MultiScanner` parallel fan-out, `LimitedScanner` concurrency semaphore, health probes. |
 | `internal/policy` | Policy engine (`PolicyDecider`): severity threshold, per-gate allowlists, denylist; `Runtime` holds the mutable snapshot, seeded from YAML on first boot and persisted via the settings store. |
 | `internal/cache` | Artifact cache: SQLite index + files on disk, LRU eviction to `max_size_gb`, per-gate check timestamps for lazy re-validation. Satisfies `gate.ArtifactCache`. |
 | `internal/httpx` | Outbound discipline per upstream host: concurrency limiter, token-bucket rate limiter, 429/503 circuit breaker. |
@@ -128,7 +128,8 @@ boot; YAML only seeds an empty store.
   downloads, and transparent proxying all count against the same budget.
 - Malware scans are capped globally (`malware.max_concurrent_scans`,
   `LimitedScanner`) so download bursts don't overwhelm clamd/ICAP worker
-  pools.
+  pools. One slot covers one artifact; `MultiScanner` runs every engine on it
+  in parallel, so each engine sees at most the limit.
 - The cache eviction worker is a single background goroutine with a coalescing
   trigger; re-validation is lazy on the serve path, so it adds no background
   load.

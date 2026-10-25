@@ -14,7 +14,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
 )
 
-// knownScanners is the closed set of scanner label values.
+// knownScanners is the closed set of engine label values.
 var knownScanners = hostSet([]string{"clamav", "icap", "osv", "trivy"})
 
 type scannerMetrics struct {
@@ -31,14 +31,14 @@ func newScannerMetrics(reg prometheus.Registerer) *scannerMetrics {
 		scans: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "jo_ei_scans_total",
 			Help: "Scans by scanner and result (clean, detected, timeout, error).",
-		}, []string{"scanner", "result"}),
+		}, []string{"scanner", "engine", "result"}),
 		duration: f.NewHistogramVec(newDurationHistogramOpts(
 			"jo_ei_scan_duration_seconds",
-			"Scan duration by scanner."), []string{"scanner"}),
+			"Scan duration by scanner."), []string{"scanner", "engine"}),
 		inFlight: f.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "jo_ei_scans_in_flight",
 			Help: "Scans currently running, by scanner.",
-		}, []string{"scanner"}),
+		}, []string{"scanner", "engine"}),
 		queueWait: f.NewHistogram(newDurationHistogramOpts(
 			"jo_ei_scan_queue_wait_seconds",
 			"Time an antivirus scan waited for a concurrency slot.")),
@@ -56,17 +56,21 @@ func isTimeout(err error) bool {
 		errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// record runs scan under in-flight/duration/result instrumentation. detected
-// is consulted only when scan returns no error.
-func (m *Metrics) record(engine string, scan func() (detected bool, err error)) {
-	name := oneOf(engine, knownScanners)
-	g := m.scanner.inFlight.WithLabelValues(name)
+// record runs scan under in-flight/duration/result instrumentation, labelled
+// with the scanner's name and its engine type (clamped to the closed set).
+// detected is consulted only when scan returns no error.
+func (m *Metrics) record(scanner, engine string, scan func() (detected bool, err error)) {
+	engine = oneOf(engine, knownScanners)
+	if scanner == "" {
+		scanner = engine
+	}
+	g := m.scanner.inFlight.WithLabelValues(scanner, engine)
 	g.Inc()
 	defer g.Dec()
 
 	start := time.Now()
 	detected, err := scan()
-	m.scanner.duration.WithLabelValues(name).Observe(time.Since(start).Seconds())
+	m.scanner.duration.WithLabelValues(scanner, engine).Observe(time.Since(start).Seconds())
 
 	result := "clean"
 	switch {
@@ -77,7 +81,7 @@ func (m *Metrics) record(engine string, scan func() (detected bool, err error)) 
 	case detected:
 		result = "detected"
 	}
-	m.scanner.scans.WithLabelValues(name, result).Inc()
+	m.scanner.scans.WithLabelValues(scanner, engine, result).Inc()
 }
 
 type avFunc func(ctx context.Context, filePath string) (*gate.AVResult, error)
@@ -86,14 +90,15 @@ func (f avFunc) Scan(ctx context.Context, filePath string) (*gate.AVResult, erro
 	return f(ctx, filePath)
 }
 
-// WrapAVScanner instruments s as the given engine (clamav, icap; anything
+// WrapAVScanner instruments s under its configured display name (the scanner
+// label; config keeps names unique) and engine type (clamav, icap; anything
 // else is "other"). A nil *Metrics returns s unchanged.
-func (m *Metrics) WrapAVScanner(engine string, s gate.AVScanner) gate.AVScanner {
+func (m *Metrics) WrapAVScanner(name, engine string, s gate.AVScanner) gate.AVScanner {
 	if m == nil {
 		return s
 	}
 	return avFunc(func(ctx context.Context, filePath string) (res *gate.AVResult, err error) {
-		m.record(engine, func() (bool, error) {
+		m.record(name, engine, func() (bool, error) {
 			res, err = s.Scan(ctx, filePath)
 			return res != nil && !res.Clean, err
 		})
@@ -114,7 +119,7 @@ func (m *Metrics) WrapCVEScanner(engine string, s gate.CVEScanner) gate.CVEScann
 		return s
 	}
 	return cveFunc(func(ctx context.Context, pkg *gate.PackageRef) (res *gate.ScanResult, err error) {
-		m.record(engine, func() (bool, error) {
+		m.record(engine, engine, func() (bool, error) {
 			res, err = s.Scan(ctx, pkg)
 			return res != nil && !res.Clean, err
 		})
@@ -129,7 +134,7 @@ type instrumentedImageScanner struct {
 }
 
 func (i *instrumentedImageScanner) ScanImage(ctx context.Context, imageRef string) (res *dockerproxy.ImageScanResult, err error) {
-	i.m.record(i.engine, func() (bool, error) {
+	i.m.record(i.engine, i.engine, func() (bool, error) {
 		res, err = i.inner.ScanImage(ctx, imageRef)
 		return res != nil && len(res.Findings) > 0, err
 	})
@@ -169,7 +174,7 @@ func (m *Metrics) SetScanConcurrencyLimit(n int) {
 var scannerUpDesc = prometheus.NewDesc(
 	"jo_ei_scanner_up",
 	"1 when the scanner's last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled.",
-	[]string{"scanner"}, nil)
+	[]string{"scanner", "engine"}, nil)
 
 // scannerUpCollector emits jo_ei_scanner_up from a health snapshot at scrape
 // time.
@@ -186,26 +191,29 @@ func (c *scannerUpCollector) Collect(ch chan<- prometheus.Metric) {
 		if !sh.Enabled || sh.Status == health.StatusUnknown {
 			continue
 		}
-		name := sh.Name
+		name, engine := sh.Name, ""
 		if t, ok := c.types[name]; ok {
-			name = t
+			engine = oneOf(t, knownScanners)
+		} else {
+			if name == "osv.dev" {
+				name = "osv"
+			}
+			name = oneOf(name, knownScanners)
+			engine = name
 		}
-		if name == "osv.dev" {
-			name = "osv"
-		}
-		name = oneOf(name, knownScanners)
 		if seen[name] {
 			continue // duplicate series would fail the whole scrape
 		}
 		seen[name] = true
 		up := sh.Status == health.StatusOK || sh.Status == health.StatusWarn
-		ch <- prometheus.MustNewConstMetric(scannerUpDesc, prometheus.GaugeValue, b2f(up), name)
+		ch <- prometheus.MustNewConstMetric(scannerUpDesc, prometheus.GaugeValue, b2f(up), name, engine)
 	}
 }
 
 // RegisterScannerHealth exposes jo_ei_scanner_up, derived from snapshot at
-// scrape time. types maps a scanner's display name to its engine type (e.g.
-// "kaspersky" → "icap") so operator-chosen names keep the label in the known
+// scrape time. types maps an AV scanner's display name to its engine type
+// (e.g. "kaspersky" → "icap"): those names are the scanner label verbatim,
+// with the type as the engine label; any other name goes through the closed
 // set. Call it once per process: a repeated call is ignored. A nil *Metrics is
 // a no-op.
 func (m *Metrics) RegisterScannerHealth(snapshot func() []health.ScannerHealth, types map[string]string) {

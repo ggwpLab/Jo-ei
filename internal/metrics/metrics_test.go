@@ -42,7 +42,7 @@ func newFullyWired(t *testing.T) *Metrics {
 	_, _ = m.WrapTransport(okRT(), []string{"pypi.org"}).RoundTrip(req)
 	m.RegisterCircuitBreaker(fakeReporter{open: []string{"pypi.org"}}, []string{"pypi.org"})
 	for _, f := range []fakeAV{{res: &gate.AVResult{Clean: true}}, {res: &gate.AVResult{}}, {err: context.DeadlineExceeded}} {
-		_, _ = m.WrapAVScanner("clamav", f).Scan(context.Background(), "f")
+		_, _ = m.WrapAVScanner("clamav", "clamav", f).Scan(context.Background(), "f")
 	}
 	m.SetScanConcurrencyLimit(8)
 	m.ScanWaitObserver()(time.Millisecond)

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Antivirus engines scan in parallel.** Every engine in `malware.scanners[]`
+  now scans an artifact at the same time, so a first download waits for the
+  slowest engine instead of the sum of all of them, and a concurrency slot
+  (`malware.max_concurrent_scans`, one per artifact) is held correspondingly
+  shorter. Verdicts are unchanged: any detection blocks, an engine error fails
+  closed, and when several engines report, the first in config order is shown.
+- **Scanner metrics are labelled by name.** `jo_ei_scans_total`,
+  `jo_ei_scan_duration_seconds`, `jo_ei_scans_in_flight` and `jo_ei_scanner_up`
+  now carry the configured scanner name as `scanner` and the engine type as a
+  new `engine` label, so two ICAP servers no longer share one series. Queries
+  filtering `scanner=~"clamav|icap"` should filter on `engine` instead; the
+  shipped alert rules and Grafana dashboard are updated, and the
+  scan-saturation alert now compares the limit with the busiest engine (`max`)
+  rather than the sum across engines.
+
 ### Fixed
 
 - **A throttled mirror no longer turns a miss into a 502.** When the other
