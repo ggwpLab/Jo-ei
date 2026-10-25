@@ -40,6 +40,8 @@ type sharedDeps struct {
 	cveRecheckTTL       time.Duration
 	malwareRecheckTTL   time.Duration
 	metadataFilterMaxMB int
+	// tempDir holds downloads while they are checked (on the cache volume).
+	tempDir string
 }
 
 // proxyRoutes are the registry handlers keyed by URL prefix: package
@@ -68,6 +70,7 @@ func buildProxyRoutes(cfg *config.Config, shared sharedDeps, sc scanners, up ups
 			HTTPClient:    up.docker,
 			Throttles:     up.breaker,
 			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
+			TempDir:       shared.tempDir,
 		})
 	}
 	if len(r.handlers) == 0 && len(r.raw) == 0 {
@@ -163,5 +166,6 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		HTTPClient:          shared.downloadClient,
 		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
+		TempDir:             shared.tempDir,
 	})
 }

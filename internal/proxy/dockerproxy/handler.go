@@ -3,9 +3,9 @@ package dockerproxy
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -153,7 +153,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	}
 	defer f.Close()
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, f); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, f, httpx.DefaultWriteIdleTimeout); err != nil {
 		// Headers are already sent; can only log.
 		log.Error().Err(err).Msg("serving cached manifest")
 		return
@@ -196,11 +196,15 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, pp ParsedPat
 	defer f.Close()
 	w.Header().Set("Docker-Content-Digest", pp.Reference)
 	w.Header().Set("Content-Type", "application/octet-stream")
+	// An explicit length lets the client detect a truncated transfer.
+	if fi, err := f.Stat(); err == nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	}
 	w.WriteHeader(http.StatusOK)
 	// Blob serves are deliberately not recorded as telemetry events: a single
 	// pull fetches many blobs, and one event per blob would inflate the console
 	// request metrics. The manifest gate already records the per-image outcome.
-	if _, err := io.Copy(w, f); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, f, httpx.DefaultWriteIdleTimeout); err != nil {
 		log.Error().Err(err).Msg("serving cached blob")
 	}
 }
@@ -263,6 +267,10 @@ type HandlerDeps struct {
 	HTTPClient *http.Client
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional.
 	Throttles upstream.ThrottleLookup
+	// TempDir holds layers and manifests while they are checked. Empty uses
+	// os.TempDir(); point it at the cache volume so multi-GB layers do not
+	// land on the container's root filesystem.
+	TempDir string
 }
 
 // New assembles a ready-to-serve Docker Registry V2 proxy handler.
@@ -273,7 +281,7 @@ func New(d HandlerDeps) http.Handler {
 	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
-		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, logger: d.Logger,
+		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, tempDir: d.TempDir, logger: d.Logger,
 	})
 	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
 }

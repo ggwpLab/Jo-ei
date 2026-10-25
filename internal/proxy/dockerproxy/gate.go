@@ -70,7 +70,10 @@ type gateDeps struct {
 	// recheckTTL: a cached verdict older than this is re-evaluated by the full
 	// gate before being trusted (min of the enabled per-gate TTLs; 0 = never).
 	recheckTTL time.Duration
-	logger     zerolog.Logger
+	// tempDir holds layers and manifests while they are checked ("" =
+	// os.TempDir()).
+	tempDir string
+	logger  zerolog.Logger
 }
 
 type manifestGate struct {
@@ -356,7 +359,7 @@ func (g *manifestGate) scanLayer(ctx context.Context, repo, digest string) (bool
 		return true, nil
 	}
 
-	tmp, err := os.CreateTemp("", "jo-ei-layer-*")
+	tmp, err := os.CreateTemp(g.tempDir, "jo-ei-layer-*")
 	if err != nil {
 		return false, fmt.Errorf("creating temp layer file: %w", err)
 	}
@@ -391,7 +394,7 @@ func (g *manifestGate) scanLayer(ctx context.Context, repo, digest string) (bool
 
 // cacheVerdict writes the manifest body + verdict to the store under the digest.
 func (g *manifestGate) cacheVerdict(_ context.Context, repo, digest string, manifestBody []byte, v GateVerdict) error {
-	tmp, err := os.CreateTemp("", "jo-ei-manifest-*")
+	tmp, err := os.CreateTemp(g.tempDir, "jo-ei-manifest-*")
 	if err != nil {
 		return err
 	}

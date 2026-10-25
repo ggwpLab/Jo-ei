@@ -67,12 +67,14 @@ func buildUpstream(cfg *config.Config, mx *metrics.Metrics, serverLog zerolog.Lo
 	// Outermost: a per-host circuit breaker that fast-fails a host for a cooldown
 	// after it returns 429/503 (honoring Retry-After), so a throttled primary is
 	// skipped immediately in favor of a mirror instead of being retried/hammered.
-	// Inner: a coarse rate cap, then a concurrency cap, over a transport carrying
-	// the configured CA trust pool. Metrics instrument the whole chain from the
-	// outside, so rate-limit waits and circuit-open fast-fails are visible.
+	// Inner: a coarse rate cap, then a concurrency cap, then an idle timeout,
+	// over a transport carrying the configured CA trust pool. The idle timeout
+	// sits inside the limiters so waiting for a slot is not upstream silence.
+	// Metrics instrument the whole chain from the outside, so rate-limit waits
+	// and circuit-open fast-fails are visible.
 	cb := httpx.NewCircuitBreaker(
 		httpx.NewRateLimiter(
-			httpx.NewConcurrencyLimiter(httpx.NewTransport(rootPool), maxConc),
+			httpx.NewConcurrencyLimiter(httpx.NewIdleTimeout(httpx.NewTransport(rootPool), httpx.DefaultUpstreamIdleTimeout), maxConc),
 			float64(rate), 2*rate,
 		),
 		upstreamRetryBaseDelay, upstreamRetryMaxDelay,
@@ -85,8 +87,11 @@ func buildUpstream(cfg *config.Config, mx *metrics.Metrics, serverLog zerolog.Lo
 	)
 	upstreamLimiter := mx.WrapTransport(cb, hosts)
 	mx.RegisterCircuitBreaker(cb, hosts)
+	// Metadata documents are bounded, so the adapter client keeps a total cap.
+	// Downloads and Docker blobs can be many GB: only the idle timeout bounds
+	// them, so a slow but steady transfer is never cut off.
 	adapterClient := &http.Client{Timeout: 30 * time.Second, Transport: upstreamLimiter}
-	downloadClient := &http.Client{Timeout: 60 * time.Second, Transport: upstreamLimiter}
-	dockerClient := &http.Client{Timeout: 120 * time.Second, Transport: upstreamLimiter}
+	downloadClient := &http.Client{Transport: upstreamLimiter}
+	dockerClient := &http.Client{Transport: upstreamLimiter}
 	return upstreamClients{breaker: cb, adapter: adapterClient, download: downloadClient, docker: dockerClient}, nil
 }

@@ -91,16 +91,28 @@ func (lc *LocalCache) Put(ref *gate.PackageRef, tmpPath string, scanClean bool, 
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(destPath) // #nosec G304 -- destPath is RootPath/artifacts/<sha256 of the key>; no user-controlled path segments
+	// Write beside the destination and rename into place: a request still
+	// streaming the previous file keeps its inode intact, and a crash never
+	// leaves a half-written file under the final name.
+	dstFile, err := os.CreateTemp(filepath.Dir(destPath), ".put-*")
 	if err != nil {
-		return fmt.Errorf("creating cached file %q: %w", destPath, err)
+		return fmt.Errorf("creating cache temp file: %w", err)
 	}
-	defer dstFile.Close()
-
+	tmpDst := dstFile.Name()
 	written, err := io.Copy(dstFile, srcFile)
+	if err == nil {
+		err = dstFile.Sync()
+	}
+	if cerr := dstFile.Close(); err == nil {
+		err = cerr
+	}
 	if err != nil {
-		_ = os.Remove(destPath)
+		_ = os.Remove(tmpDst)
 		return fmt.Errorf("copying artifact to cache: %w", err)
+	}
+	if err := os.Rename(tmpDst, destPath); err != nil {
+		_ = os.Remove(tmpDst)
+		return fmt.Errorf("moving artifact into cache: %w", err)
 	}
 
 	entry := &CacheEntry{

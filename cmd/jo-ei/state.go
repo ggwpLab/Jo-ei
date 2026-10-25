@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -20,6 +23,7 @@ type state struct {
 	db          *storage.DB
 	settings    *settings.Store
 	cache       cache.Cache
+	tempDir     string // download/layer temp files, on the cache volume
 	profile     config.PolicyProfile
 	policy      *policy.Runtime
 	store       *telemetry.Store
@@ -52,6 +56,11 @@ func openState(a *app, cfg *config.Config, mx *metrics.Metrics, logger, serverLo
 	a.onClose(artifactCache.Close)
 	mx.RegisterCache(artifactCache, int64(cfg.Cache.Local.MaxSizeGB)<<30)
 
+	tempDir := filepath.Join(cfg.Cache.Local.Path, "tmp")
+	if err := prepareTempDir(tempDir); err != nil {
+		return state{}, fmt.Errorf("cache temp dir %q: %w", tempDir, err)
+	}
+
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
 	if !ok {
 		return state{}, fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
@@ -83,7 +92,7 @@ func openState(a *app, cfg *config.Config, mx *metrics.Metrics, logger, serverLo
 	broadcaster := telemetry.NewBroadcaster()
 
 	return state{
-		db: sdb, settings: settingsStore, cache: artifactCache, profile: profile,
+		db: sdb, settings: settingsStore, cache: artifactCache, tempDir: tempDir, profile: profile,
 		policy: policyRuntime, store: store, broadcaster: broadcaster,
 	}, nil
 }
@@ -96,4 +105,24 @@ func buildTelemetryStore(sdb *storage.DB, cfg *config.Config, logger zerolog.Log
 		return nil, fmt.Errorf("initialising telemetry store: %w", err)
 	}
 	return store, nil
+}
+
+// prepareTempDir creates dir and removes the "jo-ei-*" temp files a previous
+// run left behind when it stopped mid-download. Other files are left alone.
+func prepareTempDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- holds public package artifacts under check
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "jo-ei-") {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

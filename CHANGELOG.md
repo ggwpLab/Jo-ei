@@ -35,6 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata, transparent proxying and Docker manifests (`TOOMANYREQUESTS`); the
   event reason is `upstream_throttled`. Any real failure on a mirror (5xx,
   connection, TLS) still yields 502.
+- **Large artifacts and cold Docker pulls no longer time out.** Artifact
+  downloads and Docker blobs were capped at 60 s and 120 s in total, and the
+  server cut every request at 120 s, so a multi-GB wheel or image layer failed
+  on every attempt. Artifact and Docker fetches are now aborted only after 60 s
+  without a byte (metadata fetches keep their 30 s cap), the server no longer
+  limits how long a gated request may run, and slow clients are bounded by
+  progress instead: a request body that sends nothing for 60 s fails, and
+  every artifact, blob, manifest and metadata response is written in chunks
+  that must each complete within 60 s, so a client that stops reading is
+  still dropped. Clients with short read timeouts may need a longer
+  one for multi-GB first downloads, since the proxy checks an artifact before
+  sending its first byte (for example `pip --timeout 600`).
+- **Concurrent first requests for one artifact can no longer corrupt the
+  served file.** Cache entries were written in place, so a second request
+  storing the same artifact truncated the file a first request was still
+  streaming. Entries are now written to a temporary file and renamed into
+  place, and cached artifacts and Docker blobs are served with
+  `Content-Length`, so a truncated transfer is detectable.
+- **Download temp files live on the cache volume.** Artifacts, layers and
+  manifests under check were buffered in the container's `/tmp`, on the host's
+  root filesystem; they now go to `<cache.local.path>/tmp`, and files left
+  there by an interrupted run are removed at startup.
 
 ## [0.6.0] - 2026-10-24
 

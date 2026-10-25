@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -868,4 +869,66 @@ func TestHandler_TransparentProxyLogsAttempts(t *testing.T) {
 	if !strings.Contains(logs, `"status":0`) || !strings.Contains(logs, `"status":500`) {
 		t.Fatalf("transparent proxy did not log both mirror outcomes: %s", logs)
 	}
+}
+
+func TestHandler_ServedArtifactCarriesContentLength(t *testing.T) {
+	// Larger than net/http's response buffer, so the server cannot infer the
+	// length itself: only an explicit header gives the client one.
+	wheel := bytes.Repeat([]byte("w"), 64<<10)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/pypi/flask/3.0.0/json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "flask", "version": "3.0.0"},
+				"urls": []map[string]any{{
+					"upload_time_iso_8601": time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+					"url":                  "https://files.example.com/flask-3.0.0.whl",
+				}},
+			})
+			return
+		}
+		w.Write(wheel)
+	}))
+	defer upstream.Close()
+	srv := setupTestProxy(t, upstream, "enforce")
+	defer srv.Close()
+	url := srv.URL + "/packages/py3/f/flask/flask-3.0.0-py3-none-any.whl"
+
+	for _, pass := range []string{"miss", "hit"} {
+		resp, err := http.Get(url)
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode, pass)
+		assert.Equal(t, int64(len(wheel)), resp.ContentLength, pass)
+	}
+}
+
+// pathAV records the file it was asked to scan.
+type pathAV struct{ path string }
+
+func (p *pathAV) Scan(_ context.Context, path string) (*gate.AVResult, error) {
+	p.path = path
+	return &gate.AVResult{Clean: true}, nil
+}
+
+func TestHandler_DownloadsIntoTempDir(t *testing.T) {
+	upstream := makeUpstream(t, "flask", "3.0.0", 48)
+	defer upstream.Close()
+	dir := t.TempDir()
+	av := &pathAV{}
+	srv := httptest.NewServer(proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:   adapters.NewPyPIAdapter([]string{upstream.URL}),
+		Filter:    supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:     newFakeCache(),
+		AVScanner: av,
+		Logger:    zerolog.Nop(),
+		TempDir:   dir,
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/f/flask/flask-3.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, dir, filepath.Dir(av.path))
 }
