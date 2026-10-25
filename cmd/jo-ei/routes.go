@@ -58,6 +58,10 @@ type proxyRoutes struct {
 // configured.
 func buildProxyRoutes(cfg *config.Config, shared sharedDeps, sc scanners, up upstreamClients, policyRuntime *policy.Runtime, artifactCache cache.Cache, mx *metrics.Metrics) (proxyRoutes, error) {
 	r := proxyRoutes{handlers: buildHandlers(cfg, shared), raw: map[string]http.Handler{}}
+	if cfg.Registries.Docker.Enabled && sc.trivy == nil {
+		shared.logger.Warn().Str("component", "server").
+			Msg("docker registry enabled but image_scan is disabled; /v2/ is not served")
+	}
 	if cfg.Registries.Docker.Enabled && sc.trivy != nil {
 		r.raw["v2"] = dockerproxy.New(dockerproxy.HandlerDeps{
 			Upstreams:     cfg.Registries.Docker.Upstreams,

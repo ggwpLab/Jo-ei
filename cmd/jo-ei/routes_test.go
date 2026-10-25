@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 )
 
@@ -42,4 +46,22 @@ func TestRegistryCount(t *testing.T) {
 func TestPrefixes(t *testing.T) {
 	got := routesOf([]string{"npm", "yarn"}, []string{"v2"}).prefixes()
 	assert.ElementsMatch(t, []string{"npm", "yarn", "v2"}, got)
+}
+
+// Docker enabled without an image scanner is served by nothing; say so at
+// startup instead of leaving /v2/ silently missing.
+func TestBuildProxyRoutes_WarnsDockerWithoutImageScan(t *testing.T) {
+	enableLogs(t)
+	var logBuf bytes.Buffer
+	cfg := &config.Config{}
+	cfg.Registries.Docker.Enabled = true
+	cfg.Registries.PyPI.Enabled = true
+	cfg.Registries.PyPI.Upstreams = []string{"https://pypi.org"}
+
+	routes, err := buildProxyRoutes(cfg, sharedDeps{logger: zerolog.New(&logBuf)}, scanners{}, upstreamClients{}, nil, nil, nil)
+	require.NoError(t, err)
+
+	_, served := routes.raw["v2"]
+	assert.False(t, served)
+	assert.Contains(t, logBuf.String(), "image_scan is disabled")
 }
