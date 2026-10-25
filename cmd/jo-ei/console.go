@@ -78,6 +78,9 @@ func buildRootHandler(d consoleDeps, proxyMux http.Handler) (http.Handler, error
 	// session exists, and the bundle is UI code with no secrets in it. Every
 	// byte of data still comes from /api/, which stays gated.
 	root.Handle("/console/", web.ConsoleHandler())
+	// Readiness sits beside the proxy's /health and, like it, is public: a
+	// container healthcheck or load balancer probes it without a session.
+	root.Handle("/ready", readinessHandler(d.db.SQL(), d.health.Snapshot))
 	// Session endpoints sit outside the middleware — a client with no session
 	// must be able to reach login. ServeMux prefers the longer pattern, so
 	// /api/auth/* lands here and everything else under /api/ stays gated.

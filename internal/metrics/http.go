@@ -15,7 +15,8 @@ type RouteFunc func(path string) string
 
 // NewRouteFunc returns a RouteFunc that labels paths by first segment when it
 // is one of proxyPrefixes ("v2" is reported as "docker"), and by fixed names
-// for the console, API, health and favicon paths. Anything else is "other".
+// for the console, API, health (/health and /ready) and favicon paths.
+// Anything else is "other".
 func NewRouteFunc(proxyPrefixes []string) RouteFunc {
 	prefixes := make(map[string]struct{}, len(proxyPrefixes))
 	for _, p := range proxyPrefixes {
@@ -25,7 +26,7 @@ func NewRouteFunc(proxyPrefixes []string) RouteFunc {
 		switch {
 		case path == "/favicon.ico":
 			return "favicon"
-		case path == "/health":
+		case path == "/health" || path == "/ready":
 			return "health"
 		case path == "/console" || strings.HasPrefix(path, "/console/"):
 			return "console"
