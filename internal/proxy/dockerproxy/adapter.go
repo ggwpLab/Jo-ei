@@ -56,7 +56,8 @@ func NewAdapter(upstreams []string, client *http.Client) *Adapter {
 // reached the mirror"), which is not quite accurate for this one case.
 func (a *Adapter) do(ctx context.Context, method, base, path, accept string) (*http.Response, error) {
 	build := func(token string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, method, base+path, nil)
+		// base is a configured upstream; only the path comes from the client.
+		req, err := http.NewRequestWithContext(ctx, method, base+path, nil) // #nosec G704 -- fetching configured upstream registries is the proxy's purpose
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +67,7 @@ func (a *Adapter) do(ctx context.Context, method, base, path, accept string) (*h
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		return a.client.Do(req)
+		return a.client.Do(req) // #nosec G704 -- fetching configured upstream registries is the proxy's purpose
 	}
 	resp, err := build("")
 	if err != nil {
@@ -170,48 +171,6 @@ func (a *Adapter) FetchManifest(ctx context.Context, repo, ref string) ([]byte, 
 // list, which lists per-platform child manifests rather than image content.
 func isIndexMediaType(ct string) bool {
 	return ct == mediaTypeOCIIndex || ct == mediaTypeSchema2List
-}
-
-// isImageManifest reports whether the manifest describes a runnable image —
-// i.e. it has at least one layer and every layer is a filesystem (tar) layer.
-// It is false for non-image manifests such as buildx attestation manifests,
-// whose "layers" are in-toto JSON (SBOM/provenance), not tar archives. Those
-// must NOT be handed to Trivy/ClamAV (extraction fails: "invalid tar header");
-// they carry no executable image content and are passed through un-gated.
-func isImageManifest(manifestBody []byte) bool {
-	var m struct {
-		Layers []struct {
-			MediaType string `json:"mediaType"`
-		} `json:"layers"`
-	}
-	if err := json.Unmarshal(manifestBody, &m); err != nil {
-		return false
-	}
-	if len(m.Layers) == 0 {
-		return false
-	}
-	for _, l := range m.Layers {
-		if !isFilesystemLayer(l.MediaType) {
-			return false
-		}
-	}
-	return true
-}
-
-// isFilesystemLayer reports whether a layer media type is an actual filesystem
-// layer (OCI or Docker schema2, plain/gzip/zstd tar) as opposed to a
-// non-filesystem payload like an in-toto attestation.
-func isFilesystemLayer(mt string) bool {
-	switch mt {
-	case "application/vnd.oci.image.layer.v1.tar",
-		"application/vnd.oci.image.layer.v1.tar+gzip",
-		"application/vnd.oci.image.layer.v1.tar+zstd",
-		"application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
-		"application/vnd.docker.image.rootfs.diff.tar.gzip",
-		"application/vnd.docker.image.rootfs.foreign.diff.tar.gzip":
-		return true
-	}
-	return false
 }
 
 // getManifest GETs a manifest by ref/digest from the first working upstream.

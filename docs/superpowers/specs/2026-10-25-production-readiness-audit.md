@@ -79,7 +79,7 @@ checksum). Same pattern in the Docker blob store.
   the final path (atomic; open readers keep the old inode). Optionally coalesce
   first downloads per key with singleflight (also saves duplicate scans).
 
-### 0c. Docker pulls fail on attestation blobs with containerd-based clients (found 2026-10-25, e2e)
+### 0c. Docker pulls fail on attestation blobs with containerd-based clients (found 2026-10-25, e2e) — FIXED (`fix/docker-attestation-blobs`; e2e: Docker Desktop containerd store pulls alpine:3.19 through the proxy, PASS)
 Official images carry BuildKit attestation manifests (provenance/SBOM: config
 `application/vnd.oci.image.config.v1+json`, in-toto JSON layers). The gate
 serves those manifests as passthrough, but their blobs are never cached, and

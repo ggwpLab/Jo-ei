@@ -205,11 +205,13 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonIndexPassthrough)
 	}
 
-	// Non-image manifest (e.g. a buildx attestation manifest whose layers are
-	// in-toto JSON, not a filesystem): pass through un-gated. Trivy/ClamAV cannot
-	// and must not scan it, and it carries no executable image content. The real
-	// platform image manifests in the same index are gated on their own requests.
-	if !isImageManifest(manifestBody) {
+	// An attestation manifest (every layer an in-toto statement: SBOM,
+	// provenance) passes through un-gated: Trivy/ClamAV cannot scan it and it
+	// carries no executable content. Everything else is gated — including a
+	// manifest with a layer type this proxy does not recognise, which a client
+	// may still unpack. The real platform image manifests of an index are
+	// gated on their own requests.
+	if isAttestationManifest(manifestBody) {
 		return g.passthrough(ctx, repo, digest, manifestBody, contentType, reasonAttestationPassthrough)
 	}
 
