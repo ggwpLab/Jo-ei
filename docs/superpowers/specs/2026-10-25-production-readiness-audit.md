@@ -169,7 +169,7 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
 
 ## P2 — polish
 
-19. **Cold pulls of large images fail once with containerd's 30 s header
+19. **Cold pulls of large images fail once with containerd's 30 s header — FIXED (`image_scan.client_wait_seconds`, 503 + Retry-After)
     timeout** (found 2026-10-25, e2e). The manifest request runs the whole
     image gate (fetch every layer, Trivy, ClamAV) before answering; for
     golang:1.26.9 that took ~10 min, and containerd gives up after 30 s
@@ -189,7 +189,7 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
     (fails closed, no bypass). Untested: `replace-registry-host=never`, which
     would follow the packument's absolute registry.npmjs.org URL; yarn and pnpm.
 
-11. **Console on the proxy listener, no security headers.** `/console/` and
+11. **Console on the proxy listener, no security headers.** — FIXED headers (`fix/p2-hardening`); separate console listener not done. `/console/` and
     `/api/` share `:8080` with registry traffic; no CSP, `frame-ancestors`,
     `X-Content-Type-Options`. Add headers; consider an optional
     `console.listen`.
@@ -200,14 +200,14 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
 13. **`serveFromCache` sends no `Content-Length`, `ETag`, range support,
     real `Content-Type`.** `http.ServeContent` gives these for free and lets
     clients detect truncation.
-14. **No max artifact size for package ecosystems** (Docker has
+14. **No max artifact size for package ecosystems** — FIXED (`server.max_artifact_mb`, default 2048). (Docker has
     `max_layer_bytes`) — one huge artifact can fill the cache volume.
-15. **Cache `index.db` has no WAL / `busy_timeout` pragmas**, unlike
+15. **Cache `index.db` has no WAL / `busy_timeout` pragmas** — FIXED., unlike
     `internal/storage`.
-16. **Docker silently disabled without image scan.** `registries.docker.enabled:
+16. **Docker silently disabled without image scan.** — FIXED (startup warning). `registries.docker.enabled:
     true` with `image_scan.enabled: false` drops `/v2/` with no startup log
     (only a console warning on edit). Warn or fail at startup.
-17. **Floating base images**: `golang:1.27-alpine` while `go.mod` pins
+17. **Floating base images** — FIXED for the Go builder (`golang:1.26.10-alpine`); distroless stays on its rolling tag (security updates, Dependabot watches the Dockerfile).: `golang:1.27-alpine` while `go.mod` pins
     `toolchain go1.26.10`; distroless by tag, not digest.
 
 ## Static analysis triage
