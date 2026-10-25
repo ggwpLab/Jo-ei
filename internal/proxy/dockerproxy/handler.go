@@ -19,10 +19,13 @@ import (
 
 // Config groups the Docker proxy handler dependencies.
 type Config struct {
-	Adapter  *Adapter
-	Gate     *manifestGate
-	Store    *verdictStore
-	Tags     *tagIndex
+	Adapter *Adapter
+	Gate    *manifestGate
+	Store   *verdictStore
+	Tags    *tagIndex
+	// Attest remembers attestation manifests' blobs so they can be served
+	// to clients that fetch them (containerd). Optional.
+	Attest   *attestationBlobs
 	Recorder gate.Recorder
 	Logger   zerolog.Logger
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional
@@ -135,6 +138,13 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if v.FromCache {
 		passVerdict, passGate, passReason = gate.VerdictCache, gate.GateCache, "cache_hit"
 	}
+	if v.Reason == reasonAttestationPassthrough && h.cfg.Attest != nil {
+		// Re-read on every serve, cached verdict included, so the blobs stay
+		// servable across restarts.
+		if body, err := os.ReadFile(v.ManifestPath); err == nil { // #nosec G304 -- path from the verdict store, inside the cache root
+			h.cfg.Attest.remember(pp.Repo, body)
+		}
+	}
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		if recordPass {
@@ -181,6 +191,10 @@ func (h *Handler) displayVersion(pp ParsedPath, digest string) string {
 func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, pp ParsedPath) {
 	log := logx.Logger(r.Context(), h.log).With().Str("package", pp.Repo).Str("digest", pp.Reference).Logger()
 	path, clean, found := h.cfg.Store.GetBlob(pp.Reference)
+	if !found && h.cfg.Attest != nil && h.cfg.Attest.has(pp.Repo, pp.Reference) {
+		h.serveAttestationBlob(w, r, pp, log)
+		return
+	}
 	if !found || !clean {
 		h.writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not available")
 		return
@@ -206,6 +220,33 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, pp ParsedPat
 	// request metrics. The manifest gate already records the per-image outcome.
 	if _, err := httpx.CopyWithWriteDeadline(w, f, httpx.DefaultWriteIdleTimeout); err != nil {
 		log.Error().Err(err).Msg("serving cached blob")
+	}
+}
+
+// serveAttestationBlob relays one attestation blob from upstream: capped,
+// verified against its digest, not cached. Only blobs remembered from an
+// attestation manifest's config and non-filesystem layers reach this.
+func (h *Handler) serveAttestationBlob(w http.ResponseWriter, r *http.Request, pp ParsedPath, log zerolog.Logger) {
+	body, err := fetchAttestationBlob(r.Context(), h.cfg.Adapter, pp.Repo, pp.Reference)
+	switch {
+	case errors.Is(err, errAttestationBlobRejected):
+		log.Warn().Err(err).Msg("refusing attestation blob")
+		h.writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not available")
+		return
+	case err != nil:
+		log.Error().Err(err).Msg("fetching attestation blob")
+		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream failure")
+		return
+	}
+	w.Header().Set("Docker-Content-Digest", pp.Reference)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := w.Write(body); err != nil {
+		log.Debug().Err(err).Msg("serving attestation blob")
 	}
 }
 
@@ -283,5 +324,5 @@ func New(d HandlerDeps) http.Handler {
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, tempDir: d.TempDir, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
+	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Attest: newAttestationBlobs(0), Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
 }
