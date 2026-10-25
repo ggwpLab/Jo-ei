@@ -164,6 +164,9 @@ type ServerConfig struct {
 	// explicit zero in YAML survives as the feature's kill switch rather than
 	// being replaced.
 	MetadataFilterMaxMB int `mapstructure:"metadata_filter_max_mb"`
+	// ShutdownTimeoutSeconds bounds how long a stopping server drains
+	// in-flight requests before closing the rest. Default 30.
+	ShutdownTimeoutSeconds int `mapstructure:"shutdown_timeout_seconds"`
 	// TrustedProxies lists the reverse proxies (CIDRs or bare IPs) whose
 	// forwarding header is believed when resolving the client IP. Empty (the
 	// default) means no header is trusted and the TCP peer address is used.
@@ -377,6 +380,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
 	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.metadata_filter_max_mb", 32)
+	v.SetDefault("server.shutdown_timeout_seconds", 30)
 	v.SetDefault("metrics.enabled", true)
 	v.SetDefault("metrics.listen", ":9464")
 	v.SetDefault("metrics.path", "/metrics")

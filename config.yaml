@@ -12,6 +12,10 @@ server:
   # one the policy allows instead of failing the whole install. Default 32
   # when unset; set to 0 to disable metadata filtering entirely.
   metadata_filter_max_mb: 32
+  # Seconds a stopping server waits for in-flight requests (a gated download
+  # can take a while) before closing the rest. Keep it below the container's
+  # stop grace period (docker-compose.yaml: stop_grace_period). Default 30.
+  shutdown_timeout_seconds: 30
   # Reverse proxies (CIDRs or bare IPs) whose forwarding header is trusted for the
   # client IP used by login rate limits. Empty = use the TCP peer address.
   # trusted_proxies: []

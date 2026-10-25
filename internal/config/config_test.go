@@ -763,3 +763,9 @@ func TestValidate_TrustedProxies(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "server.client_ip_header")
 }
+
+func TestConfig_ShutdownTimeoutDefault(t *testing.T) {
+	cfg, err := config.Load(writeTempConfig(t, "server:\n  listen: \":8080\"\ndatabase:\n  path: \"/tmp/x.db\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
+}
