@@ -303,6 +303,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "av_scan_error")
 			return
 		}
+		if avResult.Incomplete {
+			// Not fully checked, so not served — but not malware either.
+			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).
+				Msg("malware scan incomplete; blocking")
+			record(gate.VerdictBlock, gate.GateMalware, gate.ReasonScanIncomplete, http.StatusForbidden, func(ev *gate.Event) {
+				ev.BlockedBy = []string{gate.ReasonScanIncomplete}
+				ev.MalwareEngine = avResult.Engine
+				ev.MalwareSignature = avResult.Signature
+			})
+			h.writeError(w, requestID, ref, http.StatusForbidden, gate.ReasonScanIncomplete)
+			return
+		}
 		if !avResult.Clean {
 			record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
 				ev.BlockedBy = []string{"malware"}
@@ -447,6 +459,10 @@ func (h *Handler) runRechecks(ctx context.Context, ref *gate.PackageRef, entry *
 		switch {
 		case err != nil:
 			log.Warn().Err(err).Msg("malware re-check failed; serving cached artifact")
+		case res.Incomplete:
+			// It scanned clean in full before; an engine giving up now (lower
+			// limits, a slow moment) is a failed re-check, retried next hit.
+			log.Warn().Str("signature", res.Signature).Msg("malware re-check incomplete; serving cached artifact")
 		case !res.Clean:
 			h.evictRechecked(ref, log)
 			return &recheckOutcome{gate: gate.GateMalware, blockedBy: "malware", av: res}

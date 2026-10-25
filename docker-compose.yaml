@@ -56,16 +56,23 @@ services:
   clamav:
     image: clamav/clamav:1.5
     # clamd's defaults reject any stream over 100 MB (the proxy then fails
-    # closed with 503 for every larger artifact) and silently skip archive
-    # content past 100 MB per file / 400 MB per scan while still answering OK.
-    # These limits match image_scan.max_layer_bytes (2 GB); AlertExceedsMax
-    # turns anything still over a limit into a detection, so oversized content
-    # is blocked rather than passed unscanned. Large scans need memory and
-    # time: see malware.scanners[].timeout_seconds in config.yaml.
+    # closed with 503 for every larger artifact) and silently stop scanning
+    # archives past 100 MB per file, 400 MB per scan, 10,000 files, 17 levels
+    # of nesting or 2 minutes, while still answering OK. These limits fit
+    # real images and packages (image_scan.max_layer_bytes is 2 GB; a Go or
+    # Node layer holds tens of thousands of files), and MaxScanTime stays
+    # under the proxy's ClamAV timeout (malware.scanners[].timeout_seconds,
+    # 300 s) so clamd gives up before the proxy does. AlertExceedsMax reports
+    # anything still over a limit; Jō-ei blocks that as scan_incomplete — not
+    # as malware, and without caching it, so raising a limit takes effect on
+    # the next request. Large scans need memory and time: size the VM for it.
     environment:
       CLAMD_CONF_StreamMaxLength: "2048M"
       CLAMD_CONF_MaxFileSize: "2048M"
       CLAMD_CONF_MaxScanSize: "4095M"
+      CLAMD_CONF_MaxFiles: "200000"
+      CLAMD_CONF_MaxRecursion: "32"
+      CLAMD_CONF_MaxScanTime: "280000"
       CLAMD_CONF_AlertExceedsMax: "yes"
     volumes:
       - clamav-db:/var/lib/clamav

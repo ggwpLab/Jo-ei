@@ -51,3 +51,25 @@ func TestParseClamAVResponse_SetsEngine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "clamav", clean.Engine)
 }
+
+// AlertExceedsMax reports content clamd could not scan as a Heuristics.Limits
+// detection: that is an incomplete scan, not malware.
+func TestParseClamAVResponse_LimitsExceededIsIncomplete(t *testing.T) {
+	res, err := parseClamAVResponse("stream: Heuristics.Limits.Exceeded.MaxScanTime FOUND\x00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Clean || !res.Incomplete {
+		t.Fatalf("got %+v, want Clean=false Incomplete=true", res)
+	}
+	if res.Signature != "Heuristics.Limits.Exceeded.MaxScanTime" {
+		t.Errorf("signature = %q", res.Signature)
+	}
+	real, err := parseClamAVResponse("stream: Win.Test.EICAR_HDB-1 FOUND\x00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if real.Incomplete {
+		t.Error("a real signature must not be marked incomplete")
+	}
+}

@@ -299,11 +299,17 @@ func (g *manifestGate) runPipeline(ctx context.Context, repo, ref, digest string
 			blobs = append([]string{configDigest}, layers...)
 		}
 		for _, b := range blobs {
-			infected, scanErr := g.scanLayer(ctx, repo, b)
+			outcome, scanErr := g.scanLayer(ctx, repo, b)
 			if scanErr != nil {
 				return GateVerdict{}, scanErr
 			}
-			if infected {
+			if outcome == layerIncomplete {
+				// Blocked, but neither cached nor cascaded: nothing was found,
+				// and the next pull should scan again (for example once the
+				// engine's limits are raised).
+				return GateVerdict{Allowed: false, Reason: gate.ReasonScanIncomplete, BlockedBy: gate.ReasonScanIncomplete}, nil
+			}
+			if outcome == layerInfected {
 				v := GateVerdict{Allowed: false, Reason: "malware_found", BlockedBy: "malware"}
 				_ = g.cacheVerdict(ctx, repo, digest, manifestBody, v)
 				if cascadeOnBlock {
@@ -343,25 +349,37 @@ func (g *manifestGate) passthrough(ctx context.Context, repo, digest string, man
 // runs the AV scanner, and caches the per-blob verdict. Returns infected=true on
 // a malware hit or an oversized layer (fail-closed). An error means the layer
 // could not be checked (handler fails closed with 5xx).
-func (g *manifestGate) scanLayer(ctx context.Context, repo, digest string) (bool, error) {
+// layerOutcome is scanLayer's verdict for one blob.
+type layerOutcome int
+
+const (
+	layerClean layerOutcome = iota
+	layerInfected
+	layerIncomplete // the engine could not scan it in full; not cached
+)
+
+func (g *manifestGate) scanLayer(ctx context.Context, repo, digest string) (layerOutcome, error) {
 	if _, clean, found := g.store.GetBlob(digest); found {
-		return !clean, nil
+		if clean {
+			return layerClean, nil
+		}
+		return layerInfected, nil
 	}
 	rc, size, err := g.adapter.FetchBlob(ctx, repo, digest)
 	if err != nil {
-		return false, fmt.Errorf("fetching layer %s: %w", digest, err)
+		return layerClean, fmt.Errorf("fetching layer %s: %w", digest, err)
 	}
 	defer rc.Close()
 
 	if g.maxLayerBytes > 0 && size > g.maxLayerBytes {
 		// Oversized: fail-closed, cache as not-clean so repeats stay blocked.
 		_ = g.store.PutBlob(digest, os.DevNull, false)
-		return true, nil
+		return layerInfected, nil
 	}
 
 	tmp, err := os.CreateTemp(g.tempDir, "jo-ei-layer-*")
 	if err != nil {
-		return false, fmt.Errorf("creating temp layer file: %w", err)
+		return layerClean, fmt.Errorf("creating temp layer file: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
@@ -375,21 +393,29 @@ func (g *manifestGate) scanLayer(ctx context.Context, repo, digest string) (bool
 	}
 	tmp.Close()
 	if err != nil {
-		return false, fmt.Errorf("buffering layer %s: %w", digest, err)
+		return layerClean, fmt.Errorf("buffering layer %s: %w", digest, err)
 	}
 	if limit > 0 && written > limit {
 		_ = g.store.PutBlob(digest, os.DevNull, false)
-		return true, nil
+		return layerInfected, nil
 	}
 
 	res, err := g.av.Scan(ctx, tmpPath)
 	if err != nil {
-		return false, fmt.Errorf("AV scanning layer %s: %w", digest, err)
+		return layerClean, fmt.Errorf("AV scanning layer %s: %w", digest, err)
+	}
+	if res.Incomplete {
+		g.log(ctx).Warn().Str("digest", digest).Str("signature", res.Signature).
+			Msg("layer scan incomplete; blocking image")
+		return layerIncomplete, nil
 	}
 	if err := g.store.PutBlob(digest, tmpPath, res.Clean); err != nil {
-		return false, fmt.Errorf("caching layer %s: %w", digest, err)
+		return layerClean, fmt.Errorf("caching layer %s: %w", digest, err)
 	}
-	return !res.Clean, nil
+	if res.Clean {
+		return layerClean, nil
+	}
+	return layerInfected, nil
 }
 
 // cacheVerdict writes the manifest body + verdict to the store under the digest.

@@ -79,6 +79,20 @@ checksum). Same pattern in the Docker blob store.
   the final path (atomic; open readers keep the old inode). Optionally coalesce
   first downloads per key with singleflight (also saves duplicate scans).
 
+### 0c. Docker pulls fail on attestation blobs with containerd-based clients (found 2026-10-25, e2e)
+Official images carry BuildKit attestation manifests (provenance/SBOM: config
+`application/vnd.oci.image.config.v1+json`, in-toto JSON layers). The gate
+serves those manifests as passthrough, but their blobs are never cached, and
+`serveBlob` serves only from cache → `404 BLOB_UNKNOWN`. Docker Desktop with
+the containerd image store (`io.containerd.snapshotter.v1`, the default on
+new installs) fetches attestations, so `docker pull` of alpine, golang, … fails
+with "could not fetch content descriptor … not found" right after the image
+itself got PASS. The classic image store does not fetch them, which is why
+earlier manual checks passed. Pre-existing (not caused by the 2026-10-25
+branches). Fix shape: record attestation manifests' blob digests when serving
+them and proxy those blobs (small JSON, no executable content) from upstream,
+or cache them when the attestation manifest passes through.
+
 ## P1 — fix before release
 
 ### 3. Graceful shutdown never completes with an open console tab — FIXED (`fix/shutdown-health-compose`)
@@ -154,6 +168,16 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
 → every non-cached request 503s. Pass the shared transport in.
 
 ## P2 — polish
+
+19. **Cold pulls of large images fail once with containerd's 30 s header
+    timeout** (found 2026-10-25, e2e). The manifest request runs the whole
+    image gate (fetch every layer, Trivy, ClamAV) before answering; for
+    golang:1.26.9 that took ~10 min, and containerd gives up after 30 s
+    ("timeout awaiting response headers"). The gate keeps running
+    (`WithoutCancel` flight) and caches the verdict, so a retry after the
+    scan finishes is served at once. Options: document "retry / pre-warm",
+    or answer a long-running gate with `503` + `Retry-After` so clients back
+    off instead of timing out.
 
 18. **`npm pack <remote spec>` drops the `/npm` prefix** (npm 10.9.9, found
     2026-10-25 by e2e; first misread as "npm installs fail", corrected after

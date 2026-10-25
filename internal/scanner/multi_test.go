@@ -143,3 +143,23 @@ func TestMultiScanner_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Clean)
 }
+
+func incomplete(engine string) stubScanner {
+	return stubScanner{result: &gate.AVResult{Clean: false, Incomplete: true, Signature: "Heuristics.Limits.Exceeded.MaxFiles", Engine: engine}}
+}
+
+// One engine giving up on the file must not hide another engine's detection.
+func TestMultiScanner_DetectionOutranksIncomplete(t *testing.T) {
+	infected := stubScanner{result: &gate.AVResult{Clean: false, Signature: "EICAR", Engine: "icap"}}
+	res, err := scanner.NewMultiScanner(incomplete("clamav"), infected).Scan(context.Background(), "/tmp/x")
+	require.NoError(t, err)
+	assert.False(t, res.Incomplete)
+	assert.Equal(t, "EICAR", res.Signature)
+}
+
+func TestMultiScanner_IncompleteWhenNoDetection(t *testing.T) {
+	res, err := scanner.NewMultiScanner(clean("icap"), incomplete("clamav")).Scan(context.Background(), "/tmp/x")
+	require.NoError(t, err)
+	assert.False(t, res.Clean)
+	assert.True(t, res.Incomplete)
+}

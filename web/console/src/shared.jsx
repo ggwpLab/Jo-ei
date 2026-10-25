@@ -178,6 +178,7 @@ function Spark({ data, color = "var(--washi-mut)", h = 30, w = 130, fill = true 
 const GATE_LABEL = {
   cache: "Cache", supply: "Supply Chain", cve: "CVE", malware: "Malware",
   supply_chain: "Supply Chain", denylist: "Denylist", image_scan: "Image Scan",
+  scan_incomplete: "Malware",
 };
 
 Object.assign(window, {

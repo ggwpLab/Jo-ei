@@ -484,15 +484,19 @@ reverse proxy:
   answers 200 only when the database responds and no attached scanner is down
   (503 lists what is failing). The compose healthcheck runs
   `jo-ei healthcheck --ready`, so `docker ps` shows `unhealthy` when, say,
-  ClamAV is down.
+  ClamAV is down. Compose's `restart:` does not act on health — an unhealthy
+  container keeps running until you or an orchestrator restarts it.
 - **Stopping** drains in-flight requests for `server.shutdown_timeout_seconds`
   (30 s), ends console event streams at once, then closes what is left; the
   compose `stop_grace_period` (45 s) leaves room for it.
-- **ClamAV limits** are raised to 2 GB per stream/file and 4 GB per scan, and
-  `AlertExceedsMax` blocks anything still over a limit. With clamd's defaults
-  every artifact over 100 MB failed with 503, and archive content past the
-  limits went unscanned. Large scans need time (`timeout_seconds: 300` in
-  `config.yaml`) and memory — size the VM for the biggest artifacts you serve.
+- **ClamAV limits** are raised (2 GB per stream/file, 4 GB per scan, 200,000
+  files, 32 nesting levels, 280 s per scan) so ordinary images and packages
+  are scanned in full; with clamd's defaults every artifact over 100 MB
+  failed with 503 and large archives were only partly scanned. Anything still
+  over a limit is blocked as `scan_incomplete` (not malware, not cached).
+  Large scans need time (`timeout_seconds: 300` in `config.yaml`), memory,
+  and disk: clamd spools each stream to its container's `/tmp`, up to 2 GB
+  per concurrent scan — size the VM for the biggest artifacts you serve.
 - **Logs** rotate at 50 MB × 5 files per service.
 - **Scanner images** are pinned (`clamav/clamav:1.5`, `aquasec/trivy:0.76.1`
   — the Trivy server must match the client in the Jō-ei image).

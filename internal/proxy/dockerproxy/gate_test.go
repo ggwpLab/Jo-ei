@@ -407,3 +407,37 @@ func TestGateMissingLayerIsNotManifestNotFound(t *testing.T) {
 		t.Fatalf("missing layer reported as errManifestNotFound: %v", err)
 	}
 }
+
+// incompleteAV reports every file as one the engine could not scan in full.
+type incompleteAV struct{}
+
+func (incompleteAV) Scan(_ context.Context, _ string) (*gate.AVResult, error) {
+	return &gate.AVResult{Clean: false, Incomplete: true, Signature: "Heuristics.Limits.Exceeded.MaxFiles", Engine: "clamav"}, nil
+}
+
+// A layer the AV engine could not scan in full blocks the image as
+// scan_incomplete — not malware — and nothing is cached, so the next pull
+// scans again (for example after the operator raises the engine's limits).
+func TestGateIncompleteScanBlocksWithoutCaching(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	store := newVerdictStore(newFakeCache())
+	d := gateDeps{
+		adapter: NewAdapter([]string{srvURL}, nil),
+		scanner: stubScanner{}, av: incompleteAV{},
+		filter: allowFilter{}, policy: findingPolicy{},
+		store: store, logger: zerolog.Nop(),
+	}
+	digest, v, err := newManifestGate(d).Evaluate(context.Background(), repo, ref)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if v.Allowed || v.Reason != gate.ReasonScanIncomplete || v.BlockedBy != gate.ReasonScanIncomplete {
+		t.Errorf("verdict = %+v, want blocked scan_incomplete", v)
+	}
+	if _, _, _, found := store.GetImageVerdict(repo, digest); found {
+		t.Error("an incomplete scan must not be cached as an image verdict")
+	}
+	if _, _, found := store.GetBlob("sha256:layer1"); found {
+		t.Error("an incomplete scan must not be cached as a blob verdict")
+	}
+}
