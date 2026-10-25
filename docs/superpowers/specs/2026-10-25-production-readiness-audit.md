@@ -79,17 +79,6 @@ checksum). Same pattern in the Docker blob store.
   the final path (atomic; open readers keep the old inode). Optionally coalesce
   first downloads per key with singleflight (also saves duplicate scans).
 
-### 0b. npm installs through the proxy fail (found 2026-10-25, e2e)
-npm ≥ 9's default `replace-registry-host=npmjs` swaps only the **origin** of
-`https://registry.npmjs.org/...` tarball URLs for the configured registry's,
-dropping its path: with `--registry http://jo-ei:8080/npm/`, the tarball is
-fetched from `http://jo-ei:8080/left-pad/-/left-pad-1.3.0.tgz` → `404
-unknown_registry` (observed with node 22 / npm 10, `npm pack left-pad@1.3.0`).
-With `replace-registry-host=never` the absolute URL is followed instead —
-straight to registry.npmjs.org, around every gate. Same root cause as #0:
-packument `dist.tarball` must be rewritten to the proxy (a relative URL or one
-built from the request). yarn and pnpm not yet verified.
-
 ## P1 — fix before release
 
 ### 3. Graceful shutdown never completes with an open console tab
@@ -165,6 +154,16 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
 → every non-cached request 503s. Pass the shared transport in.
 
 ## P2 — polish
+
+18. **`npm pack <remote spec>` drops the `/npm` prefix** (npm 10.9.9, found
+    2026-10-25 by e2e; first misread as "npm installs fail", corrected after
+    the owner's report and a full re-check). `npm install` (`.npmrc`, `--registry`
+    or env), `npm ci` with a lockfile resolved to `https://registry.npmjs.org/…`,
+    and `npm exec`/`npx` all fetch tarballs through `/npm/<pkg>/-/…` and are
+    gated. Only `npm pack left-pad@1.3.0` fetches
+    `http://<jo-ei>/left-pad/-/left-pad-1.3.0.tgz` → `404 unknown_registry`
+    (fails closed, no bypass). Untested: `replace-registry-host=never`, which
+    would follow the packument's absolute registry.npmjs.org URL; yarn and pnpm.
 
 11. **Console on the proxy listener, no security headers.** `/console/` and
     `/api/` share `:8080` with registry traffic; no CSP, `frame-ancestors`,
