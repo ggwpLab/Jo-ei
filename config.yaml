@@ -17,10 +17,15 @@ server:
   # stop grace period (docker-compose.yaml: stop_grace_period). Default 30.
   shutdown_timeout_seconds: 30
   # Reverse proxies (CIDRs or bare IPs) whose forwarding header is trusted for the
-  # client IP used by login rate limits. Empty = use the TCP peer address.
-  # trusted_proxies: []
+  # client IP used by login rate limits. Empty = use the TCP peer address —
+  # behind a reverse proxy that is the proxy's own address, so every client
+  # shares one login-throttling bucket. With the shipped compose file and a
+  # reverse proxy on the host, list the compose network's gateway (e.g.
+  # "172.18.0.1", see `docker network inspect`) or its subnet. Settable from
+  # the environment: JOEI_SERVER_TRUSTED_PROXIES="172.18.0.1 10.0.0.0/8".
+  trusted_proxies: []
   # Header read from a trusted proxy: X-Forwarded-For (default), X-Real-IP or Forwarded.
-  # client_ip_header: X-Forwarded-For
+  client_ip_header: "X-Forwarded-For"
 
 # Extra certificate authorities trusted when connecting to upstream registries.
 # Use this when a mirror presents a corporate or self-signed certificate: the

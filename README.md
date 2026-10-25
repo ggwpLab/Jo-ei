@@ -480,6 +480,16 @@ reverse proxy:
 - **Port 8080 is published on loopback only** (`127.0.0.1:8080`). Point your
   reverse proxy (TLS, access control) at it; publishing it on all interfaces
   would let clients reach the proxy and the admin console around it.
+- **Tell Jō-ei which proxy to trust.** Behind a reverse proxy every request
+  arrives from the proxy's address, so console login throttling would lump all
+  clients into one bucket (and one attacker could lock everyone out). Set
+  `server.trusted_proxies` to the address the reverse proxy connects from —
+  with the reverse proxy on the host, the compose network's gateway
+  (`docker network inspect <project>_default`) — e.g.
+  `JOEI_SERVER_TRUSTED_PROXIES=172.18.0.1` in `.env`, and have the proxy set
+  `X-Forwarded-For` (or pick `X-Real-IP` / `Forwarded` with
+  `server.client_ip_header`). Jō-ei logs a warning the first time it sees a
+  forwarding header from an untrusted peer.
 - **Health:** `GET /health` answers while the process is up; `GET /ready`
   answers 200 only when the database responds and no attached scanner is down
   (503 lists what is failing). The compose healthcheck runs

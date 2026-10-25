@@ -769,3 +769,13 @@ func TestConfig_ShutdownTimeoutDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
 }
+
+// viper overrides only keys the file contains, so the shipped config must
+// carry server.trusted_proxies for JOEI_SERVER_TRUSTED_PROXIES to work — the
+// setting a reverse-proxy deployment needs.
+func TestShippedConfig_HasTrustedProxiesKey(t *testing.T) {
+	t.Setenv("JOEI_SERVER_TRUSTED_PROXIES", "10.0.0.1")
+	cfg, err := config.Load(filepath.Join("..", "..", "config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1"}, cfg.Server.TrustedProxies)
+}
