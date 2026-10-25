@@ -177,7 +177,7 @@ func (s *server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v
 }
 
 func (s *server) overview(w http.ResponseWriter, r *http.Request) {
-	snap := s.cfg.Store.Snapshot()
+	snap := s.cfg.Store.Snapshot(r.Context())
 
 	var cs cache.CacheStats
 	if s.cfg.Cache != nil {
@@ -261,7 +261,7 @@ func (s *server) dailyMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		days = n
 	}
-	daily, err := s.cfg.Store.DailyMetrics(days)
+	daily, err := s.cfg.Store.DailyMetrics(r.Context(), days)
 	if err != nil {
 		s.log(r).Error().Err(err).Msg("reading daily metrics")
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "metrics_unavailable"})
@@ -306,7 +306,7 @@ func (s *server) requests(w http.ResponseWriter, r *http.Request) {
 		cursor = c
 	}
 
-	events, next := s.cfg.Store.Page(verdict, text, cursor, limit)
+	events, next := s.cfg.Store.Page(r.Context(), verdict, text, cursor, limit)
 	out := make([]eventJSON, 0, len(events))
 	for _, ev := range events {
 		out = append(out, toEventJSON(ev))
@@ -326,7 +326,7 @@ func (s *server) quarantine(w http.ResponseWriter, r *http.Request) {
 		BlockUntil  time.Time `json:"block_until"`
 		RequestID   string    `json:"request_id"`
 	}
-	events := s.cfg.Store.Quarantine(time.Now())
+	events := s.cfg.Store.Quarantine(r.Context(), time.Now())
 	out := make([]qJSON, 0, len(events))
 	for _, ev := range events {
 		out = append(out, qJSON{

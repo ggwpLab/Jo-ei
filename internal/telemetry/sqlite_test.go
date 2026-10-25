@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -37,7 +38,7 @@ func TestSQLiteRepo_RecordEventRoundTrips(t *testing.T) {
 	}
 	require.NoError(t, repo.RecordEvent(ev))
 
-	got, err := repo.Recent(100)
+	got, err := repo.Recent(context.Background(), 100)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "r1", got[0].RequestID)
@@ -57,7 +58,7 @@ func TestSQLiteRepo_RecordEventAccumulatesCountersAndDaily(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(gate.Event{Time: today, Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Reason: "cve_found"}))
 
 	started := time.Now()
-	snap, err := repo.Snapshot(started)
+	snap, err := repo.Snapshot(context.Background(), started)
 	require.NoError(t, err)
 	assert.True(t, snap.StartedAt.Equal(started))
 	assert.Equal(t, uint64(3), snap.Requests)
@@ -69,7 +70,7 @@ func TestSQLiteRepo_RecordEventAccumulatesCountersAndDaily(t *testing.T) {
 	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 1}, snap.Gates[gate.GateSupply])
 	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateCVE])
 
-	rows, err := repo.DailyMetrics(0)
+	rows, err := repo.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, today.Format("2006-01-02"), rows[0].Day)
@@ -79,13 +80,13 @@ func TestSQLiteRepo_RecordEventAccumulatesCountersAndDaily(t *testing.T) {
 
 func TestSQLiteRepo_SnapshotEmptyIsZeroValue(t *testing.T) {
 	repo := newRepo(t)
-	snap, err := repo.Snapshot(time.Now())
+	snap, err := repo.Snapshot(context.Background(), time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), snap.Requests)
 	assert.NotNil(t, snap.Gates)
 	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateSupply])
 
-	recent, err := repo.Recent(100)
+	recent, err := repo.Recent(context.Background(), 100)
 	require.NoError(t, err)
 	assert.Empty(t, recent)
 }
@@ -102,13 +103,13 @@ func TestSQLiteRepo_QuarantineDedupesBeforeExpiry(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(mk("r1", "1", now.Add(time.Hour))))
 	require.NoError(t, repo.RecordEvent(mk("r2", "1", now.Add(2*time.Hour)))) // newer, same key
 
-	q, err := repo.Quarantine(now)
+	q, err := repo.Quarantine(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, q, 1)
 	assert.Equal(t, "r2", q[0].RequestID)
 
 	require.NoError(t, repo.RecordEvent(mk("r3", "1", now.Add(-time.Minute)))) // newest expired
-	q, err = repo.Quarantine(now)
+	q, err = repo.Quarantine(context.Background(), now)
 	require.NoError(t, err)
 	assert.Empty(t, q)
 }
@@ -122,7 +123,7 @@ func TestSQLiteRepo_DailyMetricsLimit(t *testing.T) {
 	} {
 		require.NoError(t, repo.RecordEvent(gate.Event{Time: d, Verdict: gate.VerdictPass, Gate: gate.GateMalware}))
 	}
-	rows, err := repo.DailyMetrics(2)
+	rows, err := repo.DailyMetrics(context.Background(), 2)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.Equal(t, "2026-01-03", rows[0].Day)
@@ -138,9 +139,9 @@ func TestSQLiteRepo_PruneRemovesOldEvents(t *testing.T) {
 
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "old", Time: time.Now().Add(-72 * time.Hour), Verdict: gate.VerdictPass, Gate: gate.GateMalware}))
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "fresh", Time: time.Now(), Verdict: gate.VerdictPass, Gate: gate.GateMalware}))
-	require.NoError(t, repo.Prune())
+	require.NoError(t, repo.Prune(context.Background()))
 
-	got, err := repo.Recent(100)
+	got, err := repo.Recent(context.Background(), 100)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "fresh", got[0].RequestID)
@@ -161,7 +162,7 @@ func TestSQLiteRepo_PagePagesAllWithoutGapsOrDupes(t *testing.T) {
 	var ids []string
 	cursor := telemetry.Cursor{}
 	for {
-		evs, next, err := repo.Page(gate.VerdictBlock, "", cursor, 2)
+		evs, next, err := repo.Page(context.Background(), gate.VerdictBlock, "", cursor, 2)
 		require.NoError(t, err)
 		for _, ev := range evs {
 			ids = append(ids, ev.RequestID)
@@ -182,7 +183,7 @@ func TestSQLiteRepo_PageFiltersByVerdict(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "err1", Time: now.Add(time.Second), Verdict: gate.VerdictError, Gate: gate.GateCache}))
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "block1", Time: now.Add(2 * time.Second), Verdict: gate.VerdictBlock, Gate: gate.GateCVE}))
 
-	evs, next, err := repo.Page(gate.VerdictError, "", telemetry.Cursor{}, 10)
+	evs, next, err := repo.Page(context.Background(), gate.VerdictError, "", telemetry.Cursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "err1", evs[0].RequestID)
@@ -195,7 +196,7 @@ func TestSQLiteRepo_PageEmptyVerdictReturnsAllNewestFirst(t *testing.T) {
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "a", Time: now, Verdict: gate.VerdictPass, Gate: gate.GateSupply}))
 	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "b", Time: now.Add(time.Second), Verdict: gate.VerdictBlock, Gate: gate.GateCVE}))
 
-	evs, next, err := repo.Page("", "", telemetry.Cursor{}, 10)
+	evs, next, err := repo.Page(context.Background(), "", "", telemetry.Cursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, evs, 2)
 	assert.Equal(t, "b", evs[0].RequestID, "newest first")
@@ -220,7 +221,7 @@ func TestSQLiteRepo_PageFiltersByText(t *testing.T) {
 
 	ids := func(verdict, text string) []string {
 		t.Helper()
-		evs, _, err := repo.Page(verdict, text, telemetry.Cursor{}, 10)
+		evs, _, err := repo.Page(context.Background(), verdict, text, telemetry.Cursor{}, 10)
 		require.NoError(t, err)
 		out := []string{}
 		for _, ev := range evs {
@@ -252,17 +253,17 @@ func TestSQLiteRepo_PageTextIsNotSQL(t *testing.T) {
 		`%' UNION SELECT 1, 1, sqlite_version() --`,
 		`\`,
 	} {
-		evs, _, err := repo.Page("", text, telemetry.Cursor{}, 10)
+		evs, _, err := repo.Page(context.Background(), "", text, telemetry.Cursor{}, 10)
 		require.NoError(t, err, text)
 		assert.Empty(t, evs, "%q must match as a literal substring, not as SQL", text)
 	}
 
-	evs, _, err := repo.Page("", "it's", telemetry.Cursor{}, 10)
+	evs, _, err := repo.Page(context.Background(), "", "it's", telemetry.Cursor{}, 10)
 	require.NoError(t, err)
 	require.Len(t, evs, 1, "a quote in the text is just a character")
 	assert.Equal(t, "quoted", evs[0].RequestID)
 
-	all, err := repo.Recent(10)
+	all, err := repo.Recent(context.Background(), 10)
 	require.NoError(t, err)
 	assert.Len(t, all, 2, "the events table survives")
 }
@@ -285,7 +286,7 @@ func TestSQLiteRepo_PageTextPagesWithCursor(t *testing.T) {
 	var ids []string
 	cursor := telemetry.Cursor{}
 	for {
-		evs, next, err := repo.Page("", "wanted", cursor, 2)
+		evs, next, err := repo.Page(context.Background(), "", "wanted", cursor, 2)
 		require.NoError(t, err)
 		for _, ev := range evs {
 			ids = append(ids, ev.RequestID)
@@ -296,4 +297,26 @@ func TestSQLiteRepo_PageTextPagesWithCursor(t *testing.T) {
 		cursor = next
 	}
 	assert.Equal(t, []string{"r6", "r4", "r2"}, ids)
+}
+
+// The console's reads and the prune can be long scans; a cancelled request
+// (or a stopping server) must abort them instead of holding the database's
+// single connection until they finish.
+func TestSQLiteRepo_HeavyReadsHonourContext(t *testing.T) {
+	repo := newRepo(t)
+	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "r1", Time: time.Now(), Ecosystem: "pypi", Package: "x", Version: "1", Verdict: gate.VerdictPass}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := repo.Snapshot(ctx, time.Now())
+	assert.ErrorIs(t, err, context.Canceled, "Snapshot")
+	_, err = repo.Recent(ctx, 10)
+	assert.ErrorIs(t, err, context.Canceled, "Recent")
+	_, _, err = repo.Page(ctx, "", "x", telemetry.Cursor{}, 10)
+	assert.ErrorIs(t, err, context.Canceled, "Page")
+	_, err = repo.Quarantine(ctx, time.Now())
+	assert.ErrorIs(t, err, context.Canceled, "Quarantine")
+	_, err = repo.DailyMetrics(ctx, 30)
+	assert.ErrorIs(t, err, context.Canceled, "DailyMetrics")
+	assert.ErrorIs(t, repo.Prune(ctx), context.Canceled, "Prune")
 }

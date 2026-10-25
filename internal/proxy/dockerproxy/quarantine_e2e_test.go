@@ -1,6 +1,7 @@
 package dockerproxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -60,7 +61,7 @@ func youngRegistry(t *testing.T, age time.Duration) (url, repo, tag string) {
 
 // TestDockerSupplyBlockReachesQuarantine drives the FULL pipeline: a young image
 // pulled through the Docker handler with the REAL supply-chain filter and the
-// REAL SQLite telemetry store, then asserts it appears in Store.Quarantine().
+// REAL SQLite telemetry store, then asserts it appears in Store.Quarantine(context.Background()).
 func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 	srvURL, repo, tag := youngRegistry(t, 1*time.Hour) // 1h old < 24h min-age → blocked
 
@@ -94,7 +95,7 @@ func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 		t.Fatalf("pull status = %d, body=%s (expected 403 supply block)", w.Code, w.Body.String())
 	}
 
-	q := store.Quarantine(time.Now())
+	q := store.Quarantine(context.Background(), time.Now())
 	if len(q) != 1 {
 		t.Fatalf("Quarantine returned %d entries, want 1: %+v", len(q), q)
 	}
@@ -267,7 +268,7 @@ func TestDockerMultiArchSupplyBlockReachesQuarantine(t *testing.T) {
 		t.Fatalf("child pull status = %d, body=%s (expected 403 supply block)", wChild.Code, wChild.Body.String())
 	}
 
-	q := store.Quarantine(time.Now())
+	q := store.Quarantine(context.Background(), time.Now())
 	if len(q) != 1 {
 		t.Fatalf("Quarantine returned %d entries, want 1: %+v", len(q), q)
 	}

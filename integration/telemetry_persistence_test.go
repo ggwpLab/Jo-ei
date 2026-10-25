@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,19 +44,19 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 
-	snap := s.Snapshot()
+	snap := s.Snapshot(context.Background())
 	assert.Equal(t, uint64(2), snap.Requests)
 	assert.Equal(t, uint64(1), snap.CacheHits)
 	assert.Equal(t, uint64(1), snap.Blocked)
 	assert.Equal(t, uint64(1), snap.SupplyBlocked)
 
-	require.Len(t, s.Recent(0), 2)
+	require.Len(t, s.Recent(context.Background(), 0), 2)
 
-	q := s.Quarantine(now)
+	q := s.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)
 	assert.Equal(t, "p", q[0].Package)
 
-	daily, err := s.DailyMetrics(0)
+	daily, err := s.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
 	assert.Equal(t, uint64(2), daily[0].Requests)
