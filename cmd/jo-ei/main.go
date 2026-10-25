@@ -121,6 +121,8 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	a := &app{}
+	defer a.close()
 
 	level, levelErr := zerolog.ParseLevel(cfg.Logging.Level)
 	if levelErr != nil {
@@ -132,7 +134,7 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = closeLog() }()
+	a.onClose(closeLog)
 
 	var logger zerolog.Logger
 	if cfg.Logging.Format == "text" {
@@ -159,7 +161,7 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("opening database at %q: %w", cfg.Database.Path, err)
 	}
-	defer func() { _ = sdb.Close() }()
+	a.onClose(sdb.Close)
 
 	settingsStore, err := settings.New(sdb)
 	if err != nil {
@@ -174,7 +176,7 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = artifactCache.Close() }()
+	a.onClose(artifactCache.Close)
 	mx.RegisterCache(artifactCache, int64(cfg.Cache.Local.MaxSizeGB)<<30)
 
 	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
@@ -204,7 +206,7 @@ func run(ctx context.Context, cfgPath string) error {
 		return err
 	}
 	serverLog.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
-	defer func() { _ = store.Close() }()
+	a.onClose(store.Close)
 	broadcaster := telemetry.NewBroadcaster()
 
 	// One shared upstream transport for every client (metadata, download,
@@ -294,7 +296,7 @@ func run(ctx context.Context, cfgPath string) error {
 			ttl = 24 * time.Hour
 		}
 		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
-		defer func() { _ = osvScanner.Close() }()
+		a.onClose(osvScanner.Close)
 		shared.cveScanner = mx.WrapCVEScanner("osv", osvScanner)
 		shared.policy = policyRuntime
 	}
@@ -373,7 +375,7 @@ func run(ctx context.Context, cfgPath string) error {
 		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, true, trivyScanner.Probe)
 	}
 	healthMon.Start()
-	defer healthMon.Close() //nolint:errcheck
+	a.onClose(healthMon.Close)
 	mx.RegisterScannerHealth(healthMon.Snapshot, scannerTypes)
 
 	// Build the prefix→handler routing map from config.
