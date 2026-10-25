@@ -48,6 +48,14 @@ func NewIndex(path string) (*Index, error) {
 		return nil, fmt.Errorf("opening sqlite db at %q: %w", path, err)
 	}
 	db.SetMaxOpenConns(1) // SQLite: single writer
+	// busy_timeout first, so switching the journal mode tolerates brief
+	// contention too; WAL lets readers proceed while eviction writes.
+	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL"} {
+		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("applying %q: %w", pragma, err)
+		}
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("running schema: %w", err)
 	}

@@ -34,9 +34,12 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("opening sqlite db at %q: %w", path, err)
 	}
 	sqlDB.SetMaxOpenConns(1) // SQLite: single writer
+	// busy_timeout first: a second process (jo-ei backup, reset-admin-password)
+	// opening the file during a checkpoint must wait, not fail on the journal
+	// mode switch with SQLITE_BUSY.
 	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
+		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
 	} {
 		if _, err := sqlDB.Exec(pragma); err != nil {
