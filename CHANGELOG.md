@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A throttled mirror no longer turns a miss into a 502.** When the other
+  upstreams answered 404/410 and one answered 429 (or was skipped by the
+  circuit breaker after a 429), the client got `502 upstream_unavailable`,
+  which reads like an outage. It now gets `429` (`503` when the throttle was a
+  503) with `Retry-After` set to the throttled mirror's remaining cooldown, so
+  clients such as Maven back off and retry. Applies to artifact downloads,
+  metadata, transparent proxying and Docker manifests (`TOOMANYREQUESTS`); the
+  event reason is `upstream_throttled`. Any real failure on a mirror (5xx,
+  connection, TLS) still yields 502.
+
 ## [0.6.0] - 2026-10-24
 
 ### Security

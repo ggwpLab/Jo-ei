@@ -413,8 +413,10 @@ to the upstream registry without scanning or caching.
 Each provider accepts an ordered list of `upstreams`. For every request the proxy tries
 them in order and uses the first that serves the artifact (Nexus-style sequential
 fallback). Any failure — 404/410, 5xx, timeout, or connection refused — advances to the
-next upstream. If every upstream returns 404/410 the client gets a 404; any other failure
-mix yields a 502.
+next upstream. If every upstream returns 404/410 the client gets a 404. If the rest
+returned 404/410 but some were throttled (429/503, or skipped by the circuit breaker),
+the client gets 429 (503 when no throttle was a 429) with `Retry-After`; any other
+failure mix yields a 502.
 
 ```yaml
 registries:

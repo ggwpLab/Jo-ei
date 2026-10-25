@@ -140,3 +140,83 @@ func TestCircuitBreaker_OpenHosts(t *testing.T) {
 		t.Fatalf("OpenHosts() after cooldown = %v, want empty", got)
 	}
 }
+
+// statusRT answers every request with a fixed status and Retry-After.
+type statusRT struct {
+	status     int
+	retryAfter string
+}
+
+func (s statusRT) RoundTrip(*http.Request) (*http.Response, error) {
+	h := http.Header{}
+	if s.retryAfter != "" {
+		h.Set("Retry-After", s.retryAfter)
+	}
+	return &http.Response{StatusCode: s.status, Header: h, Body: http.NoBody}, nil
+}
+
+// Throttle reports the status that opened a host's circuit and the time left
+// on its cooldown, so a handler can tell 429 from 503 and set Retry-After.
+func TestCircuitBreaker_Throttle(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		cb := httpx.NewCircuitBreaker(statusRT{status: status, retryAfter: "7"}, time.Millisecond, time.Minute)
+		if _, _, ok := cb.Throttle("a:443"); ok {
+			t.Fatalf("Throttle before any request: ok = true, want false")
+		}
+
+		req, _ := http.NewRequest(http.MethodGet, "https://a:443/x", nil)
+		resp, err := cb.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("round trip: %v", err)
+		}
+		resp.Body.Close()
+
+		got, retryIn, ok := cb.Throttle("a:443")
+		if !ok || got != status {
+			t.Fatalf("Throttle = (%d, %v, %v), want status %d and ok", got, retryIn, ok, status)
+		}
+		// Retry-After 7s plus at most baseDelay (1ms) of jitter.
+		if retryIn <= 6*time.Second || retryIn > 7*time.Second+time.Millisecond {
+			t.Fatalf("retryIn = %v, want ~7s", retryIn)
+		}
+		if _, _, ok := cb.Throttle("b:443"); ok {
+			t.Fatalf("Throttle for an untouched host: ok = true, want false")
+		}
+	}
+}
+
+// A closed circuit (cooldown elapsed) reports no throttle.
+func TestCircuitBreaker_ThrottleClearsAfterCooldown(t *testing.T) {
+	const cooldown = 40 * time.Millisecond
+	cb := httpx.NewCircuitBreaker(statusRT{status: http.StatusTooManyRequests}, cooldown, cooldown)
+	req, _ := http.NewRequest(http.MethodGet, "https://a:443/x", nil)
+	resp, err := cb.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	resp.Body.Close()
+
+	time.Sleep(cooldown + 40*time.Millisecond)
+	if _, _, ok := cb.Throttle("a:443"); ok {
+		t.Fatalf("Throttle after cooldown: ok = true, want false")
+	}
+}
+
+func TestSetRetryAfter(t *testing.T) {
+	for _, tt := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, ""},
+		{-time.Second, ""},
+		{time.Millisecond, "1"},
+		{30 * time.Second, "30"},
+		{30*time.Second + time.Millisecond, "31"},
+	} {
+		h := http.Header{}
+		httpx.SetRetryAfter(h, tt.d)
+		if got := h.Get("Retry-After"); got != tt.want {
+			t.Fatalf("SetRetryAfter(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}

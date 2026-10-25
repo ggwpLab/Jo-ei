@@ -12,6 +12,7 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
@@ -24,6 +25,9 @@ type Config struct {
 	Tags     *tagIndex
 	Recorder gate.Recorder
 	Logger   zerolog.Logger
+	// Throttles reports upstream hosts in a post-throttle cooldown; optional
+	// (see proxy.HandlerConfig.Throttles).
+	Throttles upstream.ThrottleLookup
 }
 
 // Handler implements the Docker Registry V2 pull-through flow.
@@ -70,6 +74,18 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 			log.Warn().Array("upstream_attempts", atts).Msg("manifest not found on any upstream")
 			h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "manifest_not_found", http.StatusNotFound, start, nil)
 			h.writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
+			return
+		}
+		// The rest were throttled: neither proof of absence nor an outage.
+		if status, retry, ok := atts.Throttled(h.cfg.Throttles); hasAtts && ok {
+			log.Warn().Err(err).Array("upstream_attempts", atts).Msg("upstream throttled")
+			h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "upstream_throttled", status, start, nil)
+			httpx.SetRetryAfter(w.Header(), retry)
+			code := "UNAVAILABLE"
+			if status == http.StatusTooManyRequests {
+				code = "TOOMANYREQUESTS"
+			}
+			h.writeError(w, status, code, "upstream registry throttled")
 			return
 		}
 		ev := log.Error().Err(err)
@@ -245,6 +261,8 @@ type HandlerDeps struct {
 	// client with a 120s timeout. Pass a client whose transport caps per-host
 	// concurrency (shared with the other registries) to avoid 429 throttling.
 	HTTPClient *http.Client
+	// Throttles reports upstream hosts in a post-throttle cooldown; optional.
+	Throttles upstream.ThrottleLookup
 }
 
 // New assembles a ready-to-serve Docker Registry V2 proxy handler.
@@ -257,5 +275,5 @@ func New(d HandlerDeps) http.Handler {
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger})
+	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
 }

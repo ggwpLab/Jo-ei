@@ -41,6 +41,7 @@ type CircuitBreaker struct {
 type breakerState struct {
 	openUntil time.Time
 	fails     int // consecutive throttles, for exponential cooldown growth
+	status    int // the upstream status (429 or 503) that last opened the circuit
 }
 
 // NewCircuitBreaker wraps base. baseDelay and maxDelay bound the exponential
@@ -71,7 +72,7 @@ func (c *CircuitBreaker) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-		c.trip(host, resp.Header.Get("Retry-After"))
+		c.trip(host, resp.StatusCode, resp.Header.Get("Retry-After"))
 		return resp, nil
 	}
 	c.reset(host)
@@ -101,8 +102,25 @@ func (c *CircuitBreaker) OpenHosts() []string {
 	return open
 }
 
+// Throttle reports whether host's circuit is open: the upstream status (429
+// or 503) that opened it and the time left on its cooldown. It is safe for
+// concurrent use.
+func (c *CircuitBreaker) Throttle(host string) (status int, retryIn time.Duration, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.hosts[host]
+	if st == nil {
+		return 0, 0, false
+	}
+	left := st.openUntil.Sub(c.now())
+	if left <= 0 {
+		return 0, 0, false
+	}
+	return st.status, left, true
+}
+
 // trip opens (or extends) the host circuit after a 429/503.
-func (c *CircuitBreaker) trip(host, retryAfter string) {
+func (c *CircuitBreaker) trip(host string, status int, retryAfter string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.hosts[host]
@@ -111,6 +129,7 @@ func (c *CircuitBreaker) trip(host, retryAfter string) {
 		c.hosts[host] = st
 	}
 	st.fails++
+	st.status = status
 
 	var delay time.Duration
 	if d, ok := parseRetryAfter(retryAfter, c.now()); ok {
@@ -144,6 +163,16 @@ func (c *CircuitBreaker) jitter() time.Duration {
 		return 0
 	}
 	return time.Duration(rand.Int64N(int64(c.baseDelay) + 1)) // #nosec G404 -- retry jitter, not cryptographic
+}
+
+// SetRetryAfter sets a Retry-After header of d rounded up to whole seconds;
+// d <= 0 means no hint, and no header is set.
+func SetRetryAfter(h http.Header, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	secs := int64((d + time.Second - 1) / time.Second)
+	h.Set("Retry-After", strconv.FormatInt(secs, 10))
 }
 
 // parseRetryAfter parses a Retry-After header (delta-seconds or HTTP-date)
