@@ -19,7 +19,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/metrics"
@@ -27,7 +26,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
-	"github.com/ggwpLab/Jo-ei/internal/scanner"
 	"github.com/ggwpLab/Jo-ei/internal/settings"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/supplychain"
@@ -38,15 +36,6 @@ import (
 )
 
 var cfgFile string
-
-// defaultOSVBaseURL is used for both the live scanner and the console's
-// scanner listing when cve.base_url is unset.
-const defaultOSVBaseURL = "https://api.osv.dev"
-
-// defaultMaxConcurrentScans bounds simultaneous malware scans when
-// malware.max_concurrent_scans is unset. It roughly matches clamd's default
-// worker pool so bursts don't queue past the per-scan deadline.
-const defaultMaxConcurrentScans = 8
 
 // Build metadata, overridden at release time via
 // -ldflags "-X main.version=… -X main.commit=… -X main.date=…" (see
@@ -206,108 +195,24 @@ func run(ctx context.Context, cfgPath string) error {
 			Msg("lazy cache re-validation configured")
 	}
 
-	// CVE scanner + policy (optional).
-	var osvScanner *scanner.OSVScanner
+	sc, err := buildScanners(a, cfg, profile, mx, serverLog)
+	if err != nil {
+		return err
+	}
+	shared.cveScanner = sc.cve
+	shared.avScanner = sc.av
 	if cfg.CVE.Enabled {
-		baseURL := cfg.CVE.BaseURL
-		if baseURL == "" {
-			baseURL = defaultOSVBaseURL
-		}
-		ttl := time.Duration(cfg.CVE.CacheTTLMinutes) * time.Minute
-		if ttl == 0 {
-			ttl = 24 * time.Hour
-		}
-		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
-		a.onClose(osvScanner.Close)
-		shared.cveScanner = mx.WrapCVEScanner("osv", osvScanner)
 		shared.policy = policyRuntime
 	}
-
-	if !cfg.CVE.Enabled {
-		serverLog.Warn().Msg("cve.enabled is false — console policy edits to cve_block_on, allowlist_cve and denylist have no effect (supply-chain mode/min-age/allowlist_supply still apply)")
-	}
-
-	// Malware scanners (optional; attached only when the profile blocks malware).
-	var avScanners []gate.AVScanner
-	engineCount := 0
-	if profile.MalwareBlock && len(cfg.Malware.Scanners) > 0 {
-		avScanners = make([]gate.AVScanner, 0, len(cfg.Malware.Scanners))
-		for _, sc := range cfg.Malware.Scanners {
-			av, err := scanner.New(sc)
-			if err != nil {
-				return err
-			}
-			avScanners = append(avScanners, av)
-		}
-		limit := cfg.Malware.MaxConcurrentScans
-		if limit == 0 {
-			limit = defaultMaxConcurrentScans
-		}
-		// avScanners stays unwrapped: the health monitor below type-asserts
-		// scanner.Prober on it, which a metrics wrapper would hide.
-		wrapped := make([]gate.AVScanner, len(avScanners))
-		for i, av := range avScanners {
-			wrapped[i] = mx.WrapAVScanner(cfg.Malware.Scanners[i].DisplayName(), cfg.Malware.Scanners[i].Type, av)
-		}
-		// Cap concurrent scans so download bursts don't overwhelm the engines'
-		// worker pools and make clamd/ICAP responses time out.
-		shared.avScanner = scanner.NewLimitedScanner(scanner.NewMultiScanner(wrapped...), limit,
-			scanner.WithWaitObserver(mx.ScanWaitObserver()))
-		mx.SetScanConcurrencyLimit(limit)
-		engineCount = len(avScanners)
-	} else if len(cfg.Malware.Scanners) > 0 {
-		serverLog.Warn().Str("active_profile", cfg.Policy.ActiveProfile).
-			Msg("malware.scanners configured but active profile has malware_block:false — scanners not attached")
-	}
-
-	// Image scanner (Trivy) for the Docker registry (optional).
-	var trivyScanner *dockerproxy.TrivyScanner
-	if cfg.ImageScan.Enabled {
-		timeout := time.Duration(cfg.ImageScan.TimeoutSeconds) * time.Second
-		trivyScanner = dockerproxy.NewTrivyScanner(cfg.ImageScan.TrivyServer, cfg.ImageScan.Scanners, timeout)
-	}
-
-	// Scanner health monitor: active probes for socket engines, passive
-	// tracking for the remote osv.dev API.
-	interval := time.Duration(cfg.Health.ProbeIntervalSeconds) * time.Second
-	slow := time.Duration(cfg.Health.SlowThresholdMS) * time.Millisecond
-	if slow <= 0 {
-		slow = 2000 * time.Millisecond
-	}
-	healthMon := health.NewMonitor(interval, slow) // interval<=0 → 30s default
-	if cfg.CVE.Enabled && osvScanner != nil {
-		base := cfg.CVE.BaseURL
-		if base == "" {
-			base = defaultOSVBaseURL
-		}
-		healthMon.AddPassive("osv.dev", base, true, osvScanner.Health)
-	}
-	scannerTypes := map[string]string{} // display name → type, for metric labels
-	for i, sc := range cfg.Malware.Scanners {
-		scannerTypes[sc.DisplayName()] = sc.Type
-		if profile.MalwareBlock && i < len(avScanners) {
-			if pr, ok := avScanners[i].(scanner.Prober); ok {
-				healthMon.AddActive(sc.DisplayName(), sc.Address, true, pr.Probe)
-				continue
-			}
-		}
-		healthMon.AddDisabled(sc.DisplayName(), sc.Address)
-	}
-	if cfg.ImageScan.Enabled && trivyScanner != nil {
-		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, true, trivyScanner.Probe)
-	}
-	healthMon.Start()
-	a.onClose(healthMon.Close)
-	mx.RegisterScannerHealth(healthMon.Snapshot, scannerTypes)
 
 	// Build the prefix→handler routing map from config.
 	handlers := buildHandlers(cfg, shared)
 
 	rawHandlers := map[string]http.Handler{}
-	if cfg.Registries.Docker.Enabled && trivyScanner != nil {
+	if cfg.Registries.Docker.Enabled && sc.trivy != nil {
 		rawHandlers["v2"] = dockerproxy.New(dockerproxy.HandlerDeps{
 			Upstreams:     cfg.Registries.Docker.Upstreams,
-			Scanner:       mx.WrapImageScanner("trivy", trivyScanner),
+			Scanner:       mx.WrapImageScanner("trivy", sc.trivy),
 			AV:            shared.avScanner,
 			Filter:        policyRuntime,
 			Policy:        policyRuntime,
@@ -408,7 +313,7 @@ func run(ctx context.Context, cfgPath string) error {
 		RegistryStore:       registrySettingsStore{s: settingsStore},
 		RunningRegistries:   runningRegistries,
 		ImageScanEnabled:    cfg.ImageScan.Enabled,
-		Health:              healthMon,
+		Health:              sc.health,
 		Users:               userStore,
 		Logger:              logger,
 	})))
@@ -468,7 +373,7 @@ func run(ctx context.Context, cfgPath string) error {
 		Str("listen", cfg.Server.Listen).
 		Str("metrics", metricsAddr).
 		Int("registries", registryCount).
-		Int("malware_engines", engineCount).
+		Int("malware_engines", sc.engineCount).
 		Bool("cve", shared.cveScanner != nil).
 		Str("mode", cfg.SupplyChain.Mode).
 		Str("console", "/console/").
