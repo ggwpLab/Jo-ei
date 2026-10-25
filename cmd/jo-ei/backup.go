@@ -54,21 +54,31 @@ func backupDatabase(dbPath, out string) error {
 	} else if err != nil {
 		return fmt.Errorf("checking database: %w", err)
 	}
-	if _, err := os.Stat(out); err == nil {
-		return fmt.Errorf("backup output %s already exists", out)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("checking backup output: %w", err)
-	}
 	abs, err := filepath.Abs(out)
 	if err != nil {
 		return err
 	}
+	// Create the file first, exclusively and owner-only: it will hold the
+	// console's password hashes and the session signing key. VACUUM INTO
+	// accepts an existing empty file, and O_EXCL makes "never overwrite"
+	// atomic.
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- operator-supplied backup path
+	switch {
+	case errors.Is(err, fs.ErrExist):
+		return fmt.Errorf("backup output %s already exists", out)
+	case err != nil:
+		return fmt.Errorf("creating backup output in %s: %w", filepath.Dir(abs), err)
+	}
+	_ = f.Close()
+
 	db, err := storage.Open(dbPath)
 	if err != nil {
+		_ = os.Remove(abs)
 		return fmt.Errorf("opening database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 	if _, err := db.SQL().Exec("VACUUM INTO ?", abs); err != nil {
+		_ = os.Remove(abs)
 		return fmt.Errorf("backing up %s to %s: %w", dbPath, out, err)
 	}
 	return nil

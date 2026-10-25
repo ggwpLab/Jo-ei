@@ -110,7 +110,7 @@ func run(ctx context.Context, cfgPath string) error {
 			Msg("lazy cache re-validation configured")
 	}
 
-	sc, err := buildScanners(a, cfg, st.profile, mx, up.adapter.Transport, serverLog)
+	sc, err := buildScanners(a, cfg, st.profile, mx, up.osv, serverLog)
 	if err != nil {
 		return err
 	}

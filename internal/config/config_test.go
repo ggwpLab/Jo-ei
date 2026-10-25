@@ -774,8 +774,10 @@ func TestConfig_ShutdownTimeoutDefault(t *testing.T) {
 // carry server.trusted_proxies for JOEI_SERVER_TRUSTED_PROXIES to work — the
 // setting a reverse-proxy deployment needs.
 func TestShippedConfig_HasTrustedProxiesKey(t *testing.T) {
-	t.Setenv("JOEI_SERVER_TRUSTED_PROXIES", "10.0.0.1")
-	cfg, err := config.Load(filepath.Join("..", "..", "config.yaml"))
-	require.NoError(t, err)
-	assert.Equal(t, []string{"10.0.0.1"}, cfg.Server.TrustedProxies)
+	for _, env := range []string{"10.0.0.1 10.0.0.0/8", "10.0.0.1,10.0.0.0/8", " 10.0.0.1 , 10.0.0.0/8 "} {
+		t.Setenv("JOEI_SERVER_TRUSTED_PROXIES", env)
+		cfg, err := config.Load(filepath.Join("..", "..", "config.yaml"))
+		require.NoError(t, err, env)
+		assert.Equal(t, []string{"10.0.0.1", "10.0.0.0/8"}, cfg.Server.TrustedProxies, env)
+	}
 }

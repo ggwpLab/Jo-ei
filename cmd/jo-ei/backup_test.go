@@ -80,3 +80,25 @@ func TestBackup_MissingDatabase(t *testing.T) {
 	_, statErr := os.Stat(missing)
 	assert.True(t, os.IsNotExist(statErr), "backup must not create the source database")
 }
+
+// The backup holds the console's password hashes and the session signing key.
+func TestBackup_OwnerOnly(t *testing.T) {
+	path, _ := seededDB(t)
+	out := filepath.Join(t.TempDir(), "backup.db")
+
+	require.NoError(t, backupDatabase(path, out))
+
+	info, err := os.Stat(out)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestBackup_MissingOutputDirNamed(t *testing.T) {
+	path, _ := seededDB(t)
+	dir := filepath.Join(t.TempDir(), "no-such-dir")
+
+	err := backupDatabase(path, filepath.Join(dir, "backup.db"))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), dir)
+}

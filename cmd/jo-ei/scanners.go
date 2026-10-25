@@ -37,10 +37,10 @@ type scanners struct {
 const osvTimeout = 15 * time.Second
 
 // buildScanners builds the CVE, malware and image scanners and starts the
-// health monitor over them. upstream is the shared upstream transport, which
-// OSV lookups use so they honour tls.ca_files and the per-host limits.
-// Closers for the OSV scanner and the monitor are registered on a.
-func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx *metrics.Metrics, upstream http.RoundTripper, serverLog zerolog.Logger) (scanners, error) {
+// health monitor over them. osvClient carries the operator's CA trust
+// (tls.ca_files) for OSV lookups. Closers for the OSV scanner and the monitor
+// are registered on a.
+func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx *metrics.Metrics, osvClient *http.Client, serverLog zerolog.Logger) (scanners, error) {
 	var sc scanners
 
 	// CVE scanner (optional).
@@ -54,8 +54,7 @@ func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx 
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		osvScanner = scanner.NewOSVScanner(baseURL, ttl,
-			scanner.WithOSVHTTPClient(&http.Client{Timeout: osvTimeout, Transport: upstream}))
+		osvScanner = scanner.NewOSVScanner(baseURL, ttl, scanner.WithOSVHTTPClient(osvClient))
 		a.onClose(osvScanner.Close)
 		sc.cve = mx.WrapCVEScanner("osv", osvScanner)
 	}
