@@ -87,7 +87,9 @@ malware:
       # clamav/clamav image listens on TCP 3310 by default; its unix socket
       # lives at /tmp/clamd.sock inside its own container and is not shareable.
       address: "tcp:clamav:3310"
-      timeout_seconds: 30
+      # Generous on purpose: clamd needs minutes for a multi-GB artifact or
+      # layer, and a timeout fails the download closed (503).
+      timeout_seconds: 300
     # Add a commercial engine over ICAP (Kaspersky, Dr.Web, …):
     # Each scanner is reported (detections, logs, console overview) under
     # `name`; it defaults to the type, or "icap:<service>" for ICAP. Names must

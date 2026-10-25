@@ -31,8 +31,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unrecognized_artifact`. All sdist formats pip accepts (`.tar.bz2`, `.tgz`,
   `.tar.xz`, …) and upper-case extensions are now recognized and gated.
 
+### Added
+
+- **Readiness endpoint and healthcheck command.** `GET /ready` returns 200
+  when the database answers and no attached scanner is down, and 503 with the
+  failing components otherwise (`/health` still only reports that the process
+  is up). `jo-ei healthcheck [--ready]` probes either endpoint from inside the
+  distroless image, and the compose file uses it as the container healthcheck.
+- **`server.shutdown_timeout_seconds`** (default 30) bounds how long a stopping
+  server drains in-flight requests.
+
 ### Changed
 
+- **The compose file is safe to run in production as shipped.** Port 8080 is
+  published on `127.0.0.1` only (put a reverse proxy in front); every service
+  rotates its logs (50 MB × 5); the Trivy server is pinned to the client
+  version in the image (0.76.1, was 0.71.2) and ClamAV to `1.5`; Jō-ei gets a
+  healthcheck and a 45 s stop grace period. A `.dockerignore` keeps `.env`,
+  `.git` and local tooling out of the build context.
+- **ClamAV scans artifacts up to 2 GB.** clamd's defaults rejected every
+  stream over 100 MB — the proxy answered 503 for any larger artifact — and
+  silently skipped archive content beyond 100 MB per file / 400 MB per scan.
+  The compose file raises the limits (2 GB stream and file, 4 GB scan) and
+  enables `AlertExceedsMax`, so content still over a limit is blocked as a
+  detection instead of passed unscanned; the ClamAV scanner timeout in
+  `config.yaml` goes from 30 s to 300 s to match.
 - **Antivirus engines scan in parallel.** Every engine in `malware.scanners[]`
   now scans an artifact at the same time, so a first download waits for the
   slowest engine instead of the sum of all of them, and a concurrency slot
@@ -50,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stopping the proxy no longer hangs on an open console tab.** The live
+  event stream held the graceful shutdown until its 30 s deadline, which then
+  failed with an error — and Compose had already killed the container after
+  10 s, cutting in-flight downloads. Event streams now end as soon as shutdown
+  starts, in-flight requests drain for `server.shutdown_timeout_seconds`, and
+  anything still open after that is closed without failing the shutdown.
 - **A throttled mirror no longer turns a miss into a 502.** When the other
   upstreams answered 404/410 and one answered 429 (or was skipped by the
   circuit breaker after a 429), the client got `502 upstream_unavailable`,

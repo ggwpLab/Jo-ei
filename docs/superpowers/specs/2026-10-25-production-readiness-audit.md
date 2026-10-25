@@ -81,7 +81,7 @@ checksum). Same pattern in the Docker blob store.
 
 ## P1 — fix before release
 
-### 3. Graceful shutdown never completes with an open console tab
+### 3. Graceful shutdown never completes with an open console tab — FIXED (`fix/shutdown-health-compose`)
 `http.Server.Shutdown` does not cancel request contexts; the SSE handler only
 exits on `r.Context().Done()`. Any open console tab holds `Shutdown` until its
 30 s deadline, `run` then returns `context deadline exceeded` (exit 1).
@@ -102,7 +102,7 @@ in the file). Docs are silent.
   setup (compose network CIDR), log a startup warning when requests arrive with
   `X-Forwarded-For` from an untrusted peer.
 
-### 5. Compose file is a dev setup, not a production one
+### 5. Compose file is a dev setup, not a production one — FIXED (`fix/shutdown-health-compose`; resource limits left to the operator, see README "Running in Production")
 - No `healthcheck` for `jo-ei` (distroless has no shell/curl → needs a
   `jo-ei healthcheck` subcommand hitting `/health`).
 - `/health` is liveness only; there is no readiness signal (DB writable,
@@ -116,13 +116,13 @@ in the file). Docs are silent.
   match. `clamav/clamav:stable` and `jo-ei:latest` are floating tags.
 - No resource limits (`mem_limit`/`cpus`) — ClamAV alone needs ~1.5–3 GB.
 
-### 6. No `.dockerignore`
+### 6. No `.dockerignore` — FIXED (`fix/shutdown-health-compose`)
 `docker build .` sends `.env` (JWT secret), `.git`, `.claude/`,
 `.superpowers/` into the build context and the builder layer cache. The final
 image is clean (only the binary and `config.yaml` are copied), but the secret
 sits in local/CI build cache.
 
-### 7. ClamAV size limits are invisible
+### 7. ClamAV size limits are invisible — FIXED (`fix/shutdown-health-compose`)
 - clamd's `StreamMaxLength` (25 MB in clamd's stock config) makes INSTREAM
   answer `size limit exceeded` → `av_scan_error` → **503 fail-closed** for
   every larger artifact or layer. Needs verifying against the
