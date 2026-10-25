@@ -4,25 +4,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/metrics"
-	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/ggwpLab/Jo-ei/internal/settings"
-	"github.com/ggwpLab/Jo-ei/internal/storage"
-	"github.com/ggwpLab/Jo-ei/internal/supplychain"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
 )
 
@@ -84,57 +77,10 @@ func run(ctx context.Context, cfgPath string) error {
 		mx = metrics.New(metrics.BuildInfo{Version: version, Commit: commit}, logger)
 	}
 
-	sdb, err := storage.Open(cfg.Database.Path)
-	if err != nil {
-		return fmt.Errorf("opening database at %q: %w", cfg.Database.Path, err)
-	}
-	a.onClose(sdb.Close)
-
-	settingsStore, err := settings.New(sdb)
+	st, err := openState(a, cfg, mx, logger, serverLog)
 	if err != nil {
 		return err
 	}
-
-	if err := applyStoredRegistries(cfg, settingsStore); err != nil {
-		return err
-	}
-
-	artifactCache, err := cache.New(cfg.Cache)
-	if err != nil {
-		return err
-	}
-	a.onClose(artifactCache.Close)
-	mx.RegisterCache(artifactCache, int64(cfg.Cache.Local.MaxSizeGB)<<30)
-
-	profile, ok := cfg.Policy.Profiles[cfg.Policy.ActiveProfile]
-	if !ok {
-		return fmt.Errorf("active_profile %q not found in policy.profiles", cfg.Policy.ActiveProfile)
-	}
-
-	var fileAllow []string
-	if cfg.SupplyChain.AllowlistPath != "" {
-		allowlist, err := supplychain.LoadAllowlist(cfg.SupplyChain.AllowlistPath)
-		if err != nil {
-			return err
-		}
-		fileAllow = allowlist.Entries()
-	}
-
-	// Runtime policy: engine + supply-chain filter behind an atomic swap so
-	// the console can apply edits without restart. Edits now persist to the
-	// shared SQLite database so they survive a restart.
-	policyRuntime, err := policy.NewRuntimeWithStore(cfg.SupplyChain, cfg.CVE, profile, fileAllow, policySettingsStore{s: settingsStore})
-	if err != nil {
-		return err
-	}
-
-	store, err := buildTelemetryStore(sdb, cfg, logger)
-	if err != nil {
-		return err
-	}
-	serverLog.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
-	a.onClose(store.Close)
-	broadcaster := telemetry.NewBroadcaster()
 
 	up, err := buildUpstream(cfg, mx, serverLog)
 	if err != nil {
@@ -142,10 +88,10 @@ func run(ctx context.Context, cfgPath string) error {
 	}
 
 	shared := sharedDeps{
-		filter:         policyRuntime,
-		cache:          cache.AsArtifactCache(artifactCache),
+		filter:         st.policy,
+		cache:          cache.AsArtifactCache(st.cache),
 		logger:         logger,
-		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: store, Broadcaster: broadcaster}),
+		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: st.store, Broadcaster: st.broadcaster}),
 		adapterClient:  up.adapter,
 		downloadClient: up.download,
 		throttles:      up.breaker,
@@ -162,28 +108,28 @@ func run(ctx context.Context, cfgPath string) error {
 			Msg("lazy cache re-validation configured")
 	}
 
-	sc, err := buildScanners(a, cfg, profile, mx, serverLog)
+	sc, err := buildScanners(a, cfg, st.profile, mx, serverLog)
 	if err != nil {
 		return err
 	}
 	shared.cveScanner = sc.cve
 	shared.avScanner = sc.av
 	if cfg.CVE.Enabled {
-		shared.policy = policyRuntime
+		shared.policy = st.policy
 	}
 
-	routes, err := buildProxyRoutes(cfg, shared, sc, up, policyRuntime, artifactCache, mx)
+	routes, err := buildProxyRoutes(cfg, shared, sc, up, st.policy, st.cache, mx)
 	if err != nil {
 		return err
 	}
 	root, err := buildRootHandler(consoleDeps{
 		cfg:         cfg,
-		db:          sdb,
-		settings:    settingsStore,
-		store:       store,
-		broadcaster: broadcaster,
-		policy:      policyRuntime,
-		cache:       artifactCache,
+		db:          st.db,
+		settings:    st.settings,
+		store:       st.store,
+		broadcaster: st.broadcaster,
+		policy:      st.policy,
+		cache:       st.cache,
 		health:      sc.health,
 		logger:      logger,
 		serverLog:   serverLog,
@@ -197,40 +143,10 @@ func run(ctx context.Context, cfgPath string) error {
 		metricsAddr = cfg.Metrics.Listen + cfg.Metrics.Path
 	}
 
-	srv := &http.Server{
-		Addr:         cfg.Server.Listen,
-		Handler:      logx.Middleware(mx.WrapHandler(root, metrics.NewRouteFunc(routes.prefixes()))),
-		ReadTimeout:  120 * time.Second,
-		WriteTimeout: 120 * time.Second,
-	}
-
-	// Bind every listener before serving any of them, so a port clash (notably
-	// on metrics.listen) stops startup before the proxy accepts traffic.
-	var servers []boundServer
-	defer func() {
-		for _, s := range servers {
-			_ = s.ln.Close() // no-op once the server has shut down
-		}
-	}()
-	if mx != nil {
-		mmux := http.NewServeMux()
-		mmux.Handle(cfg.Metrics.Path, mx.Handler())
-		metricsSrv := &http.Server{
-			Handler:           mmux,
-			ReadHeaderTimeout: 10 * time.Second,
-			WriteTimeout:      30 * time.Second,
-		}
-		ln, err := net.Listen("tcp", cfg.Metrics.Listen)
-		if err != nil {
-			return fmt.Errorf("metrics.listen %s: %w", cfg.Metrics.Listen, err)
-		}
-		servers = append(servers, boundServer{metricsSrv, ln})
-	}
-	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	servers, err := bindServers(a, cfg, logx.Middleware(mx.WrapHandler(root, metrics.NewRouteFunc(routes.prefixes()))), mx)
 	if err != nil {
-		return fmt.Errorf("server.listen %s: %w", cfg.Server.Listen, err)
+		return err
 	}
-	servers = append(servers, boundServer{srv, ln})
 
 	serverLog.Info().
 		Str("listen", cfg.Server.Listen).
@@ -244,14 +160,4 @@ func run(ctx context.Context, cfgPath string) error {
 		Msg("Jōei starting")
 
 	return serveAll(ctx, servers...)
-}
-
-// buildTelemetryStore initialises the SQLite-backed telemetry store on the
-// shared database. Telemetry is SQLite-only: any schema error aborts startup.
-func buildTelemetryStore(sdb *storage.DB, cfg *config.Config, logger zerolog.Logger) (*telemetry.Store, error) {
-	store, err := telemetry.Open(sdb, cfg.Database.EventRetentionDays, cfg.Database.DailyRetentionDays, logger)
-	if err != nil {
-		return nil, fmt.Errorf("initialising telemetry store: %w", err)
-	}
-	return store, nil
 }
