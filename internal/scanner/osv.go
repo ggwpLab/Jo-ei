@@ -74,15 +74,30 @@ type OSVScanner struct {
 	closeOnce sync.Once
 }
 
+// OSVOption configures an OSVScanner.
+type OSVOption func(*OSVScanner)
+
+// WithOSVHTTPClient sets the client OSV lookups use. The proxy passes one on
+// its shared upstream transport, so lookups honour tls.ca_files (a
+// TLS-inspecting corporate proxy would otherwise fail every lookup, and the
+// CVE gate with it) and count against the per-host rate limits.
+func WithOSVHTTPClient(c *http.Client) OSVOption {
+	return func(s *OSVScanner) { s.client = c }
+}
+
 // NewOSVScanner creates an OSVScanner with the given base URL and cache TTL.
 // baseURL should be "https://api.osv.dev" (or a mock server URL in tests).
-func NewOSVScanner(baseURL string, ttl time.Duration) *OSVScanner {
+// Without WithOSVHTTPClient it uses a private client with a 15 s timeout.
+func NewOSVScanner(baseURL string, ttl time.Duration, opts ...OSVOption) *OSVScanner {
 	s := &OSVScanner{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: 15 * time.Second},
 		ttl:     ttl,
 		cache:   make(map[string]*cveEntry),
 		stop:    make(chan struct{}),
+	}
+	for _, o := range opts {
+		o(s)
 	}
 	s.wg.Add(1)
 	go s.janitor()

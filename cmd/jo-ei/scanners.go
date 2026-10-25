@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -32,10 +33,14 @@ type scanners struct {
 	engineCount int
 }
 
+// osvTimeout bounds one OSV lookup, as the scanner's own default client does.
+const osvTimeout = 15 * time.Second
+
 // buildScanners builds the CVE, malware and image scanners and starts the
-// health monitor over them. Closers for the OSV scanner and the monitor are
-// registered on a.
-func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx *metrics.Metrics, serverLog zerolog.Logger) (scanners, error) {
+// health monitor over them. upstream is the shared upstream transport, which
+// OSV lookups use so they honour tls.ca_files and the per-host limits.
+// Closers for the OSV scanner and the monitor are registered on a.
+func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx *metrics.Metrics, upstream http.RoundTripper, serverLog zerolog.Logger) (scanners, error) {
 	var sc scanners
 
 	// CVE scanner (optional).
@@ -49,7 +54,8 @@ func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx 
 		if ttl == 0 {
 			ttl = 24 * time.Hour
 		}
-		osvScanner = scanner.NewOSVScanner(baseURL, ttl)
+		osvScanner = scanner.NewOSVScanner(baseURL, ttl,
+			scanner.WithOSVHTTPClient(&http.Client{Timeout: osvTimeout, Transport: upstream}))
 		a.onClose(osvScanner.Close)
 		sc.cve = mx.WrapCVEScanner("osv", osvScanner)
 	}
