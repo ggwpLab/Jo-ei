@@ -73,8 +73,9 @@ docker-compose logs jo-ei | grep "initial admin"
 
 **Prebuilt image or source build.** By default Compose pulls
 `ghcr.io/ggwplab/jo-ei:latest`. For a reproducible deployment, pin a release
-tag in `docker-compose.yaml` (e.g. `ghcr.io/ggwplab/jo-ei:0.5.0`) and check
-out the matching tag (`git checkout v0.5.0`) so `config.yaml` fits the image.
+tag in `docker-compose.yaml` (`ghcr.io/ggwplab/jo-ei:<version>`) and check
+out the matching tag (`git checkout v<version>`) so `config.yaml` fits the
+image.
 To run your checkout instead — unreleased changes or local modifications —
 build it from source:
 
@@ -323,8 +324,7 @@ last 15 minutes and refresh tokens 7 days by default
 (`console.auth.access_ttl_minutes` / `console.auth.refresh_ttl_hours`).
 
 **Scripts and CI** can't hold cookies the way a browser does, so they log in
-and send the token straight back as a bearer credential — `curl -u` no longer
-works:
+and send the token straight back as a bearer credential:
 
 ```bash
 TOKEN=$(curl -sX POST http://localhost:8080/api/auth/login \
@@ -517,8 +517,8 @@ reverse proxy:
   compose `stop_grace_period` (45 s) leaves room for it.
 - **ClamAV limits** are raised (2 GB per stream/file, 4 GB per scan, 200,000
   files, 32 nesting levels, 280 s per scan) so ordinary images and packages
-  are scanned in full; with clamd's defaults every artifact over 100 MB
-  failed with 503 and large archives were only partly scanned. Anything still
+  are scanned in full; clamd's own defaults reject streams over 100 MB and
+  stop scanning large archives part-way. Anything still
   over a limit is blocked as `scan_incomplete` (not malware, not cached).
   Large scans need time (`timeout_seconds: 300` in `config.yaml`), memory,
   and disk: clamd spools each stream to its container's `/tmp`, up to 2 GB

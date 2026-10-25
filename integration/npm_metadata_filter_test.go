@@ -532,17 +532,13 @@ func TestIntegration_NPMMetadataFilter_OverCapGzipFallsBackToTheGate(t *testing.
 	assert.Equal(t, http.StatusLocked, tarball.StatusCode)
 }
 
-// B2 regression: a Content-Encoding this proxy does not decode must never be
-// read as if it were plain JSON. Before the fix, readMetadataDocument decoded
-// only literal "gzip" and left everything else — deflate, br, zstd, a
-// comma-list — on the raw (still-compressed) reader; FilterVersions then
-// failed to unmarshal those bytes, the "unparseable document" fallback logged
-// a warning and served fetch.doc unchanged, and writeMetadataDocument stripped
-// the very Content-Encoding that described those bytes and set a
-// Content-Length for them — corrupting the body while labeling it plain JSON.
-// The fix decides from the header before consuming anything and routes an
-// unsupported coding to the same verbatim relay path streamOversizedMetadata
-// already provides for "cannot filter", so this asserts the coding survives
+// A Content-Encoding this proxy does not decode (deflate, br, zstd, a
+// comma-list) must never be read as if it were plain JSON: the proxy decides
+// from the header before consuming anything and relays such a document
+// verbatim through the same path streamOversizedMetadata uses for "cannot
+// filter". Read as JSON, the still-compressed bytes would fail to parse, be
+// served with their Content-Encoding stripped and a fresh Content-Length —
+// a corrupt body labelled plain JSON. This asserts the coding survives
 // untouched and the document underneath is provably unfiltered.
 func TestIntegration_NPMMetadataFilter_UnsupportedEncodingFallsBackToTheGate(t *testing.T) {
 	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 1, Deflate: true})

@@ -84,7 +84,7 @@ func TestIndex_GzipUpstreamIsRewritten(t *testing.T) {
 	assert.Contains(t, body, `href="../../packages/`)
 }
 
-// pip caches simple pages. A copy cached before the upgrade still carries
+// pip caches simple pages. A copy fetched straight from upstream carries
 // upstream's validators; forwarding them could earn a 304 that keeps the client
 // on the unrewritten page — and its bypass — indefinitely.
 func TestIndex_ClientValidatorsNotForwarded(t *testing.T) {

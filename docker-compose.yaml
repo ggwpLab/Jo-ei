@@ -8,7 +8,7 @@ x-logging: &logging
 
 services:
   jo-ei:
-    # Released image from GHCR by default. Pin a version (e.g. :0.5.0) for
+    # Released image from GHCR by default. Pin a version (:<version>) for
     # reproducible deployments. `docker-compose up --build` builds this
     # checkout from source instead and tags the result with the same name.
     image: ghcr.io/ggwplab/jo-ei:latest
@@ -27,10 +27,8 @@ services:
       - cache-data:/var/cache/jo-ei
       - jo-ei-db:/var/lib/jo-ei
     # Every JOEI_* variable in .env is passed to the container, so adding one
-    # there is enough — no matching entry is needed here. Listing them
-    # individually used to mean a variable set in .env silently never reached
-    # the proxy. See .env.example for the ones worth setting; secrets stay in
-    # .env, which is gitignored.
+    # there is enough — no matching entry is needed here. See .env.example for
+    # the ones worth setting; secrets stay in .env, which is gitignored.
     env_file:
       - path: .env
         required: false

@@ -199,7 +199,7 @@ func TestGetRegistries_DefensiveCopy(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Validation-rule tests (spec-mandated, previously missing).
+// Validation-rule tests.
 // ---------------------------------------------------------------------------
 
 func TestPutRegistries_DuplicateEco(t *testing.T) {

@@ -1,7 +1,7 @@
 // Package console serves the admin console HTTP API over live proxy state:
 // telemetry from internal/telemetry, the runtime policy, registry config and
-// cache stats. Authentication is enforced by auth.Middleware in cmd/jo-ei,
-// which mounts this handler behind HTTP Basic auth at /api/.
+// cache stats. Authentication is enforced by the session middleware
+// (auth.Sessions.Middleware) that cmd/jo-ei mounts in front of it at /api/.
 package console
 
 import (

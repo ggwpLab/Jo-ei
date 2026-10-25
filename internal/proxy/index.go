@@ -27,9 +27,10 @@ const maxLoggedDrops = 5
 func (h *Handler) proxyIndex(w http.ResponseWriter, r *http.Request, rw gate.IndexRewriter) {
 	log := logx.Logger(r.Context(), h.metaLog).With().Str("path", r.URL.Path).Logger()
 
-	// The client's validators belong to whatever copy it cached — possibly an
-	// unrewritten one from before this proxy rewrote indexes. Upstream must
-	// never answer 304 for that copy, so the fetch is always unconditional.
+	// The client's validators belong to whatever copy it cached, which may be
+	// upstream's unrewritten page (fetched directly, or through another
+	// proxy). Upstream must never answer 304 for that copy, so the fetch is
+	// always unconditional.
 	// gzip is the only coding readMetadataDocument decodes, so ask for exactly
 	// that rather than relaying the client's own Accept-Encoding.
 	outbound := r.Clone(r.Context())

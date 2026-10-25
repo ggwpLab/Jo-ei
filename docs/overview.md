@@ -74,11 +74,11 @@ The rule is simple but effective: most poisoned releases are spotted and
 removed within the first few hours. Even a one-day delay cuts off a whole class of
 attacks without any signatures.
 
-Since v0.5.0, npm gets **metadata filtering**. npm resolves a version range
-(`^1.0.0`) before it requests a tarball, so a blocked fresh version used to
-break the whole install. The proxy now strips disallowed versions from the
-metadata document itself, and the range resolves to the newest version the
-policy allows. The install goes through. Rewritten documents carry their own
+npm gets **metadata filtering**. npm resolves a version range (`^1.0.0`)
+before it requests a tarball, so a blocked fresh version would break the whole
+install. The proxy strips disallowed versions from the metadata document
+itself, and the range resolves to the newest version the policy allows. The
+install goes through. Rewritten documents carry their own
 `ETag` so HTTP caching keeps working correctly.
 
 ### 2. Known vulnerabilities (浄, "purification")
@@ -255,25 +255,10 @@ pip install requests --index-url http://localhost:8080/pypi/simple/ --trusted-ho
 ```
 
 ClamAV and Trivy run as sidecars in the compose file. For a reproducible
-deployment, pin a release tag of the image (for example `:0.5.0`). To run a
+deployment, pin a release tag of the image (`:<version>`). To run a
 local checkout instead, build it from source with `docker-compose up -d --build`.
 Prebuilt binaries for Linux, macOS and Windows (amd64/arm64) are published on
 the releases page.
-
-## Release history
-
-| Version | Date | Highlights |
-|---|---|---|
-| 0.1.0 | 2026-07-04 | First public release: PyPI, npm, Maven, RubyGems, Docker; four gates; console; persistent telemetry |
-| 0.2.0 | 2026-07-19 | Lazy TTL-based cache re-checks instead of a background sweep; on-demand cache cleanup |
-| 0.3.0 | 2026-07-20 | Go modules; offline by-digest Docker pulls; singleflight for re-checks |
-| 0.4.0 | 2026-09-06 | JWT authentication instead of HTTP Basic; trusted CAs for upstreams; lower console CPU usage |
-| 0.5.0 | 2026-09-28 | npm metadata filtering: blocked versions are hidden and the install goes through |
-
-The project went from its first commit (May 30, 2026) to five releases in about
-four months. The Go code, tests included, runs to around 24 thousand lines.
-Every feature comes with a design doc and an implementation plan in
-`docs/superpowers/`.
 
 ## Who it's for
 

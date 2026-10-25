@@ -845,7 +845,7 @@ func TestLoad_EnvOverridesExistingProfileField(t *testing.T) {
 // Compose .env templates leave variables empty; an empty value sets nothing
 // and is not reported, as viper itself ignores it.
 func TestLoad_EmptyUnknownEnvIgnored(t *testing.T) {
-	t.Setenv("JOEI_CONSOLE_AUTH_USERS", "")
+	t.Setenv("JOEI_NO_SUCH_SETTING", "")
 	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
 	require.NoError(t, err)
 	assert.Empty(t, cfg.UnknownEnv)

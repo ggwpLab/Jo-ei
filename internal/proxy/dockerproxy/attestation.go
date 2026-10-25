@@ -49,9 +49,8 @@ func newAttestationBlobs(max int) *attestationBlobs {
 }
 
 // remember records the config and in-toto layer digests of an attestation
-// manifest served for repo. Anything isAttestationManifest rejects — including
-// a manifest cached as an attestation by an older, looser classification — is
-// ignored.
+// manifest served for repo. Anything isAttestationManifest rejects is ignored,
+// whatever verdict the cache holds for it.
 func (a *attestationBlobs) remember(repo string, manifestBody []byte) {
 	if !isAttestationManifest(manifestBody) {
 		return

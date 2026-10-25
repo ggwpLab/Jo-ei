@@ -22,8 +22,8 @@ import (
 )
 
 func TestBuildTelemetryStore_FailsOnUnopenablePath(t *testing.T) {
-	// Parent of the db path is a regular file, so MkdirAll fails → fail fast.
-	// storage.Open is now the entry point that rejects the bad path.
+	// Parent of the db path is a regular file, so storage.Open's MkdirAll
+	// fails and startup fails fast.
 	f := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(f, []byte("x"), 0o644))
 	badPath := filepath.Join(f, "sub", "jo-ei.db")
