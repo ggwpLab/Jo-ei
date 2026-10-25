@@ -277,3 +277,16 @@ func TestRunProxy_AVProbeStillRegistered(t *testing.T) {
 
 	require.NoError(t, stop())
 }
+
+// The server refuses to start on a JOEI_* variable that sets nothing, so a
+// typo cannot silently leave a setting at its default.
+func TestRunProxy_FailsOnUnknownEnv(t *testing.T) {
+	t.Setenv("JOEI_CACHE_LOCAL_MAX_SIZE_G", "1")
+	cfgPath := writeTestConfig(t, freeAddr(t), "")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := run(ctx, cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JOEI_CACHE_LOCAL_MAX_SIZE_G")
+}

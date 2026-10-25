@@ -439,8 +439,12 @@ registries:
 ## Configuration
 
 The proxy reads `config.yaml` (default path, overridable with `--config`).
-All values can be overridden with environment variables using the prefix `JOEI_`
-and `_` as separator (e.g. `JOEI_SUPPLY_CHAIN_MODE=dry_run`).
+Every scalar and list value can be set with an environment variable using the
+prefix `JOEI_` and `_` as separator (e.g. `JOEI_SUPPLY_CHAIN_MODE=dry_run`),
+whether or not the file contains the key; lists of objects and maps
+(`malware.scanners`, `policy.profiles`) are defined in the file. A misspelt
+`JOEI_*` variable stops the server with an error naming it — see
+[docs/configuration.md](docs/configuration.md#loading--environment-overrides).
 
 | Key | Default | Description |
 |-----|---------|-------------|

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -21,10 +20,13 @@ var directEnv = map[string]bool{
 	"JOEI_CONSOLE_JWT_SECRET": true,
 }
 
-// kubernetesServiceLinkRe matches the variables Kubernetes injects for a
-// Service named "joei" (JOEI_SERVICE_HOST, JOEI_PORT_8080_TCP_ADDR, ...).
-// They are not configuration and must not stop the pod from starting.
-var kubernetesServiceLinkRe = regexp.MustCompile(`^JOEI_(SERVICE_HOST|SERVICE_PORT(_.+)?|PORT(_.+)?)$`)
+// kubernetesServiceLinkRe matches the service-link variables Kubernetes
+// injects for every Service in the namespace — <SVC>_SERVICE_HOST,
+// <SVC>_SERVICE_PORT[_<NAME>], <SVC>_PORT and <SVC>_PORT_<n>_<PROTO>[_ADDR|
+// _PORT|_PROTO] — for Services named "joei" or "joei-…" (joei-metrics, a
+// release "joei" of chart "jo-ei", subcharts). They are not configuration.
+// Checked only after the schema, so a real key is never mistaken for one.
+var kubernetesServiceLinkRe = regexp.MustCompile(`^JOEI_(?:[A-Z0-9_]+_)?(?:SERVICE_HOST|SERVICE_PORT(?:_[A-Z0-9_]+)?|PORT(?:_[0-9]+_(?:TCP|UDP|SCTP)(?:_(?:ADDR|PORT|PROTO))?)?)$`)
 
 // envSchema is the set of configuration keys an environment variable can set,
 // derived from the Config struct so it never drifts from it.
@@ -76,39 +78,46 @@ func (s envSchema) walk(t reflect.Type, prefix string) {
 	}
 }
 
-// bindEnv binds every settable key to its variable, so a variable works
-// whether or not the file mentions the key (viper's AutomaticEnv alone only
-// overrides keys it already knows), and rejects JOEI_* variables that set
-// nothing: a misspelt name, or one aimed at a list of objects or a map, would
-// otherwise be ignored without a word.
-func bindEnv(v *viper.Viper, environ []string) error {
-	s := buildEnvSchema()
+// bind binds every settable key to its variable, so a variable works whether
+// or not the file mentions the key (viper's AutomaticEnv alone only overrides
+// keys it already knows).
+func (s envSchema) bind(v *viper.Viper) error {
 	for name, key := range s.keys {
 		if err := v.BindEnv(key, name); err != nil {
 			return fmt.Errorf("binding %s: %w", name, err)
 		}
 	}
+	return nil
+}
 
+// unknown lists the non-empty JOEI_* variables in environ that set nothing:
+// not a schema key, not a key the loaded file defines (fileKeys, so a field of
+// a defined policy profile can still be overridden), not read directly by the
+// code, not a Kubernetes service link. An empty value sets nothing either, but
+// viper ignores it too, so it is not reported — compose .env templates leave
+// variables empty.
+func (s envSchema) unknown(fileKeys []string, environ []string) []string {
+	inFile := make(map[string]bool, len(fileKeys))
+	for _, k := range fileKeys {
+		inFile[envName(k)] = true
+	}
 	var problems []string
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(name, envPrefix) {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, envPrefix) || value == "" {
 			continue
 		}
-		if _, ok := s.keys[name]; ok || directEnv[name] || kubernetesServiceLinkRe.MatchString(name) {
+		if _, ok := s.keys[name]; ok || inFile[name] || directEnv[name] || kubernetesServiceLinkRe.MatchString(name) {
 			continue
 		}
 		if key, ok := fileOnlyKey(s, name); ok {
-			problems = append(problems, fmt.Sprintf("%s: %s is a list of objects or a map and can only be set in the config file", name, key))
+			problems = append(problems, fmt.Sprintf("%s: %s is a list of objects or a map; set it in the config file", name, key))
 			continue
 		}
 		problems = append(problems, fmt.Sprintf("%s: no such setting", name))
 	}
-	if len(problems) == 0 {
-		return nil
-	}
 	sort.Strings(problems)
-	return errors.New("environment: " + strings.Join(problems, "; "))
+	return problems
 }
 
 // fileOnlyKey reports the list/map key a variable name falls under.

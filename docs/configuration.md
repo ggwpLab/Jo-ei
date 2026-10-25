@@ -22,12 +22,19 @@ space-) separated, e.g.
 Lists of objects and maps — `malware.scanners` and `policy.profiles` — can
 only be set in the file.
 
-A `JOEI_*` variable that sets nothing stops startup with an error naming it —
-a misspelt name, or one aimed at `malware.scanners` / `policy.profiles` —
-instead of being silently ignored. Two kinds of `JOEI_*` variables are not
-configuration keys and are accepted: `JOEI_CONSOLE_JWT_SECRET` (below), and
-the service links Kubernetes injects for a Service named `joei`
-(`JOEI_SERVICE_HOST`, `JOEI_SERVICE_PORT…`, `JOEI_PORT…`).
+A field of a profile the file defines can still be overridden
+(`JOEI_POLICY_PROFILES_PRODUCTION_CVE_BLOCK=false` when the file has a
+`production` profile).
+
+A non-empty `JOEI_*` variable that sets nothing — a misspelt name, or one
+aimed at `malware.scanners` / a profile the file does not define — makes the
+server refuse to start with an error naming it, instead of being silently
+ignored; the CLI tools (`healthcheck`, `backup`, `reset-admin-password`) only
+print a warning, so recovery still works. Empty variables are ignored. Not
+configuration, and accepted: `JOEI_CONSOLE_JWT_SECRET` (below), and the
+service links Kubernetes injects for Services named `joei` or `joei-…`
+(`JOEI_SERVICE_HOST`, `JOEI_METRICS_PORT_9464_TCP`, …) — or switch them off
+with `enableServiceLinks: false`.
 
 The config file is still required (`--config`): built-in defaults do not yet
 cover everything the shipped `config.yaml` sets, such as registry upstreams
@@ -57,7 +64,7 @@ process exits non-zero.
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
-| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. As with every key, the `JOEI_SERVER_TRUSTED_PROXIES` env override only applies when the key is present in `config.yaml` (an empty `trusted_proxies: []` is enough). |
+| `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker

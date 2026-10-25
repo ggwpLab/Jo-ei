@@ -11,6 +11,12 @@ import (
 )
 
 type Config struct {
+	// UnknownEnv lists JOEI_* environment variables that set nothing (a
+	// misspelt name, or one aimed at a list of objects or a map key the file
+	// does not define), one problem per entry. The server refuses to start on
+	// them; CLI tools only warn, so a stray variable cannot lock out recovery.
+	UnknownEnv []string `mapstructure:"-"`
+
 	Server      ServerConfig      `mapstructure:"server"`
 	TLS         TLSConfig         `mapstructure:"tls"`
 	Registries  RegistriesConfig  `mapstructure:"registries"`
@@ -376,8 +382,9 @@ type LoggingConfig struct {
 // e.g. JOEI_LOGGING_LEVEL sets logging.level and JOEI_CACHE_LOCAL_MAX_SIZE_GB
 // sets cache.local.max_size_gb — for every scalar and string-list key, whether
 // or not the file contains it (lists are comma-separated). Lists of objects
-// and maps (malware.scanners, policy.profiles) can only be set in the file.
-// A JOEI_* variable that sets nothing fails the load.
+// and maps (malware.scanners, policy.profiles) can only be set in the file,
+// though a field of a map entry the file defines can still be overridden.
+// A non-empty JOEI_* variable that sets nothing is listed in UnknownEnv.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
@@ -392,7 +399,8 @@ func Load(path string) (*Config, error) {
 	v.SetEnvPrefix("JOEI")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
-	if err := bindEnv(v, environ()); err != nil {
+	schema := buildEnvSchema()
+	if err := schema.bind(v); err != nil {
 		return nil, err
 	}
 
@@ -404,6 +412,7 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
+	cfg.UnknownEnv = schema.unknown(v.AllKeys(), environ())
 	cfg.Server.TrustedProxies = splitList(cfg.Server.TrustedProxies)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)

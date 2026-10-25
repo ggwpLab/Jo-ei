@@ -29,6 +29,7 @@ func newBackupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			warnUnknownEnv(cmd, cfg)
 			if err := backupDatabase(cfg.Database.Path, output); err != nil {
 				return err
 			}

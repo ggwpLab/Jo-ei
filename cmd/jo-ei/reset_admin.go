@@ -76,6 +76,10 @@ func withExistingUserStore(fn func(*users.Store) error) error {
 	if err != nil {
 		return err
 	}
+	// Warn, never fail: this is the recovery tool.
+	for _, p := range cfg.UnknownEnv {
+		_, _ = fmt.Fprintln(os.Stderr, "warning: environment:", p)
+	}
 	if _, err := os.Stat(cfg.Database.Path); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("database %s does not exist: check --config (currently %q) points at the server's config file", cfg.Database.Path, cfgFile)
 	} else if err != nil {
