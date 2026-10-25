@@ -45,9 +45,9 @@ func (f fakeImage) Health() health.Sample {
 	return health.Sample{OK: true, HasData: true, Latency: 7 * time.Millisecond}
 }
 
-func scanCount(t *testing.T, m *Metrics, scanner, result string) float64 {
+func scanCount(t *testing.T, m *Metrics, scanner, engine, result string) float64 {
 	t.Helper()
-	return testutil.ToFloat64(m.scanner.scans.WithLabelValues(scanner, result))
+	return testutil.ToFloat64(m.scanner.scans.WithLabelValues(scanner, engine, result))
 }
 
 func TestWrapAVScanner_Results(t *testing.T) {
@@ -59,32 +59,43 @@ func TestWrapAVScanner_Results(t *testing.T) {
 		"error":    {err: errors.New("x")},
 	}
 	for _, f := range fakes {
-		_, _ = m.WrapAVScanner("clamav", f).Scan(context.Background(), "f")
+		_, _ = m.WrapAVScanner("clamav", "clamav", f).Scan(context.Background(), "f")
 	}
 	for result := range fakes {
-		assert.Equal(t, 1.0, scanCount(t, m, "clamav", result), result)
+		assert.Equal(t, 1.0, scanCount(t, m, "clamav", "clamav", result), result)
 	}
-	assert.Equal(t, 0.0, testutil.ToFloat64(m.scanner.inFlight.WithLabelValues("clamav")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.scanner.inFlight.WithLabelValues("clamav", "clamav")))
 	assert.Equal(t, uint64(4), histCount(t, m, "jo_ei_scan_duration_seconds"))
 }
 
 func TestWrapAVScanner_NilResultIsClean(t *testing.T) {
 	m := New(BuildInfo{}, zerolog.Nop())
-	_, err := m.WrapAVScanner("icap", fakeAV{}).Scan(context.Background(), "f")
+	_, err := m.WrapAVScanner("icap", "icap", fakeAV{}).Scan(context.Background(), "f")
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, scanCount(t, m, "icap", "clean"))
+	assert.Equal(t, 1.0, scanCount(t, m, "icap", "icap", "clean"))
 }
 
 func TestWrapAVScanner_UnknownEngineIsOther(t *testing.T) {
 	m := New(BuildInfo{}, zerolog.Nop())
-	_, _ = m.WrapAVScanner("mystery", fakeAV{res: &gate.AVResult{Clean: true}}).Scan(context.Background(), "f")
-	assert.Equal(t, 1.0, scanCount(t, m, "other", "clean"))
+	_, _ = m.WrapAVScanner("mystery", "mystery", fakeAV{res: &gate.AVResult{Clean: true}}).Scan(context.Background(), "f")
+	assert.Equal(t, 1.0, scanCount(t, m, "mystery", "other", "clean"))
+}
+
+// Two engines of one type stay apart: the scanner label is the configured
+// name, the engine label the type.
+func TestWrapAVScanner_LabelsByName(t *testing.T) {
+	m := New(BuildInfo{}, zerolog.Nop())
+	clean := fakeAV{res: &gate.AVResult{Clean: true}}
+	_, _ = m.WrapAVScanner("kaspersky", "icap", clean).Scan(context.Background(), "f")
+	_, _ = m.WrapAVScanner("drweb", "icap", clean).Scan(context.Background(), "f")
+	assert.Equal(t, 1.0, scanCount(t, m, "kaspersky", "icap", "clean"))
+	assert.Equal(t, 1.0, scanCount(t, m, "drweb", "icap", "clean"))
 }
 
 func TestWrapCVEScanner_Detected(t *testing.T) {
 	m := New(BuildInfo{}, zerolog.Nop())
 	_, _ = m.WrapCVEScanner("osv", fakeCVE{res: &gate.ScanResult{Clean: false}}).Scan(context.Background(), &gate.PackageRef{})
-	assert.Equal(t, 1.0, scanCount(t, m, "osv", "detected"))
+	assert.Equal(t, 1.0, scanCount(t, m, "osv", "osv", "detected"))
 }
 
 func TestWrapImageScanner_ForwardsHealth(t *testing.T) {
@@ -94,7 +105,7 @@ func TestWrapImageScanner_ForwardsHealth(t *testing.T) {
 	assert.Equal(t, f.Health(), w.Health())
 	_, err := w.ScanImage(context.Background(), "alpine")
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, scanCount(t, m, "trivy", "detected"))
+	assert.Equal(t, 1.0, scanCount(t, m, "trivy", "trivy", "detected"))
 }
 
 func TestScannerUpCollector(t *testing.T) {
@@ -111,8 +122,8 @@ func TestScannerUpCollector(t *testing.T) {
 	m.RegisterScannerHealth(func() []health.ScannerHealth { return nil }, nil)
 	expected := `# HELP jo_ei_scanner_up 1 when the scanner's last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled.
 # TYPE jo_ei_scanner_up gauge
-jo_ei_scanner_up{scanner="clamav"} 0
-jo_ei_scanner_up{scanner="osv"} 1
+jo_ei_scanner_up{engine="clamav",scanner="clamav"} 0
+jo_ei_scanner_up{engine="osv",scanner="osv"} 1
 `
 	require.NoError(t, testutil.GatherAndCompare(m.Registry, strings.NewReader(expected), "jo_ei_scanner_up"))
 }
@@ -128,7 +139,7 @@ func TestScanQueueMetrics(t *testing.T) {
 func TestScannerNilMetrics(t *testing.T) {
 	var m *Metrics
 	av := fakeAV{}
-	assert.Equal(t, av, m.WrapAVScanner("clamav", av))
+	assert.Equal(t, av, m.WrapAVScanner("clamav", "clamav", av))
 	cve := fakeCVE{}
 	assert.Equal(t, cve, m.WrapCVEScanner("osv", cve))
 	img := fakeImage{}
@@ -138,7 +149,7 @@ func TestScannerNilMetrics(t *testing.T) {
 	m.RegisterScannerHealth(nil, nil)
 }
 
-func TestScannerUpCollector_NamedEnginesLabelByType(t *testing.T) {
+func TestScannerUpCollector_NamedEnginesLabelByName(t *testing.T) {
 	m := New(BuildInfo{}, zerolog.Nop())
 	m.RegisterScannerHealth(func() []health.ScannerHealth {
 		return []health.ScannerHealth{
@@ -148,8 +159,8 @@ func TestScannerUpCollector_NamedEnginesLabelByType(t *testing.T) {
 	}, map[string]string{"kaspersky": "icap", "clamav-eu": "clamav"})
 	expected := `# HELP jo_ei_scanner_up 1 when the scanner's last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled.
 # TYPE jo_ei_scanner_up gauge
-jo_ei_scanner_up{scanner="clamav"} 0
-jo_ei_scanner_up{scanner="icap"} 1
+jo_ei_scanner_up{engine="clamav",scanner="clamav-eu"} 0
+jo_ei_scanner_up{engine="icap",scanner="kaspersky"} 1
 `
 	require.NoError(t, testutil.GatherAndCompare(m.Registry, strings.NewReader(expected), "jo_ei_scanner_up"))
 }

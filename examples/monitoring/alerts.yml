@@ -92,7 +92,7 @@ groups:
 
       - alert: JoEiScanQueueSaturated
         expr: |
-          sum by (instance) (jo_ei_scans_in_flight{scanner=~"clamav|icap"})
+          max by (instance) (jo_ei_scans_in_flight{engine=~"clamav|icap"})
             >= on (instance)
           jo_ei_scan_concurrency_limit
         for: 10m

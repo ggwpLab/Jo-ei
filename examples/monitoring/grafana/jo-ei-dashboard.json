@@ -1026,7 +1026,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance) (jo_ei_scans_in_flight{job=~\"$job\", instance=~\"$instance\", scanner=~\"clamav|icap\"})",
+          "expr": "max by (instance) (jo_ei_scans_in_flight{job=~\"$job\", instance=~\"$instance\", engine=~\"clamav|icap\"})",
           "legendFormat": "in flight {{instance}}",
           "datasource": {
             "type": "prometheus",

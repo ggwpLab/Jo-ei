@@ -324,7 +324,7 @@ func run(ctx context.Context, cfgPath string) error {
 		// scanner.Prober on it, which a metrics wrapper would hide.
 		wrapped := make([]gate.AVScanner, len(avScanners))
 		for i, av := range avScanners {
-			wrapped[i] = mx.WrapAVScanner(cfg.Malware.Scanners[i].Type, av)
+			wrapped[i] = mx.WrapAVScanner(cfg.Malware.Scanners[i].DisplayName(), cfg.Malware.Scanners[i].Type, av)
 		}
 		// Cap concurrent scans so download bursts don't overwhelm the engines'
 		// worker pools and make clamd/ICAP responses time out.

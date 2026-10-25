@@ -217,7 +217,7 @@ Post-download antivirus gate. Zero scanners is valid — the gate is skipped.
 
 | Key | Default | Description |
 |---|---|---|
-| `max_concurrent_scans` | `8` | Cap on simultaneous scans across all engines (backpressure; roughly clamd's default worker pool). |
+| `max_concurrent_scans` | `8` | Cap on artifacts scanned at once (backpressure; roughly clamd's default worker pool). Each artifact runs every engine in parallel, so each engine sees at most this many simultaneous scans. |
 | `scanners` | `[]` | List of engines, each: |
 
 Per scanner:
@@ -230,8 +230,10 @@ Per scanner:
 | `timeout_seconds` | `30` | Per-scan timeout. |
 | `service` | — | ICAP service name (required for `icap`). |
 
-All configured engines scan every artifact; any single detection blocks.
-Prometheus labels keep the engine type (`clamav`, `icap`), not the name.
+All configured engines scan every artifact in parallel, so a scan takes as long
+as the slowest engine; any single detection blocks, and an engine error fails
+closed. Prometheus scanner metrics carry the name as `scanner` and the type
+(`clamav`, `icap`) as `engine`.
 Malware verdicts cannot be allowlisted.
 
 ## `health`

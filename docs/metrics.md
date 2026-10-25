@@ -97,17 +97,21 @@ see the scanner metrics below.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `jo_ei_scans_total` | counter | `scanner`, `result` | Scans by scanner and result. |
-| `jo_ei_scan_duration_seconds` | histogram | `scanner` | Scan duration. |
-| `jo_ei_scans_in_flight` | gauge | `scanner` | Scans currently running. |
+| `jo_ei_scans_total` | counter | `scanner`, `engine`, `result` | Scans by scanner and result. |
+| `jo_ei_scan_duration_seconds` | histogram | `scanner`, `engine` | Scan duration. |
+| `jo_ei_scans_in_flight` | gauge | `scanner`, `engine` | Scans currently running. |
 | `jo_ei_scan_queue_wait_seconds` | histogram | none | Time an antivirus scan waited for a concurrency slot. |
 | `jo_ei_scan_concurrency_limit` | gauge | none | Configured maximum concurrent antivirus scans; 0 only when no antivirus engine is attached. |
-| `jo_ei_scanner_up` | gauge | `scanner` | 1 when the last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled. |
+| `jo_ei_scanner_up` | gauge | `scanner`, `engine` | 1 when the last health check passed (ok or warn), 0 when it failed. Absent while unknown or disabled. |
 
-`scanner` is `clamav`, `icap`, `osv` or `trivy`; `result` is `clean`,
-`detected`, `timeout` or `error`. The concurrency limit and queue-wait metrics
-apply to the antivirus engines (`clamav`, `icap`) only, see
-`malware.max_concurrent_scans`. The `osv` scan metrics include in-memory TTL-cache
+`engine` is `clamav`, `icap`, `osv`, `trivy` or `other`. For antivirus engines
+`scanner` is the configured `malware.scanners[].name` (unique, so two ICAP
+servers get separate series); for `osv` and `trivy` it equals `engine`.
+`result` is `clean`, `detected`, `timeout` or `error`. The concurrency limit
+and queue-wait metrics apply to the antivirus engines (`clamav`, `icap`) only,
+see `malware.max_concurrent_scans`: one slot covers one artifact, whose engines
+run in parallel, so compare the limit with the busiest engine's in-flight
+count (`max`), not the sum. The `osv` scan metrics include in-memory TTL-cache
 hits (the instrumented wrapper sits outside OSV's cache), so the `osv` rate is
 inflated and its p95 is low.
 

@@ -263,7 +263,7 @@ func TestRunProxy_AVProbeStillRegistered(t *testing.T) {
 		"malware:\n  scanners:\n    - type: clamav\n      address: \"tcp:" + fakeClamd(t) + "\"\n"
 	stop := startRun(t, writeTestConfig(t, proxyAddr, extra))
 
-	want := `jo_ei_scanner_up{scanner="clamav"} 1`
+	want := `jo_ei_scanner_up{engine="clamav",scanner="clamav"} 1`
 	deadline := time.Now().Add(10 * time.Second)
 	var body string
 	for time.Now().Before(deadline) {
