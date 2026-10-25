@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -900,4 +901,34 @@ func TestHandler_ServedArtifactCarriesContentLength(t *testing.T) {
 		require.Equal(t, http.StatusOK, resp.StatusCode, pass)
 		assert.Equal(t, int64(len(wheel)), resp.ContentLength, pass)
 	}
+}
+
+// pathAV records the file it was asked to scan.
+type pathAV struct{ path string }
+
+func (p *pathAV) Scan(_ context.Context, path string) (*gate.AVResult, error) {
+	p.path = path
+	return &gate.AVResult{Clean: true}, nil
+}
+
+func TestHandler_DownloadsIntoTempDir(t *testing.T) {
+	upstream := makeUpstream(t, "flask", "3.0.0", 48)
+	defer upstream.Close()
+	dir := t.TempDir()
+	av := &pathAV{}
+	srv := httptest.NewServer(proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:   adapters.NewPyPIAdapter([]string{upstream.URL}),
+		Filter:    supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:     newFakeCache(),
+		AVScanner: av,
+		Logger:    zerolog.Nop(),
+		TempDir:   dir,
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/f/flask/flask-3.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, dir, filepath.Dir(av.path))
 }

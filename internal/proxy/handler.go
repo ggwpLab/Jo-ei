@@ -47,6 +47,10 @@ type HandlerConfig struct {
 	// transport caps per-host concurrency (shared with the adapters) so artifact
 	// downloads count against the same upstream rate limit as metadata fetches.
 	HTTPClient *http.Client
+	// TempDir holds artifact downloads while they are checked. Empty uses
+	// os.TempDir(); point it at the cache volume so multi-GB downloads do not
+	// land on the container's root filesystem.
+	TempDir string
 	// Throttles reports upstream hosts in a post-throttle cooldown (the shared
 	// transport's circuit breaker). Optional: it only supplies Retry-After and
 	// the 429-versus-503 choice for circuit-open mirrors on a throttled answer.
@@ -582,7 +586,7 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, upstream.SanitizeURL(url))
 	}
 
-	tmp, err := os.CreateTemp("", "jo-ei-artifact-*")
+	tmp, err := os.CreateTemp(h.cfg.TempDir, "jo-ei-artifact-*")
 	if err != nil {
 		return "", resp.Header, resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}

@@ -267,6 +267,10 @@ type HandlerDeps struct {
 	HTTPClient *http.Client
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional.
 	Throttles upstream.ThrottleLookup
+	// TempDir holds layers and manifests while they are checked. Empty uses
+	// os.TempDir(); point it at the cache volume so multi-GB layers do not
+	// land on the container's root filesystem.
+	TempDir string
 }
 
 // New assembles a ready-to-serve Docker Registry V2 proxy handler.
@@ -277,7 +281,7 @@ func New(d HandlerDeps) http.Handler {
 	mgate := newManifestGate(gateDeps{
 		adapter: adapter, scanner: d.Scanner, av: d.AV,
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
-		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, logger: d.Logger,
+		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, tempDir: d.TempDir, logger: d.Logger,
 	})
 	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
 }
