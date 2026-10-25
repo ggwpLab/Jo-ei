@@ -13,8 +13,9 @@ const subscriberBuffer = 16
 // Broadcaster fans out events to live subscribers (SSE handlers).
 // Publish never blocks.
 type Broadcaster struct {
-	mu   sync.Mutex
-	subs map[chan gate.Event]struct{}
+	mu     sync.Mutex
+	subs   map[chan gate.Event]struct{}
+	closed bool
 }
 
 // NewBroadcaster creates an empty Broadcaster.
@@ -27,6 +28,11 @@ func NewBroadcaster() *Broadcaster {
 func (b *Broadcaster) Subscribe() (<-chan gate.Event, func()) {
 	ch := make(chan gate.Event, subscriberBuffer)
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		close(ch)
+		return ch, func() {}
+	}
 	b.subs[ch] = struct{}{}
 	b.mu.Unlock()
 	cancel := func() {
@@ -38,6 +44,20 @@ func (b *Broadcaster) Subscribe() (<-chan gate.Event, func()) {
 		}
 	}
 	return ch, cancel
+}
+
+// Close ends every subscription, which ends the SSE streams reading them, and
+// makes later subscriptions start closed. It is a server shutdown hook: an
+// open console tab would otherwise hold the drain until its deadline. Safe to
+// call more than once.
+func (b *Broadcaster) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	for ch := range b.subs {
+		delete(b.subs, ch)
+		close(ch)
+	}
 }
 
 // Publish delivers ev to every subscriber with buffer room; slow subscribers

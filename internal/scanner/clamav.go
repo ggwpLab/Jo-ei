@@ -128,7 +128,14 @@ func parseClamAVResponse(resp string) (*gate.AVResult, error) {
 		if idx := strings.Index(sig, ": "); idx != -1 {
 			sig = sig[idx+2:]
 		}
-		return &gate.AVResult{Clean: false, Signature: strings.TrimSpace(sig), Engine: "clamav"}, nil
+		sig = strings.TrimSpace(sig)
+		// AlertExceedsMax reports content clamd gave up on (file count,
+		// recursion, size, scan time) as a Heuristics.Limits.Exceeded.*
+		// match: an incomplete scan, not malware.
+		return &gate.AVResult{
+			Clean: false, Signature: sig, Engine: "clamav",
+			Incomplete: strings.HasPrefix(sig, "Heuristics.Limits.Exceeded"),
+		}, nil
 	default:
 		return nil, fmt.Errorf("clamd error response: %q", trimmed)
 	}

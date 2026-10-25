@@ -1,3 +1,11 @@
+# Docker's json-file log driver grows without bound by default and can fill
+# the host disk; every service rotates its logs.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   jo-ei:
     # Released image from GHCR by default. Pin a version (e.g. :0.5.0) for
@@ -5,10 +13,15 @@ services:
     # checkout from source instead and tags the result with the same name.
     image: ghcr.io/ggwplab/jo-ei:latest
     build: .
+    # Published on loopback only: put a reverse proxy (TLS, access control) in
+    # front and point it at 127.0.0.1:8080. Publishing "8080:8080" would let
+    # clients reach the proxy — and the admin console — around it. If the
+    # reverse proxy runs in this compose project, drop `ports` and attach it to
+    # this network instead.
     # Prometheus metrics listen on 9464 (metrics.listen). Not published on
     # purpose: attach Prometheus to this compose network and scrape jo-ei:9464.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./config.yaml:/etc/jo-ei/config.yaml:ro
       - cache-data:/var/cache/jo-ei
@@ -21,31 +34,67 @@ services:
     env_file:
       - path: .env
         required: false
+    # Ready = the database answers and no attached scanner is down (the image
+    # has no shell, so the binary probes itself).
+    healthcheck:
+      test: ["CMD", "/jo-ei", "--config", "/etc/jo-ei/config.yaml", "healthcheck", "--ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # Longer than server.shutdown_timeout_seconds (30), so in-flight downloads
+    # drain before Docker sends SIGKILL.
+    stop_grace_period: 45s
     depends_on:
       clamav:
         condition: service_healthy
       trivy:
         condition: service_started
     restart: unless-stopped
+    logging: *logging
 
   clamav:
-    image: clamav/clamav:stable
+    image: clamav/clamav:1.5
+    # clamd's defaults reject any stream over 100 MB (the proxy then fails
+    # closed with 503 for every larger artifact) and silently stop scanning
+    # archives past 100 MB per file, 400 MB per scan, 10,000 files, 17 levels
+    # of nesting or 2 minutes, while still answering OK. These limits fit
+    # real images and packages (image_scan.max_layer_bytes is 2 GB; a Go or
+    # Node layer holds tens of thousands of files), and MaxScanTime stays
+    # under the proxy's ClamAV timeout (malware.scanners[].timeout_seconds,
+    # 300 s) so clamd gives up before the proxy does. AlertExceedsMax reports
+    # anything still over a limit; Jō-ei blocks that as scan_incomplete — not
+    # as malware, and without caching it, so raising a limit takes effect on
+    # the next request. Large scans need memory and time: size the VM for it.
+    environment:
+      CLAMD_CONF_StreamMaxLength: "2048M"
+      CLAMD_CONF_MaxFileSize: "2048M"
+      CLAMD_CONF_MaxScanSize: "4095M"
+      CLAMD_CONF_MaxFiles: "200000"
+      CLAMD_CONF_MaxRecursion: "32"
+      CLAMD_CONF_MaxScanTime: "280000"
+      CLAMD_CONF_AlertExceedsMax: "yes"
     volumes:
       - clamav-db:/var/lib/clamav
     restart: unless-stopped
+    logging: *logging
 
   trivy:
-    image: aquasec/trivy:0.71.2
+    # Must match the Trivy client shipped in the jo-ei image (Dockerfile):
+    # Trivy's client/server protocol is not guaranteed across versions.
+    image: aquasec/trivy:0.76.1
     command: ["server", "--listen", "0.0.0.0:4954"]
     volumes:
       - trivy-cache:/root/.cache/trivy
     restart: unless-stopped
+    logging: *logging
 
   # Example ICAP engine (Kaspersky / Dr.Web). Point a malware.scanners[] entry
   # at it with type: icap, address: "tcp:icap:1344", service: <vendor service>.
   # icap:
   #   image: <vendor/icap-image>
   #   restart: unless-stopped
+  #   logging: *logging
 
 volumes:
   cache-data:

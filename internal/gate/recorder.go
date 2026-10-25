@@ -52,6 +52,11 @@ type Event struct {
 // denylisted packages; telemetry counts it separately from CVE blocks.
 const ReasonDenylisted = "denylisted"
 
+// ReasonScanIncomplete is the block reason (and blocked_by value) when the
+// malware engine could not scan an artifact in full: blocked, because it was
+// not fully checked, but not reported as malware.
+const ReasonScanIncomplete = "scan_incomplete"
+
 // Recorder receives telemetry events. Implementations must be safe for
 // concurrent use and must never block or fail the proxy data path: Record
 // returns nothing. telemetry.Hub satisfies it structurally.

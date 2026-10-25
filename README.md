@@ -472,6 +472,35 @@ documented in [`docs/architecture.md`](docs/architecture.md). For a narrative
 introduction to the project, read the overview article
 ([English](docs/overview.md) · [Русский](docs/overview.ru.md)).
 
+## Running in Production
+
+The shipped `docker-compose.yaml` is meant to run as-is on a single VM behind a
+reverse proxy:
+
+- **Port 8080 is published on loopback only** (`127.0.0.1:8080`). Point your
+  reverse proxy (TLS, access control) at it; publishing it on all interfaces
+  would let clients reach the proxy and the admin console around it.
+- **Health:** `GET /health` answers while the process is up; `GET /ready`
+  answers 200 only when the database responds and no attached scanner is down
+  (503 lists what is failing). The compose healthcheck runs
+  `jo-ei healthcheck --ready`, so `docker ps` shows `unhealthy` when, say,
+  ClamAV is down. Compose's `restart:` does not act on health — an unhealthy
+  container keeps running until you or an orchestrator restarts it.
+- **Stopping** drains in-flight requests for `server.shutdown_timeout_seconds`
+  (30 s), ends console event streams at once, then closes what is left; the
+  compose `stop_grace_period` (45 s) leaves room for it.
+- **ClamAV limits** are raised (2 GB per stream/file, 4 GB per scan, 200,000
+  files, 32 nesting levels, 280 s per scan) so ordinary images and packages
+  are scanned in full; with clamd's defaults every artifact over 100 MB
+  failed with 503 and large archives were only partly scanned. Anything still
+  over a limit is blocked as `scan_incomplete` (not malware, not cached).
+  Large scans need time (`timeout_seconds: 300` in `config.yaml`), memory,
+  and disk: clamd spools each stream to its container's `/tmp`, up to 2 GB
+  per concurrent scan — size the VM for the biggest artifacts you serve.
+- **Logs** rotate at 50 MB × 5 files per service.
+- **Scanner images** are pinned (`clamav/clamav:1.5`, `aquasec/trivy:0.76.1`
+  — the Trivy server must match the client in the Jō-ei image).
+
 ## Monitoring
 
 Jō-ei exposes Prometheus metrics (requests, upstreams, scanners, verdicts, cache)

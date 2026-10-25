@@ -933,3 +933,24 @@ func TestHandler_DownloadsIntoTempDir(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, dir, filepath.Dir(av.path))
 }
+
+// An artifact the AV engine could not scan completely is blocked, but as
+// scan_incomplete, not as malware.
+func TestHandler_IncompleteScanBlockedNotAsMalware(t *testing.T) {
+	upstream := makeUpstream(t, "big-pkg", "1.0.0", 48)
+	defer upstream.Close()
+	av := &mockAVScanner{result: &gate.AVResult{Clean: false, Incomplete: true,
+		Signature: "Heuristics.Limits.Exceeded.MaxFiles", Engine: "clamav"}}
+	srv := setupTestProxyAV(t, upstream, av)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/py3/b/big-pkg/big_pkg-1.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "scan_incomplete", body["reason"])
+	assert.NotEqual(t, "malware_found", body["reason"])
+}

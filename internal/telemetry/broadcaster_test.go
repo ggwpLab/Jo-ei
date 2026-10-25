@@ -80,3 +80,21 @@ func TestHubRecordsAndPublishes(t *testing.T) {
 		t.Fatal("hub did not publish")
 	}
 }
+
+func TestBroadcaster_CloseEndsSubscriptions(t *testing.T) {
+	b := telemetry.NewBroadcaster()
+	ch1, _ := b.Subscribe()
+	ch2, _ := b.Subscribe()
+
+	b.Close()
+	b.Close() // idempotent
+
+	for _, ch := range []<-chan gate.Event{ch1, ch2} {
+		_, open := <-ch
+		assert.False(t, open)
+	}
+	late, cancel := b.Subscribe()
+	defer cancel()
+	_, open := <-late
+	assert.False(t, open, "a subscription after Close is already closed")
+}

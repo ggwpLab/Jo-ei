@@ -7,6 +7,7 @@ function jsonLines(r) {
     http_status: r.http,
     reason: r.blocked_by.includes("cve") ? "cve_threshold_exceeded"
       : r.blocked_by.includes("malware") ? "malware_signature_match"
+      : r.blocked_by.includes("scan_incomplete") ? "malware_scan_incomplete"
       : r.blocked_by.includes("supply_chain") ? "supply_chain_min_age"
       : "denylisted",
     package: `${r.eco}/${r.pkg}`,
@@ -57,6 +58,7 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
   const verdict = jsonLines(r);
   const reasonText = r.blocked_by.includes("cve") ? "CVE threshold exceeded"
     : r.blocked_by.includes("malware") ? "Malware signature matched"
+    : r.blocked_by.includes("scan_incomplete") ? "Malware scan could not cover the whole artifact"
     : r.blocked_by.includes("supply_chain") ? "Supply-chain maturity hold"
     : "Package is denylisted";
 

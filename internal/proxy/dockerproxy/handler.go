@@ -237,7 +237,7 @@ func (h *Handler) record(log zerolog.Logger, requestID string, pp ParsedPath, ve
 
 func gateForBlockedBy(by string) string {
 	switch by {
-	case "malware":
+	case "malware", gate.ReasonScanIncomplete:
 		return gate.GateMalware
 	case "supply_chain":
 		return gate.GateSupply

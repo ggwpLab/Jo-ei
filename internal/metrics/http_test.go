@@ -36,6 +36,7 @@ func TestRouteFunc(t *testing.T) {
 		"/api/auth/login":                "auth",
 		"/api/overview":                  "api",
 		"/health":                        "health",
+		"/ready":                         "health",
 		"/favicon.ico":                   "favicon",
 		"/":                              "other",
 		"/.well-known/x":                 "other",

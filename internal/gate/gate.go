@@ -258,9 +258,13 @@ type SCFilter interface {
 
 // AVResult records the outcome of an antivirus scan of a single file.
 type AVResult struct {
-	Clean     bool   // true iff no malware signature matched
+	Clean     bool   // true iff no malware signature matched and the scan was complete
 	Signature string // signature name when infected, "" otherwise
 	Engine    string // engine that produced this verdict, e.g. "clamav" | "icap"
+	// Incomplete is set (with Clean false) when the engine could not scan the
+	// whole file — too many files, too deep, too large, too slow — rather
+	// than found malware. Callers that do not check it still block.
+	Incomplete bool
 }
 
 // AVScanner scans a file on disk for malware.

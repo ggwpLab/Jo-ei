@@ -1,0 +1,15 @@
+# Keep secrets, VCS history and local tooling out of the build context (and
+# the builder's layer cache). Only the Go sources, go.mod/go.sum, web/ and
+# config.yaml are needed to build.
+.git
+.env
+.env.*
+!.env.example
+.claude
+.superpowers
+.vscode
+.idea
+*.db
+*.db-*
+*.exe
+dist/

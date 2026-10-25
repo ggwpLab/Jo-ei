@@ -7,6 +7,7 @@ const GATE_ORDER = ["cache", "supply", "cve", "malware"];
 // alternate "supply_chain" spelling all surface there.
 const GATE_BLOCK_INDEX = {
   cache: 0, supply: 1, supply_chain: 1, denylist: 1, cve: 2, malware: 3,
+  scan_incomplete: 3,
 };
 
 // How many recent requests the procession cycles through before re-snapshotting.

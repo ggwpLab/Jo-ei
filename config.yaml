@@ -12,6 +12,10 @@ server:
   # one the policy allows instead of failing the whole install. Default 32
   # when unset; set to 0 to disable metadata filtering entirely.
   metadata_filter_max_mb: 32
+  # Seconds a stopping server waits for in-flight requests (a gated download
+  # can take a while) before closing the rest. Keep it below the container's
+  # stop grace period (docker-compose.yaml: stop_grace_period). Default 30.
+  shutdown_timeout_seconds: 30
   # Reverse proxies (CIDRs or bare IPs) whose forwarding header is trusted for the
   # client IP used by login rate limits. Empty = use the TCP peer address.
   # trusted_proxies: []
@@ -83,7 +87,9 @@ malware:
       # clamav/clamav image listens on TCP 3310 by default; its unix socket
       # lives at /tmp/clamd.sock inside its own container and is not shareable.
       address: "tcp:clamav:3310"
-      timeout_seconds: 30
+      # Generous on purpose: clamd needs minutes for a multi-GB artifact or
+      # layer, and a timeout fails the download closed (503).
+      timeout_seconds: 300
     # Add a commercial engine over ICAP (Kaspersky, Dr.Web, …):
     # Each scanner is reported (detections, logs, console overview) under
     # `name`; it defaults to the type, or "icap:<service>" for ICAP. Names must

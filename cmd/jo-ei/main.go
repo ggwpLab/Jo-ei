@@ -146,10 +146,13 @@ func run(ctx context.Context, cfgPath string) error {
 	}
 
 	handler := httpx.BodyReadDeadline(root, httpx.DefaultBodyReadIdleTimeout)
-	servers, err := bindServers(a, cfg, logx.Middleware(mx.WrapHandler(handler, metrics.NewRouteFunc(routes.prefixes()))), mx)
+	servers, err := bindServers(a, cfg, logx.Middleware(mx.WrapHandler(handler, metrics.NewRouteFunc(routes.prefixes()))), mx, serverLog)
 	if err != nil {
 		return err
 	}
+	// The main server is bound last. Ending the SSE streams at shutdown keeps
+	// an open console tab from holding the drain until its deadline.
+	servers[len(servers)-1].srv.RegisterOnShutdown(st.broadcaster.Close)
 
 	serverLog.Info().
 		Str("listen", cfg.Server.Listen).
