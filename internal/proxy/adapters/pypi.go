@@ -84,6 +84,22 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool)
 	}, true
 }
 
+// IsArtifactPath implements gate.ArtifactPathMatcher: everything under
+// /packages/ is a distribution file, except a distribution's PEP 658 core
+// metadata (<file>.metadata) — the METADATA text pip reads while resolving,
+// which carries no code and is proxied as-is.
+func (a *PyPIAdapter) IsArtifactPath(r *http.Request) bool {
+	if !packagePathRe.MatchString(r.URL.Path) {
+		return false
+	}
+	if dist, ok := strings.CutSuffix(r.URL.Path, ".metadata"); ok {
+		if _, _, parsed := parsePyPIFilename(dist[strings.LastIndex(dist, "/")+1:]); parsed {
+			return false
+		}
+	}
+	return true
+}
+
 // FetchMetadata walks the configured upstreams in order, returning the first
 // success. When every upstream fails, the returned error is an
 // upstream.Attempts carrying each mirror's own outcome.
@@ -155,25 +171,34 @@ func (a *PyPIAdapter) UpstreamURLs(r *http.Request) []string {
 	return urls
 }
 
-// parsePyPIFilename extracts the normalized package name and version from a filename.
-// Handles wheels (.whl), source distributions (.tar.gz, .zip).
+// sdistExts are the source-distribution suffixes pip accepts, longest first so
+// ".tar.gz" wins over ".gz"-less ".tar".
+var sdistExts = []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lzma", ".tar.lz", ".tgz", ".tbz", ".txz", ".tlz", ".tar", ".zip"}
+
+// parsePyPIFilename extracts the normalized package name and version from a
+// filename: wheels and eggs ({dist}-{version}-...), and sdists
+// ({dist}-{version}.<ext>). Extensions compare case-insensitively, as pip
+// does.
 func parsePyPIFilename(filename string) (name, version string, ok bool) {
-	switch {
-	case strings.HasSuffix(filename, ".whl"):
-		// Wheel: {dist}-{version}(-{build})?-{python}-{abi}-{platform}.whl
-		parts := strings.SplitN(strings.TrimSuffix(filename, ".whl"), "-", 3)
-		if len(parts) >= 2 {
-			return normalizePyPIName(parts[0]), parts[1], true
+	lower := strings.ToLower(filename)
+	for _, ext := range []string{".whl", ".egg"} {
+		if strings.HasSuffix(lower, ext) {
+			// {dist}-{version}(-{build})?-{python}-{abi}-{platform}.whl
+			// {dist}-{version}(-{python})?.egg
+			parts := strings.SplitN(filename[:len(filename)-len(ext)], "-", 3)
+			if len(parts) >= 2 {
+				return normalizePyPIName(parts[0]), parts[1], true
+			}
+			return "", "", false
 		}
-	case strings.HasSuffix(filename, ".tar.gz"):
-		base := strings.TrimSuffix(filename, ".tar.gz")
-		if idx := strings.LastIndex(base, "-"); idx > 0 {
-			return normalizePyPIName(base[:idx]), base[idx+1:], true
-		}
-	case strings.HasSuffix(filename, ".zip"):
-		base := strings.TrimSuffix(filename, ".zip")
-		if idx := strings.LastIndex(base, "-"); idx > 0 {
-			return normalizePyPIName(base[:idx]), base[idx+1:], true
+	}
+	for _, ext := range sdistExts {
+		if strings.HasSuffix(lower, ext) {
+			base := filename[:len(filename)-len(ext)]
+			if idx := strings.LastIndex(base, "-"); idx > 0 {
+				return normalizePyPIName(base[:idx]), base[idx+1:], true
+			}
+			return "", "", false
 		}
 	}
 	return "", "", false

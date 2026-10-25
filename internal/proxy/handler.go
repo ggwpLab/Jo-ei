@@ -47,6 +47,10 @@ type HandlerConfig struct {
 	// transport caps per-host concurrency (shared with the adapters) so artifact
 	// downloads count against the same upstream rate limit as metadata fetches.
 	HTTPClient *http.Client
+	// IndexMaxMB caps a decoded index document an IndexRewriter adapter's
+	// requests may return (0 = 64). An index over the cap fails the request:
+	// it cannot be served unrewritten.
+	IndexMaxMB int
 	// TempDir holds artifact downloads while they are checked. Empty uses
 	// os.TempDir(); point it at the cache volume so multi-GB downloads do not
 	// land on the container's root filesystem.
@@ -100,6 +104,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
+		if m, ok := h.cfg.Adapter.(gate.ArtifactPathMatcher); ok && m.IsArtifactPath(r) {
+			// An artifact path NormalizeRequest could not name: no gate can
+			// check it, so it must not be streamed through untouched.
+			log := logx.Logger(r.Context(), h.log)
+			log.Warn().Str("path", r.URL.Path).Msg("refusing unrecognized artifact path")
+			h.writeJSON(w, requestID, http.StatusForbidden, map[string]any{"error": "unrecognized_artifact"})
+			return
+		}
+		if rw, ok := h.cfg.Adapter.(gate.IndexRewriter); ok && rw.IsIndexRequest(r) {
+			h.proxyIndex(w, r, rw)
+			return
+		}
 		if mref, ok := h.metadataFilterRef(r); ok {
 			h.proxyMetadata(w, r, mref)
 			return

@@ -26,7 +26,7 @@ Not reviewed in depth (second wave): registry adapters' parsing,
 
 ## P0 — breaks real traffic
 
-### 0. pip downloads bypass the proxy entirely (found 2026-10-25, during manual testing)
+### 0. pip downloads bypass the proxy entirely (found 2026-10-25, during manual testing) — FIXED (`fix/pypi-index-rewrite`; e2e: pip on a network reaching only the proxy downloads and `--require-hashes`-installs six 1.16.0, PASS/CACHE recorded)
 PyPI simple-index pages are proxied untouched (`proxyTransparent`), and
 pypi.org's pages link every file with an **absolute** URL
 (`https://files.pythonhosted.org/packages/...`). pip follows those links
@@ -154,6 +154,16 @@ upstream metrics. Behind a TLS-inspecting corporate proxy the CVE gate fails
 → every non-cached request 503s. Pass the shared transport in.
 
 ## P2 — polish
+
+18. **`npm pack <remote spec>` drops the `/npm` prefix** (npm 10.9.9, found
+    2026-10-25 by e2e; first misread as "npm installs fail", corrected after
+    the owner's report and a full re-check). `npm install` (`.npmrc`, `--registry`
+    or env), `npm ci` with a lockfile resolved to `https://registry.npmjs.org/…`,
+    and `npm exec`/`npx` all fetch tarballs through `/npm/<pkg>/-/…` and are
+    gated. Only `npm pack left-pad@1.3.0` fetches
+    `http://<jo-ei>/left-pad/-/left-pad-1.3.0.tgz` → `404 unknown_registry`
+    (fails closed, no bypass). Untested: `replace-registry-host=never`, which
+    would follow the packument's absolute registry.npmjs.org URL; yarn and pnpm.
 
 11. **Console on the proxy listener, no security headers.** `/console/` and
     `/api/` share `:8080` with registry traffic; no CSP, `frame-ancestors`,
