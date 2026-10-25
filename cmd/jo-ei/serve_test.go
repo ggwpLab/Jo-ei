@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/config"
 )
 
 func TestServeListener_ShutsDownOnContextCancel(t *testing.T) {
@@ -87,4 +90,23 @@ func TestServeAll_CtxCancelShutsDownAll(t *testing.T) {
 		_, err := net.DialTimeout("tcp", s.ln.Addr().String(), time.Second)
 		require.Error(t, err, "listener %s still accepting", s.ln.Addr())
 	}
+}
+
+func TestBindServers_MainServerTimeouts(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Server.Listen = "127.0.0.1:0"
+	a := &app{}
+	defer a.close()
+
+	servers, err := bindServers(a, cfg, http.NewServeMux(), nil)
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+
+	srv := servers[0].srv
+	// ReadTimeout would also cancel a running handler's context once it
+	// expires, and WriteTimeout would cut long gated downloads.
+	assert.Zero(t, srv.ReadTimeout)
+	assert.Zero(t, srv.WriteTimeout)
+	assert.Equal(t, 10*time.Second, srv.ReadHeaderTimeout)
+	assert.Equal(t, 120*time.Second, srv.IdleTimeout)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
@@ -337,7 +338,7 @@ func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, outbound *http.
 
 	copyProxyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, resp.Body, httpx.DefaultWriteIdleTimeout); err != nil {
 		log.Error().Err(err).Msg("streaming oversized document")
 	}
 }

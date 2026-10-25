@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -559,7 +560,7 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 
 	copyProxyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, resp.Body, httpx.DefaultWriteIdleTimeout); err != nil {
 		log.Error().Err(err).Msg("streaming proxy response")
 	}
 }
@@ -625,8 +626,12 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, entry *gate.ArtifactEntr
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Joei-Cache", "HIT")
+	// An explicit length lets the client detect a truncated transfer.
+	if fi, err := f.Stat(); err == nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, f); err != nil {
+	if _, err := httpx.CopyWithWriteDeadline(w, f, httpx.DefaultWriteIdleTimeout); err != nil {
 		log.Error().Err(err).Str("artifact_path", entry.ArtifactPath).Msg("streaming cached artifact")
 	}
 	return nil

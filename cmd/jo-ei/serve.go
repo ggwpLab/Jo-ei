@@ -43,11 +43,17 @@ func bindServers(a *app, cfg *config.Config, handler http.Handler, mx *metrics.M
 		a.onClose(ln.Close)
 		servers = append(servers, boundServer{metricsSrv, ln})
 	}
+	// No ReadTimeout or WriteTimeout: a gated request downloads and scans
+	// before it answers, which can take minutes for a multi-GB artifact or a
+	// cold image. WriteTimeout would cut that response, and an expired
+	// ReadTimeout cancels the running handler's context through the server's
+	// background read. Upstream fetches and client writes are bounded by
+	// progress instead (httpx.IdleTimeout, httpx.CopyWithWriteDeadline).
 	srv := &http.Server{
-		Addr:         cfg.Server.Listen,
-		Handler:      handler,
-		ReadTimeout:  120 * time.Second,
-		WriteTimeout: 120 * time.Second,
+		Addr:              cfg.Server.Listen,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	ln, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {

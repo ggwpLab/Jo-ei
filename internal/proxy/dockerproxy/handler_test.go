@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -384,5 +385,41 @@ func TestHandlerManifestNotFoundPlusThrottledReturns429(t *testing.T) {
 	}
 	if len(rec.events) != 1 || rec.events[0].HTTPStatus != http.StatusTooManyRequests || rec.events[0].Reason != "upstream_throttled" {
 		t.Errorf("events = %+v, want one 429 upstream_throttled event", rec.events)
+	}
+}
+
+// A cached layer is served with its length, so the docker client can tell a
+// truncated transfer from a complete one.
+func TestHandlerBlobCarriesContentLength(t *testing.T) {
+	srvURL, repo, _, childDigest := newMultiArchServer(t)
+	h := New(HandlerDeps{
+		Upstreams: []string{srvURL},
+		Scanner:   stubScanner{},
+		AV:        stubAV{},
+		Filter:    allowFilter{},
+		Policy:    findingPolicy{},
+		Cache:     newFakeCache(),
+		Recorder:  &recspy{},
+		Logger:    zerolog.Nop(),
+	})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+childDigest, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var child struct {
+		Layers []struct{ Digest string } `json:"layers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &child); err != nil || len(child.Layers) != 1 {
+		t.Fatalf("decoding child manifest: %v (%s)", err, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/blobs/"+child.Layers[0].Digest, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("blob status = %d", w.Code)
+	}
+	if got, want := w.Header().Get("Content-Length"), strconv.Itoa(w.Body.Len()); got != want {
+		t.Errorf("Content-Length = %q, want %q", got, want)
 	}
 }
