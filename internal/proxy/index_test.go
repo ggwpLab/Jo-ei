@@ -149,3 +149,49 @@ func TestIndex_Non200Relayed(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+// A forwarded Range header could earn a 206 slice of the index, which must not
+// reach the client unrewritten.
+func TestIndex_RangeNotForwardedAndPartialFailsClosed(t *testing.T) {
+	var sawRange string
+	srv := indexProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRange = r.Header.Get("Range")
+		w.WriteHeader(http.StatusPartialContent)
+		io.WriteString(w, absLink)
+	}), 0)
+
+	resp, body := get(t, srv.URL+"/simple/six/", map[string]string{"Range": "bytes=0-100"})
+
+	assert.Empty(t, sawRange)
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	assert.NotContains(t, body, "files.pythonhosted.org")
+}
+
+// A /packages/ file the adapter cannot name must not be streamed around the
+// gates: there is no package and version to check it against.
+func TestHandler_UnrecognizedPackageFileFailsClosed(t *testing.T) {
+	hit := false
+	srv := indexProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		io.WriteString(w, "payload")
+	}), 0)
+
+	resp, body := get(t, srv.URL+"/packages/a/b/README", nil)
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.NotContains(t, body, "payload")
+	assert.False(t, hit, "upstream must not be fetched")
+}
+
+// pip fetches a wheel's PEP 658 core metadata (<file>.metadata) during
+// resolution. It holds the METADATA text only, no code, so it passes through.
+func TestHandler_CoreMetadataFilePassesThrough(t *testing.T) {
+	srv := indexProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "Metadata-Version: 2.1\nName: requests\n")
+	}), 0)
+
+	resp, body := get(t, srv.URL+"/packages/70/8e/abc/requests-2.31.0-py3-none-any.whl.metadata", nil)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "Name: requests")
+}

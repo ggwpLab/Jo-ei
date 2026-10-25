@@ -104,6 +104,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ref, isDownload := h.cfg.Adapter.NormalizeRequest(r)
 	if !isDownload {
+		if m, ok := h.cfg.Adapter.(gate.ArtifactPathMatcher); ok && m.IsArtifactPath(r) {
+			// An artifact path NormalizeRequest could not name: no gate can
+			// check it, so it must not be streamed through untouched.
+			log := logx.Logger(r.Context(), h.log)
+			log.Warn().Str("path", r.URL.Path).Msg("refusing unrecognized artifact path")
+			h.writeJSON(w, requestID, http.StatusForbidden, map[string]any{"error": "unrecognized_artifact"})
+			return
+		}
 		if rw, ok := h.cfg.Adapter.(gate.IndexRewriter); ok && rw.IsIndexRequest(r) {
 			h.proxyIndex(w, r, rw)
 			return

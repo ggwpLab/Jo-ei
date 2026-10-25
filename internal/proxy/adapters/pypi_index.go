@@ -1,20 +1,26 @@
 package adapters
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"html"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 // pypiJSONAPIRe matches the legacy JSON API: /pypi/<project>/json and
-// /pypi/<project>/<version>/json.
-var pypiJSONAPIRe = regexp.MustCompile(`^/pypi/[^/]+(/[^/]+)?/json$`)
+// /pypi/<project>/<version>/json, with or without a trailing slash.
+var pypiJSONAPIRe = regexp.MustCompile(`^/pypi/[^/]+(/[^/]+)?/json/?$`)
 
 // IsIndexRequest implements gate.IndexRewriter: simple-index pages (PEP 503
 // HTML or PEP 691 JSON) and the JSON API.
@@ -22,30 +28,73 @@ func (a *PyPIAdapter) IsIndexRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/simple/") || pypiJSONAPIRe.MatchString(r.URL.Path)
 }
 
-// RewriteIndex implements gate.IndexRewriter. Every absolute link to a
-// /packages/ path becomes a relative link to the proxy's own /packages/ route,
-// so the download goes through the gates; any other absolute link is removed,
-// since following it would bypass them. Relative links already resolve
-// against the proxy and are left alone.
+// RewriteIndex implements gate.IndexRewriter. A link survives only if it
+// positively resolves to a /packages/ path, and is then served as a relative
+// link to the proxy's own /packages/ route, so the download goes through the
+// gates. Every other link — another host, another path, or anything this
+// proxy might parse differently from pip or uv — is removed: the safe failure
+// is a file the client cannot see, never one it fetches around the proxy.
 func (a *PyPIAdapter) RewriteIndex(doc []byte, contentType, requestPath string) (gate.IndexRewrite, error) {
-	rw := &linkRewriter{prefix: strings.Repeat("../", dirDepth(requestPath))}
+	rw := &linkRewriter{
+		prefix: strings.Repeat("../", dirDepth(requestPath)),
+		base:   &url.URL{Scheme: "http", Host: proxyHost, Path: requestPath},
+	}
 	var (
 		body []byte
 		err  error
 	)
-	switch {
-	case pypiJSONAPIRe.MatchString(requestPath):
+	switch kind, kerr := indexKind(contentType, requestPath); {
+	case kerr != nil:
+		return gate.IndexRewrite{}, kerr
+	case kind == kindJSONAPI:
 		body, err = rw.jsonAPI(doc)
-	case strings.Contains(contentType, "vnd.pypi.simple") && strings.Contains(contentType, "json"):
+	case kind == kindJSONSimple:
 		body, err = rw.jsonSimple(doc)
 	default:
-		body = rw.html(doc)
+		body, err = rw.html(doc)
 	}
 	if err != nil {
 		return gate.IndexRewrite{}, err
 	}
 	return gate.IndexRewrite{Body: body, Rewritten: rw.rewritten, Dropped: rw.dropped}, nil
 }
+
+type docKind int
+
+const (
+	kindHTML docKind = iota
+	kindJSONSimple
+	kindJSONAPI
+)
+
+// indexKind picks the parser. The media type is compared case-insensitively,
+// as pip does; a type that is neither HTML nor JSON cannot be rewritten with
+// confidence, so it is an error rather than a guess.
+func indexKind(contentType, requestPath string) (docKind, error) {
+	if pypiJSONAPIRe.MatchString(requestPath) {
+		return kindJSONAPI, nil
+	}
+	mt := ""
+	if contentType != "" {
+		parsed, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return 0, fmt.Errorf("parsing index content type %q: %w", contentType, err)
+		}
+		mt = strings.ToLower(parsed)
+	}
+	switch {
+	case mt == "" || mt == "text/html" || mt == "application/vnd.pypi.simple.v1+html":
+		return kindHTML, nil
+	case mt == "application/json" || strings.HasSuffix(mt, "+json"):
+		return kindJSONSimple, nil
+	default:
+		return 0, fmt.Errorf("unexpected index content type %q", contentType)
+	}
+}
+
+// proxyHost is the placeholder origin relative links are resolved against;
+// a link that resolves to it was relative in the document.
+const proxyHost = "proxy.joei.invalid"
 
 // dirDepth counts the path segments of requestPath's directory: the number of
 // "../" steps from the document back to the registry root.
@@ -63,60 +112,115 @@ func dirDepth(requestPath string) int {
 
 // linkRewriter maps links for one document and tallies the outcome.
 type linkRewriter struct {
-	prefix    string // "../" steps back to the registry root
+	prefix    string   // "../" steps back to the registry root
+	base      *url.URL // the document's own URL, for resolving relative links
 	rewritten int
 	dropped   []string
 }
 
-// mapLink returns the link to serve and whether to keep it. raw is the link as
-// it appears in the document (unescaped).
+// normalizeLink applies the clean-up URL parsers do before parsing (urllib and
+// WHATWG alike): leading/trailing C0 controls and spaces are trimmed, tab/CR/LF
+// are deleted anywhere, and a backslash counts as a slash. Mapping the
+// normalised form means the proxy sees the same URL the client will.
+func normalizeLink(raw string) string {
+	s := strings.TrimFunc(raw, func(r rune) bool { return r <= ' ' })
+	s = strings.NewReplacer("\t", "", "\r", "", "\n", "", `\`, "/").Replace(s)
+	return s
+}
+
+// mapLink returns the link to serve and whether to keep it.
 func (l *linkRewriter) mapLink(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return raw, true // relative (or not a URL at all): resolves against the proxy
-	}
-	if !strings.HasPrefix(u.Path, "/packages/") {
+	mapped, ok := l.resolve(raw)
+	if !ok {
 		l.dropped = append(l.dropped, raw)
 		return "", false
 	}
-	// Keep everything from /packages/ on verbatim — query and the #sha256=
-	// fragment pip verifies included.
-	rest := raw[strings.Index(raw, "/packages/")+1:]
-	l.rewritten++
-	return l.prefix + rest, true
+	if mapped != raw {
+		l.rewritten++
+	}
+	return mapped, true
 }
 
-var (
-	anchorRe = regexp.MustCompile(`(?is)<a\b[^>]*>.*?</a>`)
-	hrefRe   = regexp.MustCompile(`(?is)(\bhref\s*=\s*)("([^"]*)"|'([^']*)')`)
-	baseRe   = regexp.MustCompile(`(?is)<base\b[^>]*>`)
-)
+// resolve maps one link to its proxy-relative form, or reports false.
+func (l *linkRewriter) resolve(raw string) (string, bool) {
+	norm := normalizeLink(raw)
+	u, err := url.Parse(norm)
+	if err != nil || u.Opaque != "" || u.User != nil {
+		return "", false
+	}
+	if u.Scheme != "" {
+		// An absolute link must spell out "scheme://host": "https:/x" and
+		// "https:x" have no host to Go but do to a WHATWG parser.
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+			!strings.HasPrefix(strings.ToLower(norm), u.Scheme+"://") {
+			return "", false
+		}
+	}
+	abs := l.base.ResolveReference(u)
+	clean := path.Clean(abs.Path)
+	if !strings.HasPrefix(clean, "/packages/") {
+		return "", false
+	}
+	out := l.prefix + strings.TrimPrefix((&url.URL{Path: clean}).EscapedPath(), "/")
+	if abs.RawQuery != "" {
+		out += "?" + abs.RawQuery
+	}
+	if abs.Fragment != "" {
+		out += "#" + abs.EscapedFragment()
+	}
+	return out, true
+}
 
-// html rewrites a PEP 503 page. A <base> element would re-root every relative
-// link, so it is removed.
-func (l *linkRewriter) html(doc []byte) []byte {
-	doc = baseRe.ReplaceAll(doc, nil)
-	return anchorRe.ReplaceAllFunc(doc, func(anchor []byte) []byte {
-		m := hrefRe.FindSubmatchIndex(anchor)
-		if m == nil {
-			return anchor
+// html rewrites a PEP 503 page token by token. Every href on an <a> start tag
+// is mapped (pip honours the last of duplicates, so all of them must pass);
+// an anchor with any unmappable href is dropped, and <base> — which would
+// re-root relative links — is removed. Everything else is copied byte for
+// byte.
+func (l *linkRewriter) html(doc []byte) ([]byte, error) {
+	z := html.NewTokenizer(bytes.NewReader(doc))
+	var out bytes.Buffer
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			if errors.Is(z.Err(), io.EOF) {
+				return out.Bytes(), nil
+			}
+			return nil, fmt.Errorf("tokenizing index: %w", z.Err())
 		}
-		quoted := string(anchor[m[4]:m[5]])
-		raw := quoted[1 : len(quoted)-1]
-		mapped, keep := l.mapLink(html.UnescapeString(raw))
-		if !keep {
-			return nil
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			out.Write(z.Raw())
+			continue
 		}
-		if mapped == html.UnescapeString(raw) {
-			return anchor
+		raw := append([]byte(nil), z.Raw()...)
+		tok := z.Token()
+		switch tok.Data {
+		case "base":
+			continue
+		case "a":
+			keep := true
+			for i, attr := range tok.Attr {
+				if attr.Namespace != "" || attr.Key != "href" {
+					continue
+				}
+				mapped, ok := l.mapLink(attr.Val)
+				if !ok {
+					keep = false
+					continue
+				}
+				tok.Attr[i].Val = mapped
+			}
+			// Always re-rendered, never copied raw: the tokenizer keeps the
+			// first of duplicate attributes (as browsers do) while pip keeps
+			// the last, so only a re-rendered tag is guaranteed to carry the
+			// one href that was checked. A dropped anchor's text and </a>
+			// stay; without an href they link nowhere.
+			if keep {
+				out.WriteString(tok.String())
+			}
+		default:
+			out.Write(raw)
 		}
-		var b strings.Builder
-		b.Write(anchor[:m[2]])
-		b.Write(anchor[m[2]:m[3]]) // "href="
-		b.WriteString(`"` + html.EscapeString(mapped) + `"`)
-		b.Write(anchor[m[5]:])
-		return []byte(b.String())
-	})
+	}
 }
 
 // jsonSimple rewrites a PEP 691 project page: files[].url.

@@ -132,6 +132,15 @@ type IndexRewriter interface {
 	RewriteIndex(doc []byte, contentType, requestPath string) (IndexRewrite, error)
 }
 
+// ArtifactPathMatcher is an optional RegistryAdapter capability: recognising a
+// request path as an artifact download even when NormalizeRequest cannot name
+// the package and version in it. The handler refuses such a request instead
+// of proxying it transparently, since an artifact it cannot name is an
+// artifact no gate can check.
+type ArtifactPathMatcher interface {
+	IsArtifactPath(r *http.Request) bool
+}
+
 // IndexRewrite is a rewritten index document.
 type IndexRewrite struct {
 	Body []byte

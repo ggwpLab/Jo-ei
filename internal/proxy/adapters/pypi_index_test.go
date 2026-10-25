@@ -125,3 +125,82 @@ func TestRewriteIndex_MalformedJSONErrors(t *testing.T) {
 	_, err := NewPyPIAdapter([]string{"https://pypi.org"}).RewriteIndex([]byte("{"), pep691, "/simple/x/")
 	assert.Error(t, err)
 }
+
+// Links that Go's URL parser and pip (urllib) or uv (WHATWG) read differently,
+// or that slip past a naive attribute match, must be dropped: only a link that
+// positively resolves to the proxy's /packages/ route may survive.
+func TestRewriteIndex_DropsParserDifferentialLinks(t *testing.T) {
+	ok := `<a href="https://files.pythonhosted.org/packages/a/ok-1.0.whl">ok</a>`
+	for name, anchor := range map[string]string{
+		"leading space":           `<a href=" https://evil.example/x-1.0.tar.gz">x</a>`,
+		"leading newline entity":  `<a href="&#10;https://evil.example/x-1.0.tar.gz">x</a>`,
+		"tab inside scheme":       `<a href="ht&#9;tps://evil.example/x-1.0.tar.gz">x</a>`,
+		"backslashes":             `<a href="https:\evil.example\x-1.0.tar.gz">x</a>`,
+		"single slash":            `<a href="https:/evil.example/x-1.0.tar.gz">x</a>`,
+		"no slash":                `<a href="https:evil.example/x-1.0.tar.gz">x</a>`,
+		"single slash packages":   `<a href="https:/packages/x-1.0.tar.gz">x</a>`,
+		"unquoted":                `<a href=https://evil.example/x-1.0.tar.gz>x</a>`,
+		"data-href decoy":         `<a data-href="https://files.pythonhosted.org/packages/a/ok.whl" href="https://evil.example/x-1.0.tar.gz">x</a>`,
+		"dot-dot out of packages": `<a href="https://files.pythonhosted.org/packages/../evil/x-1.0.tar.gz">x</a>`,
+		"relative outside":        `<a href="../../root/pypi/+f/ab/x-1.0.tar.gz">x</a>`,
+		"unclosed after good":     `<a href="https://evil.example/x-1.0.tar.gz">x`,
+	} {
+		body, dropped, _ := rewrite(t, ok+anchor, "text/html", "/simple/x/")
+		assert.NotContains(t, body, "evil", name)
+		assert.NotContains(t, body, "+f/", name)
+		assert.NotEmpty(t, dropped, name)
+		assert.Contains(t, body, `href="../../packages/a/ok-1.0.whl"`, name)
+	}
+}
+
+func TestRewriteIndex_JSONLeadingWhitespaceDropped(t *testing.T) {
+	doc := `{"files":[{"filename":"x.tar.gz","url":" https://evil.example/x.tar.gz"}]}`
+	body, dropped, _ := rewrite(t, doc, pep691, "/simple/x/")
+	assert.NotContains(t, body, "evil")
+	assert.Len(t, dropped, 1)
+}
+
+func TestRewriteIndex_ContentTypeCaseInsensitive(t *testing.T) {
+	doc := `{"files":[{"filename":"x.whl","url":"https://files.pythonhosted.org/packages/a/x.whl"}]}`
+	body, _, n := rewrite(t, doc, "Application/VND.PYPI.SIMPLE.V1+JSON; charset=utf-8", "/simple/x/")
+	assert.Contains(t, body, `"../../packages/a/x.whl"`)
+	assert.Equal(t, 1, n)
+}
+
+func TestRewriteIndex_UnknownContentTypeErrors(t *testing.T) {
+	_, err := NewPyPIAdapter([]string{"https://pypi.org"}).RewriteIndex([]byte("x"), "application/octet-stream", "/simple/x/")
+	assert.Error(t, err)
+}
+
+func TestRewriteIndex_PercentEncodedPackagesPath(t *testing.T) {
+	body, _, n := rewrite(t, `<a href="https://h.example/%70ackages/a/x.whl">x</a>`, "text/html", "/simple/x/")
+	assert.Contains(t, body, `href="../../packages/a/x.whl"`)
+	assert.Equal(t, 1, n)
+}
+
+func TestIsIndexRequest_TrailingSlashJSONAPI(t *testing.T) {
+	a := NewPyPIAdapter([]string{"https://pypi.org"})
+	assert.True(t, a.IsIndexRequest(httptest.NewRequest("GET", "/pypi/x/json/", nil)))
+	assert.True(t, a.IsIndexRequest(httptest.NewRequest("GET", "/pypi/x/1.0/json/", nil)))
+}
+
+func TestParsePyPIFilename_AllSdistExtensions(t *testing.T) {
+	for _, f := range []string{"foo-1.0.tar.gz", "foo-1.0.TAR.GZ", "foo-1.0.tar.bz2", "foo-1.0.tgz",
+		"foo-1.0.tar.xz", "foo-1.0.tar", "foo-1.0.zip", "foo-1.0-py3-none-any.whl", "foo-1.0-py3.8.egg"} {
+		name, version, ok := parsePyPIFilename(f)
+		assert.True(t, ok, f)
+		assert.Equal(t, "foo", name, f)
+		assert.Equal(t, "1.0", version, f)
+	}
+}
+
+// pip keeps the last of duplicate href attributes; the served tag must carry
+// exactly one, the checked one.
+func TestRewriteIndex_DuplicateHrefCollapsed(t *testing.T) {
+	for _, first := range []string{"https://files.pythonhosted.org/packages/a/ok.whl", "../../packages/a/ok.whl"} {
+		doc := `<a href="` + first + `" href="https://evil.example/x-1.0.tar.gz">x</a>`
+		body, _, _ := rewrite(t, doc, "text/html", "/simple/x/")
+		assert.NotContains(t, body, "evil", first)
+		assert.Equal(t, 1, strings.Count(body, "href="), first)
+	}
+}

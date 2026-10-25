@@ -699,6 +699,7 @@ func TestHandler_TransparentProxyFallsBackToSecondUpstream(t *testing.T) {
 	}))
 	defer down.Close()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("simple-index-html"))
 	}))

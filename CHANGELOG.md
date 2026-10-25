@@ -20,7 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot rewrite (unparseable, undecodable, over 64 MB) is answered with
   `502 index_rewrite_failed` instead of being served as-is, and client
   validators are no longer forwarded upstream, so a page cached before the
-  upgrade cannot be revalidated back into use.
+  upgrade cannot be revalidated back into use. Only links that resolve to
+  `/packages/` survive — anything another parser might read differently
+  (stray whitespace, backslashes, `https:/host`, duplicate `href`) is dropped.
+  The JSON API now carries relative URLs too, so scripts that pass its `url`
+  straight to an HTTP client must resolve it against the request URL.
+- **Unrecognized PyPI files are refused instead of passed through.** A
+  download under `/pypi/packages/` whose filename names no package and version
+  was proxied transparently, around every gate; it now gets `403
+  unrecognized_artifact`. All sdist formats pip accepts (`.tar.bz2`, `.tgz`,
+  `.tar.xz`, …) and upper-case extensions are now recognized and gated.
 
 ### Changed
 

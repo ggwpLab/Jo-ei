@@ -36,6 +36,9 @@ func (h *Handler) proxyIndex(w http.ResponseWriter, r *http.Request, rw gate.Ind
 	outbound.Header.Del("If-None-Match")
 	outbound.Header.Del("If-Modified-Since")
 	outbound.Header.Set("Accept-Encoding", "gzip")
+	// A partial response is a slice of a document that cannot be rewritten.
+	outbound.Header.Del("Range")
+	outbound.Header.Del("If-Range")
 
 	resp, atts, err := h.forwardUpstream(outbound)
 	if resp == nil {
@@ -45,6 +48,12 @@ func (h *Handler) proxyIndex(w http.ResponseWriter, r *http.Request, rw gate.Ind
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode < 300 && resp.StatusCode != http.StatusNoContent {
+			// Another 2xx (203, 206, ...) may carry document bytes this path
+			// does not rewrite.
+			h.failIndex(w, log.Error().Int("status", resp.StatusCode), "unexpected upstream index status")
+			return
+		}
 		// No document to rewrite (a redirect, 204, ...): relay as-is.
 		copyProxyHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
