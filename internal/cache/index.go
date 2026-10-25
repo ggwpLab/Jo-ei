@@ -49,7 +49,9 @@ func NewIndex(path string) (*Index, error) {
 	}
 	db.SetMaxOpenConns(1) // SQLite: single writer
 	// busy_timeout first, so switching the journal mode tolerates brief
-	// contention too; WAL lets readers proceed while eviction writes.
+	// contention too. WAL keeps another process's reads (a backup, an
+	// operator's sqlite3) from blocking this one's writes; within the process
+	// the single connection serializes anyway.
 	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL"} {
 		if _, err := db.Exec(pragma); err != nil {
 			_ = db.Close()

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -475,25 +477,56 @@ func (s slowScanner) ScanImage(ctx context.Context, ref string) (*ImageScanResul
 	return s.stubScanner.ScanImage(ctx, ref)
 }
 
+// syncRec is a recorder safe for events recorded from a background scan.
+type syncRec struct {
+	mu     sync.Mutex
+	events []gate.Event
+}
+
+func (r *syncRec) Record(e gate.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+}
+
+// waitFor polls until an event matching ok is recorded.
+func (r *syncRec) waitFor(t *testing.T, ok func(gate.Event) bool) gate.Event {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		for _, e := range r.events {
+			if ok(e) {
+				r.mu.Unlock()
+				return e
+			}
+		}
+		r.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no matching event recorded; got %+v", r.events)
+	return gate.Event{}
+}
+
+func slowHandler(t *testing.T, sc ImageScanner, rec gate.Recorder) (http.Handler, string, string) {
+	t.Helper()
+	srvURL, repo, ref := newGateTestServer(t)
+	return New(HandlerDeps{
+		Upstreams: []string{srvURL}, Scanner: sc, AV: stubAV{}, Filter: allowFilter{},
+		Policy: findingPolicy{}, Cache: newFakeCache(), Recorder: rec, Logger: zerolog.Nop(),
+		ClientWait: 50 * time.Millisecond,
+	}), repo, ref
+}
+
 // containerd gives up after 30 s without response headers. A first scan that
 // takes longer is answered with 503 + Retry-After instead, while the scan
 // keeps running; the retry is served from its verdict.
 func TestHandlerSlowGateAnswersRetryLater(t *testing.T) {
-	srvURL, repo, ref := newGateTestServer(t)
-	h := New(HandlerDeps{
-		Upstreams:  []string{srvURL},
-		Scanner:    slowScanner{d: 300 * time.Millisecond},
-		AV:         stubAV{},
-		Filter:     allowFilter{},
-		Policy:     findingPolicy{},
-		Cache:      newFakeCache(),
-		Recorder:   &recspy{},
-		Logger:     zerolog.Nop(),
-		ClientWait: 50 * time.Millisecond,
-	})
+	h, repo, ref := slowHandler(t, slowScanner{d: 300 * time.Millisecond}, &syncRec{})
+	path := "/" + repo + "/manifests/" + ref
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("first request status = %d, want 503", w.Code)
 	}
@@ -501,10 +534,41 @@ func TestHandlerSlowGateAnswersRetryLater(t *testing.T) {
 		t.Error("503 must carry Retry-After")
 	}
 
-	time.Sleep(500 * time.Millisecond) // the scan finishes in the background
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("retry status = %d, want 200 from the finished scan", w.Code)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code == http.StatusOK {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retry status = %d, want 200 once the scan finished", w.Code)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// The client got a 503, but the scan's real outcome — here a block with its
+// CVE list — must still reach the feed.
+func TestHandlerSlowGateRecordsRealVerdict(t *testing.T) {
+	rec := &syncRec{}
+	finding := gate.CVEFinding{ID: "CVE-2026-1", Severity: gate.SeverityHigh}
+	h, repo, ref := slowHandler(t, slowScanner{stubScanner: stubScanner{findings: []gate.CVEFinding{finding}}, d: 200 * time.Millisecond}, rec)
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+
+	ev := rec.waitFor(t, func(e gate.Event) bool { return e.Verdict == gate.VerdictBlock })
+	if len(ev.CVEs) != 1 || ev.CVEs[0].ID != "CVE-2026-1" {
+		t.Errorf("block event CVEs = %+v, want the finding", ev.CVEs)
+	}
+}
+
+// A background scan that fails must not vanish behind "scan in progress".
+func TestHandlerSlowGateRecordsBackgroundError(t *testing.T) {
+	rec := &syncRec{}
+	h, repo, ref := slowHandler(t, slowScanner{stubScanner: stubScanner{err: errors.New("trivy timeout")}, d: 200 * time.Millisecond}, rec)
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+
+	rec.waitFor(t, func(e gate.Event) bool { return e.Verdict == gate.VerdictError && e.Reason == "gate_error" })
 }
