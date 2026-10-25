@@ -32,7 +32,13 @@ type Config struct {
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional
 	// (see proxy.HandlerConfig.Throttles).
 	Throttles upstream.ThrottleLookup
+	// ClientWait bounds how long a manifest request waits for the gate
+	// (0 = until it answers); see HandlerDeps.ClientWait.
+	ClientWait time.Duration
 }
+
+// scanInProgressRetryAfter is the Retry-After sent while a first scan runs.
+const scanInProgressRetryAfter = 30 * time.Second
 
 // Handler implements the Docker Registry V2 pull-through flow.
 type Handler struct {
@@ -68,7 +74,16 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	start := time.Now()
 	log := logx.Logger(r.Context(), h.log).With().Str("package", pp.Repo).Str("version", pp.Reference).Logger()
 
-	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
+	digest, v, err, done := h.evaluate(r, pp)
+	if !done {
+		// The scan is still running (it carries on and caches its verdict);
+		// answer before the client's own header timeout cuts the connection.
+		log.Info().Dur("waited", h.cfg.ClientWait).Msg("image scan still running; asking the client to retry")
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "scan_in_progress", http.StatusServiceUnavailable, start, nil)
+		httpx.SetRetryAfter(w.Header(), scanInProgressRetryAfter)
+		h.writeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "image scan in progress; retry shortly")
+		return
+	}
 	if err != nil {
 		atts, hasAtts := upstream.AttemptsFrom(err)
 		// Every mirror answered 404/410 for the manifest: it does not exist (a
@@ -174,6 +189,36 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	}
 	if recordPass {
 		h.record(log, requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
+	}
+}
+
+// evaluate runs the manifest gate. With ClientWait set it waits at most that
+// long: done=false means the gate is still working. The gate then runs on a
+// context detached from the request, so the client hanging up after the 503
+// does not abort the scan its retry will be served from.
+func (h *Handler) evaluate(r *http.Request, pp ParsedPath) (digest string, v GateVerdict, err error, done bool) {
+	if h.cfg.ClientWait <= 0 {
+		digest, v, err = h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
+		return digest, v, err, true
+	}
+	type result struct {
+		digest string
+		v      GateVerdict
+		err    error
+	}
+	ch := make(chan result, 1)
+	ctx := context.WithoutCancel(r.Context())
+	go func() {
+		d, gv, gerr := h.cfg.Gate.Evaluate(ctx, pp.Repo, pp.Reference)
+		ch <- result{d, gv, gerr}
+	}()
+	timer := time.NewTimer(h.cfg.ClientWait)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res.digest, res.v, res.err, true
+	case <-timer.C:
+		return "", GateVerdict{}, nil, false
 	}
 }
 
@@ -321,6 +366,11 @@ type HandlerDeps struct {
 	HTTPClient *http.Client
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional.
 	Throttles upstream.ThrottleLookup
+	// ClientWait bounds how long a manifest request waits for the image gate
+	// before answering 503 + Retry-After while the scan carries on (0 = wait
+	// for the verdict). containerd gives up after 30 s without response
+	// headers, and a first scan of a large image takes minutes.
+	ClientWait time.Duration
 	// TempDir holds layers and manifests while they are checked. Empty uses
 	// os.TempDir(); point it at the cache volume so multi-GB layers do not
 	// land on the container's root filesystem.
@@ -337,5 +387,5 @@ func New(d HandlerDeps) http.Handler {
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, tempDir: d.TempDir, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Attest: newAttestationBlobs(0), Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
+	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Attest: newAttestationBlobs(0), Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles, ClientWait: d.ClientWait})
 }

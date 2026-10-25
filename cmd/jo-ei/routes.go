@@ -77,6 +77,7 @@ func buildProxyRoutes(cfg *config.Config, shared sharedDeps, sc scanners, up ups
 			Throttles:     up.breaker,
 			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 			TempDir:       shared.tempDir,
+			ClientWait:    time.Duration(cfg.ImageScan.ClientWaitSeconds) * time.Second,
 		})
 	}
 	if len(r.handlers) == 0 && len(r.raw) == 0 {

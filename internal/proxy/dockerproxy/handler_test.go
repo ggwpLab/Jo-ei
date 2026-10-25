@@ -463,3 +463,48 @@ func TestHandlerLayersBufferedInTempDir(t *testing.T) {
 		}
 	}
 }
+
+// slowScanner takes d to scan, standing in for a multi-minute first scan.
+type slowScanner struct {
+	stubScanner
+	d time.Duration
+}
+
+func (s slowScanner) ScanImage(ctx context.Context, ref string) (*ImageScanResult, error) {
+	time.Sleep(s.d)
+	return s.stubScanner.ScanImage(ctx, ref)
+}
+
+// containerd gives up after 30 s without response headers. A first scan that
+// takes longer is answered with 503 + Retry-After instead, while the scan
+// keeps running; the retry is served from its verdict.
+func TestHandlerSlowGateAnswersRetryLater(t *testing.T) {
+	srvURL, repo, ref := newGateTestServer(t)
+	h := New(HandlerDeps{
+		Upstreams:  []string{srvURL},
+		Scanner:    slowScanner{d: 300 * time.Millisecond},
+		AV:         stubAV{},
+		Filter:     allowFilter{},
+		Policy:     findingPolicy{},
+		Cache:      newFakeCache(),
+		Recorder:   &recspy{},
+		Logger:     zerolog.Nop(),
+		ClientWait: 50 * time.Millisecond,
+	})
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first request status = %d, want 503", w.Code)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Error("503 must carry Retry-After")
+	}
+
+	time.Sleep(500 * time.Millisecond) // the scan finishes in the background
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+repo+"/manifests/"+ref, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200 from the finished scan", w.Code)
+	}
+}

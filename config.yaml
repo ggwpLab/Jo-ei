@@ -88,6 +88,11 @@ image_scan:
   timeout_seconds: 120
   scanners: "vuln,secret"
   max_layer_bytes: 2147483648   # 2 GB; a larger layer fails closed (blocks the image)
+  # A first pull is gated before the manifest is answered, which for a large
+  # image takes minutes; containerd gives up after 30 s without a response.
+  # After this many seconds the proxy answers 503 + Retry-After instead and
+  # keeps scanning — retry the pull once the scan is done. 0 = always wait.
+  client_wait_seconds: 25
 
 malware:
   # Cap simultaneous scans so download bursts don't overwhelm the engines'

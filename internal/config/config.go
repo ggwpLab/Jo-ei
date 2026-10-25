@@ -318,6 +318,11 @@ type ImageScanConfig struct {
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 120
 	Scanners       string `mapstructure:"scanners"`        // trivy --scanners value, default "vuln,secret"
 	MaxLayerBytes  int64  `mapstructure:"max_layer_bytes"` // layer larger than this → fail-closed
+	// ClientWaitSeconds bounds how long a Docker manifest request waits for
+	// the image gate before answering 503 + Retry-After while the scan
+	// continues. Default 25, under containerd's 30 s header timeout; 0 waits
+	// for the verdict.
+	ClientWaitSeconds int `mapstructure:"client_wait_seconds"`
 }
 
 // MalwareConfig configures the malware-scanning engines run after download.
@@ -399,6 +404,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("server.metadata_filter_max_mb", 32)
 	v.SetDefault("server.shutdown_timeout_seconds", 30)
 	v.SetDefault("server.max_artifact_mb", 2048)
+	v.SetDefault("image_scan.client_wait_seconds", 25)
 	v.SetDefault("metrics.enabled", true)
 	v.SetDefault("metrics.listen", ":9464")
 	v.SetDefault("metrics.path", "/metrics")

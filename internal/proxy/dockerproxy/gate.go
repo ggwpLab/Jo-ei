@@ -493,7 +493,7 @@ func (g *manifestGate) evictBlobs(ctx context.Context, manifestBody []byte) {
 // OCI manifests omit it). Callers must not serve a manifest with a guessed
 // content type — "" means "fetch instead".
 func manifestMediaType(path string) string {
-	body, err := os.ReadFile(path) // #nosec G304 -- path comes from the verdict store, inside the cache root
+	body, err := os.ReadFile(path) // #nosec G304 G703 -- path comes from the verdict store, inside the cache root
 	if err != nil {
 		return ""
 	}
