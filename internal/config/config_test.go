@@ -867,3 +867,14 @@ func TestLoad_NonKeyEnvAllowed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, cfg.UnknownEnv)
 }
+
+func TestConfig_MaxArtifactDefault(t *testing.T) {
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	assert.Equal(t, 2048, cfg.Server.MaxArtifactMB)
+}
+
+func TestConfig_MaxArtifactNegativeRejected(t *testing.T) {
+	_, err := config.Load(writeTempConfig(t, "server:\n  listen: \":8080\"\n  max_artifact_mb: -1\ndatabase:\n  path: \"/tmp/x.db\"\n"))
+	require.Error(t, err)
+}

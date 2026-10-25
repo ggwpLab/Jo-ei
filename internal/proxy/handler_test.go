@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -953,4 +954,69 @@ func TestHandler_IncompleteScanBlockedNotAsMalware(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	assert.Equal(t, "scan_incomplete", body["reason"])
 	assert.NotEqual(t, "malware_found", body["reason"])
+}
+
+// bigArtifactUpstream serves pypi metadata for flask 3.0.0 (published 48 h ago)
+// and a wheel of size bytes, with or without a Content-Length.
+func bigArtifactUpstream(t *testing.T, size int, withLength bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/pypi/flask/3.0.0/json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"info": map[string]any{"name": "flask", "version": "3.0.0"},
+				"urls": []map[string]any{{"upload_time_iso_8601": time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)}},
+			})
+			return
+		}
+		body := bytes.Repeat([]byte("w"), size)
+		if withLength {
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+		} else {
+			w.(http.Flusher).Flush() // forces chunked encoding: no length up front
+		}
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func cappedProxy(t *testing.T, upstream *httptest.Server, max int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(proxy.NewHandler(proxy.HandlerConfig{
+		Adapter:          adapters.NewPyPIAdapter([]string{upstream.URL}),
+		Filter:           supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
+		Cache:            newFakeCache(),
+		Logger:           zerolog.Nop(),
+		MaxArtifactBytes: max,
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func getWheel(t *testing.T, srv *httptest.Server) (int, map[string]any) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/packages/py3/f/flask/flask-3.0.0-py3-none-any.whl")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return resp.StatusCode, body
+}
+
+func TestHandler_ArtifactOverCapByContentLength(t *testing.T) {
+	code, body := getWheel(t, cappedProxy(t, bigArtifactUpstream(t, 2<<20, true), 1<<20))
+	assert.Equal(t, http.StatusForbidden, code)
+	assert.Equal(t, "artifact_too_large", body["reason"])
+}
+
+func TestHandler_ArtifactOverCapStreamed(t *testing.T) {
+	code, body := getWheel(t, cappedProxy(t, bigArtifactUpstream(t, 2<<20, false), 1<<20))
+	assert.Equal(t, http.StatusForbidden, code)
+	assert.Equal(t, "artifact_too_large", body["reason"])
+}
+
+func TestHandler_ArtifactCapZeroUnlimited(t *testing.T) {
+	code, _ := getWheel(t, cappedProxy(t, bigArtifactUpstream(t, 2<<20, true), 0))
+	assert.Equal(t, http.StatusOK, code)
 }

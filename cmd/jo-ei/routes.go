@@ -42,6 +42,8 @@ type sharedDeps struct {
 	metadataFilterMaxMB int
 	// tempDir holds downloads while they are checked (on the cache volume).
 	tempDir string
+	// maxArtifactBytes caps a package artifact download (0 = unlimited).
+	maxArtifactBytes int64
 }
 
 // proxyRoutes are the registry handlers keyed by URL prefix: package
@@ -56,6 +58,10 @@ type proxyRoutes struct {
 // configured.
 func buildProxyRoutes(cfg *config.Config, shared sharedDeps, sc scanners, up upstreamClients, policyRuntime *policy.Runtime, artifactCache cache.Cache, mx *metrics.Metrics) (proxyRoutes, error) {
 	r := proxyRoutes{handlers: buildHandlers(cfg, shared), raw: map[string]http.Handler{}}
+	if cfg.Registries.Docker.Enabled && sc.trivy == nil {
+		shared.logger.Warn().Str("component", "server").
+			Msg("docker registry enabled but image_scan is disabled; /v2/ is not served")
+	}
 	if cfg.Registries.Docker.Enabled && sc.trivy != nil {
 		r.raw["v2"] = dockerproxy.New(dockerproxy.HandlerDeps{
 			Upstreams:     cfg.Registries.Docker.Upstreams,
@@ -71,6 +77,7 @@ func buildProxyRoutes(cfg *config.Config, shared sharedDeps, sc scanners, up ups
 			Throttles:     up.breaker,
 			RecheckTTL:    minEnabledTTL(shared.cveRecheckTTL, shared.malwareRecheckTTL),
 			TempDir:       shared.tempDir,
+			ClientWait:    time.Duration(cfg.ImageScan.ClientWaitSeconds) * time.Second,
 		})
 	}
 	if len(r.handlers) == 0 && len(r.raw) == 0 {
@@ -167,5 +174,6 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
 		TempDir:             shared.tempDir,
+		MaxArtifactBytes:    shared.maxArtifactBytes,
 	})
 }

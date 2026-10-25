@@ -105,6 +105,7 @@ func run(ctx context.Context, cfgPath string) error {
 		malwareRecheckTTL:   time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
 		metadataFilterMaxMB: cfg.Server.MetadataFilterMaxMB,
 		tempDir:             st.tempDir,
+		maxArtifactBytes:    int64(cfg.Server.MaxArtifactMB) << 20,
 	}
 
 	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {

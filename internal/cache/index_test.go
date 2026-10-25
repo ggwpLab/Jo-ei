@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -211,4 +212,20 @@ func TestIndex_LRUCandidates(t *testing.T) {
 	require.Len(t, candidates, 2)
 	assert.Equal(t, "a", candidates[0].Name)
 	assert.Equal(t, "b", candidates[1].Name)
+}
+
+// WAL lets the console's stats reads proceed while eviction writes, and the
+// journal mode persists in the file, so a second connection sees it.
+func TestNewIndex_UsesWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	idx, err := cache.NewIndex(path)
+	require.NoError(t, err)
+	defer idx.Close()
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	defer db.Close()
+	var mode string
+	require.NoError(t, db.QueryRow("PRAGMA journal_mode").Scan(&mode))
+	assert.Equal(t, "wal", mode)
 }

@@ -64,6 +64,8 @@ process exits non-zero.
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
+| `max_artifact_mb` | `2048` | Largest package artifact (MB) the proxy downloads; a larger one is refused with `403 artifact_too_large`. `0` = unlimited. Docker layers use `image_scan.max_layer_bytes`. |
+| `shutdown_timeout_seconds` | `30` | How long a stopping server drains in-flight requests before closing the rest. |
 | `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 
@@ -234,6 +236,7 @@ from the same active policy profile as package CVE decisions.
 | `timeout_seconds` | `120` | Per-scan timeout. |
 | `scanners` | `vuln,secret` | Passed to Trivy `--scanners`. |
 | `max_layer_bytes` | `0` (no limit) | Layers larger than this fail closed (block the image). The example config uses 2 GiB. |
+| `client_wait_seconds` | `25` | How long a manifest request waits for a first scan before answering `503` + `Retry-After` while the scan continues (containerd gives up after 30 s). `0` = wait for the verdict. |
 
 ## `malware`
 

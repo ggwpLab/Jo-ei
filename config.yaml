@@ -12,6 +12,12 @@ server:
   # one the policy allows instead of failing the whole install. Default 32
   # when unset; set to 0 to disable metadata filtering entirely.
   metadata_filter_max_mb: 32
+  # Largest package artifact (wheel, tarball, jar, gem, module zip) the proxy
+  # downloads, in MB; a larger one is refused with 403 artifact_too_large
+  # before it can fill the cache volume. Default 2048 — the ClamAV stream limit
+  # the compose file sets, so anything bigger could not be scanned anyway.
+  # 0 = unlimited. (Docker layers use image_scan.max_layer_bytes.)
+  max_artifact_mb: 2048
   # Seconds a stopping server waits for in-flight requests (a gated download
   # can take a while) before closing the rest. Keep it below the container's
   # stop grace period (docker-compose.yaml: stop_grace_period). Default 30.
@@ -82,6 +88,11 @@ image_scan:
   timeout_seconds: 120
   scanners: "vuln,secret"
   max_layer_bytes: 2147483648   # 2 GB; a larger layer fails closed (blocks the image)
+  # A first pull is gated before the manifest is answered, which for a large
+  # image takes minutes; containerd gives up after 30 s without a response.
+  # After this many seconds the proxy answers 503 + Retry-After instead and
+  # keeps scanning — retry the pull once the scan is done. 0 = always wait.
+  client_wait_seconds: 25
 
 malware:
   # Cap simultaneous scans so download bursts don't overwhelm the engines'

@@ -83,6 +83,9 @@ func (c *Config) Validate() error {
 	if c.Malware.MaxConcurrentScans < 0 {
 		return fmt.Errorf("malware.max_concurrent_scans must not be negative")
 	}
+	if c.Server.MaxArtifactMB < 0 {
+		return fmt.Errorf("server.max_artifact_mb: must be >= 0 (0 = unlimited), got %d", c.Server.MaxArtifactMB)
+	}
 	if c.Server.MetadataFilterMaxMB < 0 {
 		return fmt.Errorf("server.metadata_filter_max_mb must not be negative")
 	}
@@ -174,6 +177,9 @@ type ServerConfig struct {
 	// ShutdownTimeoutSeconds bounds how long a stopping server drains
 	// in-flight requests before closing the rest. Default 30.
 	ShutdownTimeoutSeconds int `mapstructure:"shutdown_timeout_seconds"`
+	// MaxArtifactMB caps a package artifact download (0 = unlimited). Default
+	// 2048, the ClamAV stream limit the compose file ships.
+	MaxArtifactMB int `mapstructure:"max_artifact_mb"`
 	// TrustedProxies lists the reverse proxies (CIDRs or bare IPs) whose
 	// forwarding header is believed when resolving the client IP. Empty (the
 	// default) means no header is trusted and the TCP peer address is used.
@@ -312,6 +318,11 @@ type ImageScanConfig struct {
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // default 120
 	Scanners       string `mapstructure:"scanners"`        // trivy --scanners value, default "vuln,secret"
 	MaxLayerBytes  int64  `mapstructure:"max_layer_bytes"` // layer larger than this → fail-closed
+	// ClientWaitSeconds bounds how long a Docker manifest request waits for
+	// the image gate before answering 503 + Retry-After while the scan
+	// continues. Default 25, under containerd's 30 s header timeout; 0 waits
+	// for the verdict.
+	ClientWaitSeconds int `mapstructure:"client_wait_seconds"`
 }
 
 // MalwareConfig configures the malware-scanning engines run after download.
@@ -392,6 +403,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.metadata_filter_max_mb", 32)
 	v.SetDefault("server.shutdown_timeout_seconds", 30)
+	v.SetDefault("server.max_artifact_mb", 2048)
+	v.SetDefault("image_scan.client_wait_seconds", 25)
 	v.SetDefault("metrics.enabled", true)
 	v.SetDefault("metrics.listen", ":9464")
 	v.SetDefault("metrics.path", "/metrics")

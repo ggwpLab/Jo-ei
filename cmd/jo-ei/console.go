@@ -73,18 +73,18 @@ func buildRootHandler(d consoleDeps, proxyMux http.Handler) (http.Handler, error
 	root := http.NewServeMux()
 	// Public site icon: browsers auto-probe /favicon.ico on every page load, so
 	// serve it before the auth-gated routes and outside the proxy mux.
-	root.Handle("/favicon.ico", web.FaviconHandler())
+	root.Handle("/favicon.ico", securityHeaders(web.FaviconHandler()))
 	// The console shell is public: the login screen has to render before a
 	// session exists, and the bundle is UI code with no secrets in it. Every
 	// byte of data still comes from /api/, which stays gated.
-	root.Handle("/console/", web.ConsoleHandler())
+	root.Handle("/console/", securityHeaders(web.ConsoleHandler()))
 	// Readiness sits beside the proxy's /health and, like it, is public: a
 	// container healthcheck or load balancer probes it without a session.
 	root.Handle("/ready", readinessHandler(d.db.SQL(), d.health.Snapshot))
 	// Session endpoints sit outside the middleware — a client with no session
 	// must be able to reach login. ServeMux prefers the longer pattern, so
 	// /api/auth/* lands here and everything else under /api/ stays gated.
-	root.Handle("/api/auth/", sessions.Handler())
+	root.Handle("/api/auth/", securityHeaders(sessions.Handler()))
 	// The console needs the effective staleness threshold (mirrors the default
 	// cache.New applies) and, when the backend supports it, on-demand purge.
 	staleDays := cfg.Cache.Local.StaleAfterDays
@@ -96,7 +96,7 @@ func buildRootHandler(d consoleDeps, proxyMux http.Handler) (http.Handler, error
 		cachePurger = p
 	}
 	runningRegistries := registryInfo(cfg)
-	root.Handle("/api/", sessions.Middleware(console.NewHandler(console.Config{
+	root.Handle("/api/", securityHeaders(sessions.Middleware(console.NewHandler(console.Config{
 		Store:               d.store,
 		Broadcaster:         d.broadcaster,
 		Policy:              d.policy,
@@ -111,7 +111,30 @@ func buildRootHandler(d consoleDeps, proxyMux http.Handler) (http.Handler, error
 		Health:              d.health,
 		Users:               userStore,
 		Logger:              d.logger,
-	})))
+	}))))
 	root.Handle("/", proxyMux)
 	return root, nil
+}
+
+// consoleCSP allows exactly what the console shell loads: its own scripts and
+// styles, Google Fonts, inline styles (React sets them as DOM properties), and
+// same-origin API calls; nothing may frame it.
+const consoleCSP = "default-src 'self'; script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
+	"img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; " +
+	"form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders adds browser-hardening headers to the console and its API:
+// a content security policy, no MIME sniffing, no framing (clickjacking), no
+// referrer. Registry routes are not wrapped — their clients are package
+// managers, not browsers.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", consoleCSP)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }

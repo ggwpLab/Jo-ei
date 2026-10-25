@@ -290,3 +290,29 @@ func TestRunProxy_FailsOnUnknownEnv(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "JOEI_CACHE_LOCAL_MAX_SIZE_G")
 }
+
+// The console shell and API carry browser-hardening headers; registry traffic
+// (clients are package managers, not browsers) is left alone.
+func TestConsoleSecurityHeaders(t *testing.T) {
+	proxyAddr := freeAddr(t)
+	stop := startRun(t, writeTestConfig(t, proxyAddr, "metrics:\n  enabled: false\n"))
+	defer func() { require.NoError(t, stop()) }()
+	code, _ := get(t, "http://"+proxyAddr+"/health")
+	require.Equal(t, http.StatusOK, code)
+
+	for _, path := range []string{"/console/", "/api/overview", "/favicon.ico"} {
+		resp, err := http.Get("http://" + proxyAddr + path)
+		require.NoError(t, err, path)
+		resp.Body.Close()
+		csp := resp.Header.Get("Content-Security-Policy")
+		assert.Contains(t, csp, "frame-ancestors 'none'", path)
+		assert.Contains(t, csp, "script-src 'self'", path)
+		assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"), path)
+		assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"), path)
+		assert.Equal(t, "no-referrer", resp.Header.Get("Referrer-Policy"), path)
+	}
+	resp, err := http.Get("http://" + proxyAddr + "/health")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "registry/health traffic carries no CSP")
+}

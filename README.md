@@ -459,6 +459,8 @@ whether or not the file contains the key; lists of objects and maps
 | `image_scan.timeout_seconds` | `120` | Timeout for a single image scan |
 | `image_scan.scanners` | `vuln,secret` | Comma-separated Trivy scanner types |
 | `image_scan.max_layer_bytes` | `2147483648` | Maximum layer size (bytes); larger layers fail closed |
+| `image_scan.client_wait_seconds` | `25` | Wait for a first image scan before answering `503` + `Retry-After` (scan continues) |
+| `server.max_artifact_mb` | `2048` | Largest package artifact downloaded; larger → `403 artifact_too_large` (`0` = unlimited) |
 | `policy.active_profile` | `production` | Name of the active policy profile |
 | `policy.profiles.<name>.allowlist` | `[]` | Packages that bypass CVE and age checks at boot (seeds both per-gate runtime allowlists). Format: `pypi/requests` (all versions) or `pypi/requests@2.31.0` (exact version) |
 | `policy.profiles.<name>.denylist` | `[]` | Packages always blocked regardless of scan results. Same format as `allowlist` |

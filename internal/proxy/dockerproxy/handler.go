@@ -32,7 +32,13 @@ type Config struct {
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional
 	// (see proxy.HandlerConfig.Throttles).
 	Throttles upstream.ThrottleLookup
+	// ClientWait bounds how long a manifest request waits for the gate
+	// (0 = until it answers); see HandlerDeps.ClientWait.
+	ClientWait time.Duration
 }
+
+// scanInProgressRetryAfter is the Retry-After sent while a first scan runs.
+const scanInProgressRetryAfter = 30 * time.Second
 
 // Handler implements the Docker Registry V2 pull-through flow.
 type Handler struct {
@@ -68,37 +74,26 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	start := time.Now()
 	log := logx.Logger(r.Context(), h.log).With().Str("package", pp.Repo).Str("version", pp.Reference).Logger()
 
-	digest, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
+	res, pending := h.evaluate(r, pp)
+	digest, v, err := res.digest, res.v, res.err
+	if pending != nil {
+		// The scan is still running (it carries on and caches its verdict);
+		// answer before the client's own header timeout cuts the connection,
+		// and record the scan's real outcome when it lands.
+		log.Info().Dur("waited", h.cfg.ClientWait).Msg("image scan still running; asking the client to retry")
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "scan_in_progress", http.StatusServiceUnavailable, start, nil)
+		go h.recordWhenDone(log, requestID, pp, start, pending)
+		httpx.SetRetryAfter(w.Header(), scanInProgressRetryAfter)
+		h.writeError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "image scan in progress; retry shortly")
+		return
+	}
 	if err != nil {
-		atts, hasAtts := upstream.AttemptsFrom(err)
-		// Every mirror answered 404/410 for the manifest: it does not exist (a
-		// typo'd tag, or a client's OCI referrers tag-schema fallback probe).
-		// Answer with the registry's own MANIFEST_UNKNOWN, not a 502 gate failure.
-		if errors.Is(err, errManifestNotFound) {
-			log.Warn().Array("upstream_attempts", atts).Msg("manifest not found on any upstream")
-			h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "manifest_not_found", http.StatusNotFound, start, nil)
-			h.writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
-			return
+		f := h.gateFailure(log, err)
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, f.reason, f.status, start, nil)
+		if f.retry > 0 {
+			httpx.SetRetryAfter(w.Header(), f.retry)
 		}
-		// The rest were throttled: neither proof of absence nor an outage.
-		if status, retry, ok := atts.Throttled(h.cfg.Throttles); hasAtts && ok {
-			log.Warn().Err(err).Array("upstream_attempts", atts).Msg("upstream throttled")
-			h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "upstream_throttled", status, start, nil)
-			httpx.SetRetryAfter(w.Header(), retry)
-			code := "UNAVAILABLE"
-			if status == http.StatusTooManyRequests {
-				code = "TOOMANYREQUESTS"
-			}
-			h.writeError(w, status, code, "upstream registry throttled")
-			return
-		}
-		ev := log.Error().Err(err)
-		if hasAtts {
-			ev = ev.Array("upstream_attempts", atts)
-		}
-		ev.Msg("gate error")
-		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, "gate_error", http.StatusBadGateway, start, nil)
-		h.writeError(w, http.StatusBadGateway, "UNAVAILABLE", "upstream or scan failure")
+		h.writeError(w, f.status, f.code, f.msg)
 		return
 	}
 	// Feed label: prefer the human tag over the resolved digest. A by-tag pull
@@ -108,15 +103,7 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	log = log.With().Str("digest", digest).Logger()
 
 	if !v.Allowed {
-		h.record(log, requestID, pp, gate.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *gate.Event) {
-			ev.BlockedBy = []string{v.BlockedBy}
-			ev.CVEs = v.Findings
-			ev.Version = displayVer
-			// Supply-chain holds carry these; other block reasons leave them zero
-			// (correct — only supply-chain blocks are quarantined).
-			ev.PublishedAt = v.PublishedAt
-			ev.BlockUntil = v.BlockUntil
-		})
+		h.recordBlock(log, requestID, pp, start, displayVer, v)
 		h.writeError(w, http.StatusForbidden, "DENIED", "image blocked by policy: "+v.Reason)
 		return
 	}
@@ -175,6 +162,110 @@ func (h *Handler) serveManifest(w http.ResponseWriter, r *http.Request, pp Parse
 	if recordPass {
 		h.record(log, requestID, pp, passVerdict, passGate, passReason, http.StatusOK, start, func(ev *gate.Event) { ev.Version = displayVer })
 	}
+}
+
+// gateResult is one manifest-gate evaluation.
+type gateResult struct {
+	digest string
+	v      GateVerdict
+	err    error
+}
+
+// evaluate runs the manifest gate. With ClientWait set it waits at most that
+// long; a non-nil pending channel means the gate is still working and will
+// deliver its result there. The gate then runs on a context detached from the
+// request, so the client hanging up after the 503 does not abort the scan its
+// retry will be served from. (A stopping server does not wait for it; the
+// temp files it leaves are removed at the next start.)
+func (h *Handler) evaluate(r *http.Request, pp ParsedPath) (res gateResult, pending <-chan gateResult) {
+	if h.cfg.ClientWait <= 0 {
+		d, v, err := h.cfg.Gate.Evaluate(r.Context(), pp.Repo, pp.Reference)
+		return gateResult{d, v, err}, nil
+	}
+	ch := make(chan gateResult, 1)
+	ctx := context.WithoutCancel(r.Context())
+	go func() {
+		d, gv, gerr := h.cfg.Gate.Evaluate(ctx, pp.Repo, pp.Reference)
+		ch <- gateResult{d, gv, gerr}
+	}()
+	timer := time.NewTimer(h.cfg.ClientWait)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res, nil
+	case <-timer.C:
+		return gateResult{}, ch
+	}
+}
+
+// recordWhenDone records the real outcome of a scan whose client was already
+// answered 503 "scan in progress": the first verdict (with its findings) or the
+// failure, which would otherwise surface nowhere while every retry got another
+// 503.
+func (h *Handler) recordWhenDone(log zerolog.Logger, requestID string, pp ParsedPath, start time.Time, pending <-chan gateResult) {
+	res := <-pending
+	if res.err != nil {
+		f := h.gateFailure(log, res.err)
+		h.record(log, requestID, pp, gate.VerdictError, gate.GateImageScan, f.reason, f.status, start, nil)
+		return
+	}
+	displayVer := h.displayVersion(pp, res.digest)
+	log = log.With().Str("digest", res.digest).Logger()
+	switch {
+	case !res.v.Allowed:
+		h.recordBlock(log, requestID, pp, start, displayVer, res.v)
+	case !res.v.Passthrough:
+		h.record(log, requestID, pp, gate.VerdictPass, gate.GateImageScan, res.v.Reason, http.StatusOK, start,
+			func(ev *gate.Event) { ev.Version = displayVer })
+	}
+}
+
+// gateOutcome is how a manifest-gate failure is answered and recorded.
+type gateOutcome struct {
+	status    int
+	reason    string
+	code, msg string
+	retry     time.Duration
+}
+
+// gateFailure classifies and logs an Evaluate error.
+func (h *Handler) gateFailure(log zerolog.Logger, err error) gateOutcome {
+	atts, hasAtts := upstream.AttemptsFrom(err)
+	// Every mirror answered 404/410 for the manifest: it does not exist (a
+	// typo'd tag, or a client's OCI referrers tag-schema fallback probe).
+	// Answer with the registry's own MANIFEST_UNKNOWN, not a 502 gate failure.
+	if errors.Is(err, errManifestNotFound) {
+		log.Warn().Array("upstream_attempts", atts).Msg("manifest not found on any upstream")
+		return gateOutcome{status: http.StatusNotFound, reason: "manifest_not_found", code: "MANIFEST_UNKNOWN", msg: "manifest unknown"}
+	}
+	// The rest were throttled: neither proof of absence nor an outage.
+	if status, retry, ok := atts.Throttled(h.cfg.Throttles); hasAtts && ok {
+		log.Warn().Err(err).Array("upstream_attempts", atts).Msg("upstream throttled")
+		code := "UNAVAILABLE"
+		if status == http.StatusTooManyRequests {
+			code = "TOOMANYREQUESTS"
+		}
+		return gateOutcome{status: status, reason: "upstream_throttled", code: code, msg: "upstream registry throttled", retry: retry}
+	}
+	ev := log.Error().Err(err)
+	if hasAtts {
+		ev = ev.Array("upstream_attempts", atts)
+	}
+	ev.Msg("gate error")
+	return gateOutcome{status: http.StatusBadGateway, reason: "gate_error", code: "UNAVAILABLE", msg: "upstream or scan failure"}
+}
+
+// recordBlock records a blocked image with its findings.
+func (h *Handler) recordBlock(log zerolog.Logger, requestID string, pp ParsedPath, start time.Time, displayVer string, v GateVerdict) {
+	h.record(log, requestID, pp, gate.VerdictBlock, gateForBlockedBy(v.BlockedBy), v.Reason, http.StatusForbidden, start, func(ev *gate.Event) {
+		ev.BlockedBy = []string{v.BlockedBy}
+		ev.CVEs = v.Findings
+		ev.Version = displayVer
+		// Supply-chain holds carry these; other block reasons leave them zero
+		// (correct — only supply-chain blocks are quarantined).
+		ev.PublishedAt = v.PublishedAt
+		ev.BlockUntil = v.BlockUntil
+	})
 }
 
 // displayVersion picks the feed label for a gated manifest: the human tag when
@@ -321,6 +412,11 @@ type HandlerDeps struct {
 	HTTPClient *http.Client
 	// Throttles reports upstream hosts in a post-throttle cooldown; optional.
 	Throttles upstream.ThrottleLookup
+	// ClientWait bounds how long a manifest request waits for the image gate
+	// before answering 503 + Retry-After while the scan carries on (0 = wait
+	// for the verdict). containerd gives up after 30 s without response
+	// headers, and a first scan of a large image takes minutes.
+	ClientWait time.Duration
 	// TempDir holds layers and manifests while they are checked. Empty uses
 	// os.TempDir(); point it at the cache volume so multi-GB layers do not
 	// land on the container's root filesystem.
@@ -337,5 +433,5 @@ func New(d HandlerDeps) http.Handler {
 		filter: d.Filter, policy: d.Policy, store: store, tags: tags,
 		maxLayerBytes: d.MaxLayerBytes, recheckTTL: d.RecheckTTL, tempDir: d.TempDir, logger: d.Logger,
 	})
-	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Attest: newAttestationBlobs(0), Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles})
+	return NewHandler(Config{Adapter: adapter, Gate: mgate, Store: store, Tags: tags, Attest: newAttestationBlobs(0), Recorder: d.Recorder, Logger: d.Logger, Throttles: d.Throttles, ClientWait: d.ClientWait})
 }

@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`server.max_artifact_mb`** (default 2048, the ClamAV stream limit the
+  compose file ships; `0` = unlimited) refuses a larger package artifact with
+  `403 artifact_too_large` before it can fill the cache volume.
+- **Security headers on the console and API**: a content security policy,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: no-referrer`. Registry traffic is unchanged.
 - **Readiness endpoint and healthcheck command.** `GET /ready` returns 200
   when the database answers and no attached scanner is down, and 503 with the
   failing components otherwise (`/health` still only reports that the process
@@ -98,6 +104,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A first pull of a large image no longer dies on containerd's 30 s
+  timeout.** The image is scanned before its manifest is answered, which takes
+  minutes for a large image, and containerd gave up after 30 s without
+  response headers. After `image_scan.client_wait_seconds` (default 25) the
+  proxy now answers `503` with `Retry-After` — `docker pull` reports "image
+  scan in progress; retry shortly" — while the scan carries on and caches its
+  verdict, so pulling again once it is done succeeds at once.
+- **Docker enabled without an image scanner is logged at startup.** `/v2/`
+  was silently not served.
+- **The cache index uses WAL and a busy timeout**, and the state database
+  sets its busy timeout before switching journal mode, so a second process
+  (`jo-ei backup`) opening it during a checkpoint waits instead of failing.
 - **`server.trusted_proxies` can be set from the environment.** The key was
   only commented out in `config.yaml`, and environment overrides only reach
   keys the file contains, so `JOEI_SERVER_TRUSTED_PROXIES` was silently

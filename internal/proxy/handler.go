@@ -51,6 +51,9 @@ type HandlerConfig struct {
 	// requests may return (0 = 64). An index over the cap fails the request:
 	// it cannot be served unrewritten.
 	IndexMaxMB int
+	// MaxArtifactBytes caps a downloaded artifact (0 = unlimited). A larger
+	// one is refused before it can fill the cache volume.
+	MaxArtifactBytes int64
 	// TempDir holds artifact downloads while they are checked. Empty uses
 	// os.TempDir(); point it at the cache volume so multi-GB downloads do not
 	// land on the container's root filesystem.
@@ -266,6 +269,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	tmpPath, header, atts, err := h.downloadFromUpstreams(ctx, upstreamURLs)
 	if err != nil {
+		if errors.Is(err, errArtifactTooLarge) {
+			log.Warn().Err(err).Int64("max_bytes", h.cfg.MaxArtifactBytes).Msg("artifact over the size cap")
+			record(gate.VerdictError, gate.GateCache, "artifact_too_large", http.StatusForbidden, nil)
+			h.writeError(w, requestID, ref, http.StatusForbidden, "artifact_too_large")
+			return
+		}
 		if atts.AllNotFound() {
 			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on any upstream")
 			record(gate.VerdictError, gate.GateSupply, "artifact_not_found", http.StatusNotFound, nil)
@@ -483,6 +492,10 @@ func (h *Handler) evictRechecked(ref *gate.PackageRef, log zerolog.Logger) {
 	}
 }
 
+// errArtifactTooLarge marks a download refused for exceeding
+// HandlerConfig.MaxArtifactBytes.
+var errArtifactTooLarge = errors.New("artifact exceeds the size cap")
+
 // errNoUpstreams and errUnreadableRequestBody are local failures — nothing was
 // attempted upstream — so callers answer them directly instead of reporting an
 // upstream outage.
@@ -618,14 +631,28 @@ func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, 
 		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, upstream.SanitizeURL(url))
 	}
 
+	max := h.cfg.MaxArtifactBytes
+	if max > 0 && resp.ContentLength > max {
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("%w: %d bytes", errArtifactTooLarge, resp.ContentLength)
+	}
+
 	tmp, err := os.CreateTemp(h.cfg.TempDir, "jo-ei-artifact-*")
 	if err != nil {
 		return "", resp.Header, resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
 	}
 	defer tmp.Close()
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	src := io.Reader(resp.Body)
+	if max > 0 {
+		src = io.LimitReader(resp.Body, max+1) // one byte over reveals an oversized body
+	}
+	written, err := io.Copy(tmp, src)
+	if err != nil {
 		os.Remove(tmp.Name())
 		return "", resp.Header, resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
+	}
+	if max > 0 && written > max {
+		os.Remove(tmp.Name())
+		return "", resp.Header, resp.StatusCode, fmt.Errorf("%w: over %d bytes", errArtifactTooLarge, max)
 	}
 	return tmp.Name(), resp.Header, resp.StatusCode, nil
 }
@@ -643,6 +670,10 @@ func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmp
 		path, hdr, status, derr := h.tryDownload(ctx, u)
 		if derr == nil {
 			return path, hdr, atts, nil
+		}
+		if errors.Is(derr, errArtifactTooLarge) {
+			// The same artifact is no smaller on another mirror.
+			return "", nil, atts, derr
 		}
 		atts.Add(u, status, derr, time.Since(start))
 	}
