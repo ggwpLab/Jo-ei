@@ -517,6 +517,18 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	stored, err := s.storedRegistries()
+	if err != nil {
+		s.log(r).Error().Err(err).Msg("loading registries")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "registries_unavailable"})
+		return
+	}
+	if field, msg := unmaskRegistries(in.Registries, stored); field != "" {
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+			"error": "invalid_registries", "field": field, "message": msg,
+		})
+		return
+	}
 	if field, msg := validateRegistries(in.Registries); field != "" {
 		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_registries", "field": field, "message": msg,
@@ -562,11 +574,83 @@ func (s *server) writeRegistries(w http.ResponseWriter, r *http.Request, status 
 		}
 	}
 	warnings := registryWarnings(out, s.cfg.ImageScanEnabled)
+	pending := s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries)
+	// Upstream URLs may embed credentials and this screen is open to
+	// operators: they leave the server masked, and PUT maps a masked URL back
+	// to the stored one (unmaskRegistries).
+	for i := range out {
+		out[i].Upstreams = maskUpstreams(out[i].Upstreams)
+	}
 	s.writeJSON(w, r, status, map[string]any{
 		"registries":      out,
-		"pending_restart": s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries),
+		"pending_restart": pending,
 		"warnings":        warnings,
 	})
+}
+
+// credentialMask stands in for upstream credentials in API responses.
+const credentialMask = "***"
+
+// maskUpstream hides the credentials in an upstream URL: the password of
+// "user:pass@", or the whole userinfo when it is a bare token ("token@"),
+// since a token is a secret even in the user position. A URL without
+// userinfo is returned unchanged.
+func maskUpstream(raw string) string {
+	start := strings.Index(raw, "://")
+	if start < 0 {
+		return raw
+	}
+	start += len("://")
+	end := len(raw)
+	if i := strings.IndexAny(raw[start:], "/?#"); i >= 0 {
+		end = start + i
+	}
+	at := strings.LastIndex(raw[start:end], "@")
+	if at < 0 {
+		return raw
+	}
+	masked := credentialMask
+	if name, _, hasPassword := strings.Cut(raw[start:start+at], ":"); hasPassword {
+		masked = name + ":" + credentialMask
+	}
+	return raw[:start] + masked + raw[start+at:]
+}
+
+// maskUpstreams returns a masked copy of upstreams.
+func maskUpstreams(upstreams []string) []string {
+	out := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		out[i] = maskUpstream(u)
+	}
+	return out
+}
+
+// unmaskRegistries replaces, in place, each masked upstream a client sent back
+// with the stored URL it was masked from, matched within the same ecosystem.
+// A masked URL that matches none — edited, or never stored — cannot be
+// restored and is rejected rather than saved with "***" as its credentials.
+// It returns ("","") on success, otherwise the offending field and a message.
+func unmaskRegistries(in, stored []RegistryInfo) (field, msg string) {
+	originals := map[string]map[string]string{} // ecosystem → masked → stored
+	for _, reg := range stored {
+		m := map[string]string{}
+		for _, u := range reg.Upstreams {
+			m[maskUpstream(u)] = u
+		}
+		originals[reg.Ecosystem] = m
+	}
+	for i := range in {
+		for j, u := range in[i].Upstreams {
+			if orig, ok := originals[in[i].Ecosystem][u]; ok {
+				in[i].Upstreams[j] = orig
+				continue
+			}
+			if strings.Contains(u, credentialMask+"@") {
+				return in[i].Ecosystem, fmt.Sprintf("upstream %q has masked credentials that match no stored upstream; enter the full URL", u)
+			}
+		}
+	}
+	return "", ""
 }
 
 // validateRegistries checks the PUT payload. It returns ("","") when valid,
