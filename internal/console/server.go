@@ -764,10 +764,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	ch, cancel := s.cfg.Broadcaster.Subscribe()
 	defer cancel()
 
-	// The server-wide Read/WriteTimeouts (cmd/jo-ei sets 120s) are armed once
-	// at request start, which poisons a long-lived stream: the first event
-	// written after the deadline kills the connection and is silently lost.
-	// Drop the read deadline and bound each write individually instead, so a
+	// The stream has no deadline as a whole: it lives as long as the tab.
+	// Clear any read deadline and bound each write individually instead, so a
 	// stalled client still cannot pin this goroutine forever.
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Time{})

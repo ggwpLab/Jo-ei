@@ -176,6 +176,14 @@ Client-facing paths: `/pypi/simple/…`, `/npm/…` (alias `/yarn/`),
 as a `registry-mirrors` entry. Yarn uses the npm protocol; the `/yarn/` alias
 exists so both package managers can be pointed at the proxy independently.
 
+Upstream credentials go in the URL (`https://user:token@nexus.example.org/…`);
+the console and `GET /api/registries` show them masked. Requests forwarded
+upstream also carry the client's own headers, `Authorization` included, but
+that is no isolation boundary: cached artifacts, and metadata documents fetched
+for concurrent clients, are shared by every client of the proxy regardless of
+who fetched them first. Use one set of upstream credentials that every client
+may use.
+
 Docker caveats: multiple `upstreams` are supported as ordered failover
 *mirrors of one registry* (e.g. Docker Hub plus a corporate pull-through
 mirror of it) — do not mix different registries in one list, since the image
@@ -204,6 +212,17 @@ pypi/requests
 # ecosystem/name@version → one version
 npm/lodash@4.17.21
 ```
+
+Where the publish date comes from:
+
+| Ecosystem | Publish date |
+|---|---|
+| PyPI | upload time of the requested file (a file added to an old release is as new as its upload) |
+| npm | the packument's `time` entry for the version |
+| RubyGems | `created_at` of the version and platform |
+| Maven | the artifact's `Last-Modified` header; a missing header counts as old |
+| Go | the `Time` in the module proxy's `.info` document, which is the commit time of the version — set by the author, so a module author can backdate it past the minimum age |
+| Docker | the image config's `created` time — set at build, so it can predate the push; reproducible builds often fix it to an old date |
 
 The file seeds the **supply-chain** allowlist at first boot; after that the
 per-gate allowlists (supply-chain and CVE) are edited in the console and

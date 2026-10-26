@@ -61,7 +61,7 @@ Every label value comes from a closed set; anything unexpected is reported as
 | `jo_ei_http_requests_total` | counter | `route`, `method`, `code` | Inbound requests. |
 | `jo_ei_http_request_duration_seconds` | histogram | `route`, `method` | Request duration; the SSE stream (`/api/events`) is excluded. |
 | `jo_ei_http_requests_in_flight` | gauge | `route` | Requests currently being served. |
-| `jo_ei_http_requests_aborted_total` | counter | `route` | The client went away, or writing the response failed (including the server's own write timeout). |
+| `jo_ei_http_requests_aborted_total` | counter | `route` | The client went away, or writing the response failed (including a response the client stopped reading, ended by the write-idle timeout). |
 
 `route` is one of the enabled registry prefixes (`pypi`, `npm`, `yarn`,
 `maven`, `rubygems`, `go`), `docker` (the `/v2/` API), `console`, `auth`, `api`,
@@ -70,8 +70,9 @@ Every label value comes from a closed set; anything unexpected is reported as
 `npm`. `method` is a standard HTTP method or `other`.
 
 "Aborted" means the client went away, or writing the response failed,
-including the server's own write timeout (Go cancels the request context once a
-write fails). Each open console tab's SSE stream (`/api/events`) counts as one
+including a response the client stopped reading: a write that makes no progress
+for the write-idle timeout fails, and Go cancels the request context once a
+write fails. Each open console tab's SSE stream (`/api/events`) counts as one
 permanent in-flight `api` request and adds one aborted `api` request when the
 tab closes. Jō-ei's own upstream and scan timeouts are visible as
 `jo_ei_upstream_errors_total{reason="timeout"}` and
