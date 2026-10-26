@@ -878,3 +878,19 @@ func TestConfig_MaxArtifactNegativeRejected(t *testing.T) {
 	_, err := config.Load(writeTempConfig(t, "server:\n  listen: \":8080\"\n  max_artifact_mb: -1\ndatabase:\n  path: \"/tmp/x.db\"\n"))
 	require.Error(t, err)
 }
+
+// The CVE engines report health under these names; an antivirus scanner
+// sharing one would shadow that engine's row in the console and in
+// jo_ei_scanner_up.
+func TestValidate_RejectsScannerNamesOfCVEEngines(t *testing.T) {
+	for _, name := range []string{"osv", "osv.dev", "trivy", " Trivy "} {
+		c := &config.Config{Malware: config.MalwareConfig{Scanners: []config.ScannerConfig{
+			{Type: "clamav", Address: "tcp:a:3310", Name: name},
+		}}}
+		c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+		c.Server.Listen = ":8080"
+		err := c.Validate()
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "malware.scanners[0]", name)
+	}
+}
