@@ -96,7 +96,7 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return fmt.Errorf("server.trusted_proxies: %w", err)
 	}
-	publicBase, err := httpx.NewPublicBaseResolver(cfg.Server.PublicURL, trusted)
+	publicBase, err := httpx.NewPublicBaseResolver(cfg.Server.PublicURL, trusted, serverLog)
 	if err != nil {
 		return fmt.Errorf("server.public_url: %w", err)
 	}

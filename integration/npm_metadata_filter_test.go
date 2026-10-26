@@ -394,12 +394,12 @@ func TestIntegration_NPMMetadataFilter_TrustedProxyHeaders(t *testing.T) {
 
 	peers, err := httpx.ParseTrustedPeers([]string{"127.0.0.1", "::1"})
 	require.NoError(t, err)
-	trusting, err := httpx.NewPublicBaseResolver("", peers)
+	trusting, err := httpx.NewPublicBaseResolver("", peers, zerolog.Nop())
 	require.NoError(t, err)
 	_, body := getPackument(t, newNPMProxyWithBase(t, reg, 24, "enforce", 32, trusting), headers)
 	assert.Equal(t, "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz", tarballLinks(t, body)["1.3.0"])
 
-	distrusting, err := httpx.NewPublicBaseResolver("", nil)
+	distrusting, err := httpx.NewPublicBaseResolver("", nil, zerolog.Nop())
 	require.NoError(t, err)
 	_, body = getPackument(t, newNPMProxyWithBase(t, reg, 24, "enforce", 32, distrusting), headers)
 	assert.Equal(t, "http://joei:8080/npm/left-pad/-/left-pad-1.3.0.tgz", tarballLinks(t, body)["1.3.0"],
@@ -412,7 +412,7 @@ func TestIntegration_NPMMetadataFilter_BadForwardedHeaderIs400(t *testing.T) {
 	reg := newNPMMetadataRegistry(t, npmRegistryOptions{OldHours: 240, FreshHours: 200})
 	peers, err := httpx.ParseTrustedPeers([]string{"127.0.0.1", "::1"})
 	require.NoError(t, err)
-	base, err := httpx.NewPublicBaseResolver("", peers)
+	base, err := httpx.NewPublicBaseResolver("", peers, zerolog.Nop())
 	require.NoError(t, err)
 	srv := newNPMProxyWithBase(t, reg, 24, "enforce", 32, base)
 

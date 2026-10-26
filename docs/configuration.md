@@ -122,11 +122,16 @@ server:
 ```
 
 The npm tarball links the proxy writes carry the address the client used.
-From a trusted proxy that is `X-Forwarded-Proto`, `X-Forwarded-Host` (first
-entry of a list; `X-Forwarded-Port` is added when the host has no port) and
+From a trusted proxy that is `X-Forwarded-Proto`, `X-Forwarded-Host` and
 `X-Forwarded-Prefix`, or `proto=`/`host=` of `Forwarded` when neither
-`X-Forwarded-Proto` nor `X-Forwarded-Host` is present. Otherwise it is the
-request's `Host`, over `https` when the connection is TLS. A value that is
+`X-Forwarded-Proto` nor `X-Forwarded-Host` is present; `X-Forwarded-Port` is
+added to whichever host is used when it has no port. Of a comma-separated list
+(or several `Forwarded` elements) the last entry counts — the one the trusted
+proxy appended — since a proxy that appends keeps whatever the client sent on
+the left. Otherwise it is the request's `Host`, over `https` when the
+connection is TLS. Forwarding headers from a peer outside `trusted_proxies`
+are ignored with a one-time warning naming the peer: behind an unlisted
+reverse proxy, every link would name the address the proxy connects to. A value that is
 not a valid scheme, host or path prefix fails the request with
 `400 bad_forwarded_header`. `server.public_url`, when set, replaces all of
 this; use it when the reverse proxy cannot send these headers.

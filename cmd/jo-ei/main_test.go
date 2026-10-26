@@ -332,7 +332,7 @@ func TestBuildHandlers_NPMLinksUsePublicBase(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Registries.NPM.Enabled = true
 	cfg.Registries.NPM.Upstreams = []string{upstreamSrv.URL}
-	base, err := httpx.NewPublicBaseResolver("https://reg.example/joei", nil)
+	base, err := httpx.NewPublicBaseResolver("https://reg.example/joei", nil, zerolog.Nop())
 	require.NoError(t, err)
 
 	h := buildHandlers(cfg, sharedDeps{logger: zerolog.Nop(), publicBase: base})
