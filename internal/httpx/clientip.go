@@ -2,7 +2,6 @@ package httpx
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -22,7 +21,7 @@ const (
 // forwarding header is honoured only when the direct peer is a trusted proxy;
 // otherwise the header is attacker-controlled and the peer address is used.
 type ClientIPResolver struct {
-	trusted []netip.Prefix
+	trusted TrustedPeers
 	header  string
 	log     zerolog.Logger
 	warned  atomic.Bool
@@ -44,56 +43,21 @@ func NewClientIPResolver(trusted []string, header string, log zerolog.Logger) (*
 		return nil, fmt.Errorf("unsupported client IP header %q (want %s|%s|%s)",
 			header, HeaderXForwardedFor, HeaderXRealIP, HeaderForwarded)
 	}
-	prefixes := make([]netip.Prefix, 0, len(trusted))
-	for i, entry := range trusted {
-		p, err := parseTrusted(entry)
-		if err != nil {
-			return nil, fmt.Errorf("trusted proxy [%d]: %w", i, err)
-		}
-		prefixes = append(prefixes, p)
-	}
-	return &ClientIPResolver{trusted: prefixes, header: header, log: log}, nil
-}
-
-func parseTrusted(entry string) (netip.Prefix, error) {
-	entry = strings.TrimSpace(entry)
-	if strings.Contains(entry, "/") {
-		p, err := netip.ParsePrefix(entry)
-		if err != nil {
-			return netip.Prefix{}, err
-		}
-		return p.Masked(), nil
-	}
-	a, err := netip.ParseAddr(entry)
+	peers, err := ParseTrustedPeers(trusted)
 	if err != nil {
-		return netip.Prefix{}, err
+		return nil, err
 	}
-	a = a.Unmap()
-	return netip.PrefixFrom(a, a.BitLen()), nil
-}
-
-func (c *ClientIPResolver) isTrusted(a netip.Addr) bool {
-	for _, p := range c.trusted {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	return false
+	return &ClientIPResolver{trusted: peers, header: header, log: log}, nil
 }
 
 // ClientIP returns the client IP (no port) for r.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+	peer, raw, ok := peerAddr(r)
+	if !ok {
+		return raw
 	}
-	peer, err := netip.ParseAddr(host)
-	if err != nil {
-		return host
-	}
-	peer = peer.Unmap()
 
-	if !c.isTrusted(peer) {
+	if !c.trusted.Contains(peer) {
 		if c.hasForwardingHeader(r) && c.warned.CompareAndSwap(false, true) {
 			c.log.Warn().Str("peer", peer.String()).
 				Msg("forwarding header from an untrusted peer ignored; if Jo-ei runs behind a reverse proxy, set server.trusted_proxies")
@@ -114,7 +78,7 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 		if !hops[i].valid {
 			return peer.String()
 		}
-		if !c.isTrusted(hops[i].addr) {
+		if !c.trusted.Contains(hops[i].addr) {
 			return hops[i].addr.String()
 		}
 	}
