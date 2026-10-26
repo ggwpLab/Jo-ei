@@ -143,3 +143,72 @@ func TestMavenAdapter_UpstreamURLs_OnePerUpstream(t *testing.T) {
 		"https://repo.spring.io/release/com/google/guava/guava/31.0.1-jre/guava-31.0.1-jre.jar",
 	}, urls)
 }
+
+func TestMavenAdapter_NormalizeRequest_SnapshotBuildsGetDistinctCacheKeys(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo.example.org/snapshots"})
+	dir := "/com/example/foo/1.0-SNAPSHOT/"
+	files := []string{
+		"foo-1.0-20231010.123456-1.jar",
+		"foo-1.0-20231010.123456-1-sources.jar",
+		"foo-1.0-20231011.090000-2.jar",
+	}
+	keys := map[string]bool{}
+	for _, f := range files {
+		ref, ok := a.NormalizeRequest(httptest.NewRequest(http.MethodGet, dir+f, nil))
+		require.True(t, ok, f)
+		assert.Equal(t, "com.example:foo", ref.Name, f)
+		assert.Equal(t, "1.0-SNAPSHOT", ref.Version, f)
+		keys[ref.Key()] = true
+	}
+	assert.Len(t, keys, len(files), "each snapshot build needs its own cache slot")
+}
+
+func TestMavenAdapter_NormalizeRequest_GatesEveryArtifactType(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+	paths := []string{
+		"/com/google/protobuf/protoc/3.25.1/protoc-3.25.1-linux-x86_64.exe",
+		"/com/example/app/1.0/app-1.0.zip",
+		"/com/example/app/1.0/app-1.0-bin.tar.gz",
+		"/com/example/app/1.0/app-1.0.ear",
+		"/org/jenkins-ci/plugins/git/5.2.0/git-5.2.0.hpi",
+		"/com/example/native/1.0/native-1.0-linux.so",
+	}
+	for _, p := range paths {
+		_, ok := a.NormalizeRequest(httptest.NewRequest(http.MethodGet, p, nil))
+		assert.True(t, ok, "%s must be gated", p)
+	}
+}
+
+func TestMavenAdapter_NormalizeRequest_SidecarsPassThrough(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+	paths := []string{
+		"/com/example/app/1.0/app-1.0.pom",
+		"/com/example/app/1.0/app-1.0.module",
+		"/com/example/app/1.0/app-1.0.jar.sha1",
+		"/com/example/app/1.0/app-1.0.jar.md5",
+		"/com/example/app/1.0/app-1.0.jar.sha256",
+		"/com/example/app/1.0/app-1.0.jar.sha512",
+		"/com/example/app/1.0/app-1.0.jar.asc",
+		"/com/example/app/maven-metadata.xml",
+		"/com/example/app/maven-metadata.xml.sha1",
+		"/com/example/app/1.0/",
+		"/com/example/app/1.0",
+	}
+	for _, p := range paths {
+		r := httptest.NewRequest(http.MethodGet, p, nil)
+		_, ok := a.NormalizeRequest(r)
+		assert.False(t, ok, "%s must not be gated", p)
+		assert.False(t, a.IsArtifactPath(r), "%s is not an artifact", p)
+	}
+}
+
+func TestMavenAdapter_NormalizeRequest_ArtifactTypesDoNotShareCacheSlot(t *testing.T) {
+	a := adapters.NewMavenAdapter([]string{"https://repo1.maven.org/maven2"})
+	keys := map[string]bool{}
+	for _, f := range []string{"app-1.0.jar", "app-1.0.zip", "app-1.0.war", "app-1.0-bin.tar.gz", "app-1.0-bin.zip"} {
+		ref, ok := a.NormalizeRequest(httptest.NewRequest(http.MethodGet, "/com/example/app/1.0/"+f, nil))
+		require.True(t, ok, f)
+		keys[ref.Key()] = true
+	}
+	assert.Len(t, keys, 5)
+}
