@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-26
+
+The first stable release. It closes every route the review of 0.6 found
+around the gates (npm, pnpm and Yarn tarballs, pip files, Maven artifacts other
+than jars, unrecognized downloads), and adds what it takes to run the proxy in
+production: a hardened compose file, readiness checks, backups, artifact-size
+and scan limits sized for real artifacts, and every scalar setting configurable
+from the environment.
+
+### Upgrading from 0.6
+
+Read these before upgrading; each one is described in full below.
+
+- **A non-empty `JOEI_*` variable that sets nothing stops the server from
+  starting.** Remove leftovers such as `JOEI_CONSOLE_AUTH_USERS` first.
+- **npm metadata fails closed.** A document the proxy cannot rewrite is
+  answered with `502 metadata_rewrite_failed`. A config that sets
+  `server.metadata_filter_max_mb: 32` (the old sample) keeps 32 and now fails
+  packuments over it, such as `vite`: raise the value or remove the key (default
+  256). `0` now means no cap rather than "filtering off".
+- **Behind a reverse proxy, list it in `server.trusted_proxies`** (or set
+  `server.public_url`): npm tarball links name the address the client used,
+  and without either they name the address the proxy connects to.
+- **Regenerate lockfiles that pin tarball URLs** (`resolved` in `yarn.lock` or
+  `package-lock.json` written without Jō-ei), and block clients' direct access
+  to `registry.npmjs.org`.
+- **The PyPI JSON API returns relative file URLs.** Scripts that pass `url`
+  straight to an HTTP client must resolve it against the request URL.
+- **Artifacts over `server.max_artifact_mb` (default 2048) get `403
+  artifact_too_large`,** and an incomplete antivirus scan blocks with `403
+  scan_incomplete`.
+- **The compose file publishes port 8080 on `127.0.0.1` only**; put a reverse
+  proxy in front for other hosts.
+- **Scanner metrics carry the scanner name in `scanner` and the engine type in
+  a new `engine` label**; queries filtering `scanner=~"clamav|icap"` should
+  filter on `engine`.
+- **An antivirus scanner named `osv`, `osv.dev` or `trivy` fails config
+  validation**; rename it.
+- **PyPI files and Maven snapshot, `.war` and `.aar` artifacts cached by 0.6
+  are fetched and checked again** on first request, since each now has its
+  own cache slot.
+
 ### Security
 
 - **npm, pnpm and Yarn downloads now go through the proxy's gates.** npm
@@ -585,7 +627,8 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.4.0...v0.5.0
