@@ -73,7 +73,6 @@ func TestNPMAdapter_FetchMetadata(t *testing.T) {
 
 	assert.WithinDuration(t, publishedAt, meta.PublishedAt, time.Second)
 	assert.Equal(t, "MIT", meta.License)
-	assert.Equal(t, "abc123sha1", meta.Checksum)
 }
 
 func TestNPMAdapter_FetchMetadata_VersionMissing(t *testing.T) {
@@ -168,7 +167,6 @@ func TestNPMAdapter_FetchMetadata_LegacyObjectLicenseInOtherVersion(t *testing.T
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "ISC", meta.License)
-	assert.Equal(t, "deadbeef", meta.Checksum)
 }
 
 // The requested version itself may carry the legacy object license; extract the
@@ -217,7 +215,6 @@ func TestNPMAdapter_FetchMetadata_UnknownLicenseShapeDegrades(t *testing.T) {
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, "", meta.License)
-	assert.Equal(t, "abc", meta.Checksum)
 }
 
 // FetchMetadata must surface every mirror it tried, not just the last.

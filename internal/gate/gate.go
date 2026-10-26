@@ -41,7 +41,6 @@ type PackageMetadata struct {
 	PublishedAt time.Time
 	Maintainer  string
 	License     string
-	Checksum    string // SHA256 hex
 }
 
 // RegistryAdapter abstracts a specific package registry.

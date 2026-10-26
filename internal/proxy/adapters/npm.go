@@ -46,9 +46,6 @@ type npmMetadata struct {
 	Time     map[string]string `json:"time"`
 	Versions map[string]struct {
 		License npmLicense `json:"license"`
-		Dist    struct {
-			Shasum string `json:"shasum"`
-		} `json:"dist"`
 	} `json:"versions"`
 }
 
@@ -168,7 +165,6 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *ga
 	return &gate.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		License:     string(versionInfo.License),
-		Checksum:    versionInfo.Dist.Shasum,
 	}, apiURL, resp.StatusCode, nil
 }
 

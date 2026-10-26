@@ -23,11 +23,9 @@ type pypiJSONResponse struct {
 		Author  string `json:"author"`
 	} `json:"info"`
 	URLs []struct {
+		Filename      string `json:"filename"`
 		UploadTimeISO string `json:"upload_time_iso_8601"`
 		URL           string `json:"url"`
-		Digests       struct {
-			SHA256 string `json:"sha256"`
-		} `json:"digests"`
 	} `json:"urls"`
 }
 
@@ -77,10 +75,14 @@ func (a *PyPIAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool)
 		return nil, false
 	}
 
+	// A release holds many files (an sdist and a wheel per platform), so the
+	// file name is the classifier: it gives each file its own cache slot and
+	// lets FetchMetadata date the file actually requested.
 	return &gate.PackageRef{
-		Ecosystem: "pypi",
-		Name:      name,
-		Version:   version,
+		Ecosystem:  "pypi",
+		Name:       name,
+		Version:    version,
+		Classifier: filename,
 	}, true
 }
 
@@ -147,19 +149,49 @@ func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *g
 		return nil, apiURL, resp.StatusCode, fmt.Errorf("no download URLs in pypi response for %s@%s", ref.Name, ref.Version)
 	}
 
-	publishedAt, err := time.Parse(time.RFC3339, info.URLs[0].UploadTimeISO)
-	if err != nil {
-		publishedAt, err = time.Parse("2006-01-02T15:04:05.999999Z07:00", info.URLs[0].UploadTimeISO)
-		if err != nil {
-			return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", info.URLs[0].UploadTimeISO, err)
+	// The age check dates the requested file, not the release: PyPI accepts
+	// new files into an existing release, so a wheel uploaded today to a
+	// two-year-old version must count as today's. Without a file name (a ref
+	// built elsewhere) the newest file stands for the release, the stricter
+	// choice.
+	var (
+		publishedAt time.Time
+		found       bool
+	)
+	for _, f := range info.URLs {
+		if ref.Classifier != "" && f.Filename != ref.Classifier {
+			continue
 		}
+		t, err := parsePyPIUploadTime(f.UploadTimeISO)
+		if err != nil {
+			return nil, apiURL, resp.StatusCode, err
+		}
+		if !found || t.After(publishedAt) {
+			publishedAt = t
+		}
+		found = true
+	}
+	if !found {
+		return nil, apiURL, resp.StatusCode, fmt.Errorf("file %s not listed in pypi release %s@%s", ref.Classifier, ref.Name, ref.Version)
 	}
 	return &gate.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		Maintainer:  info.Info.Author,
 		License:     info.Info.License,
-		Checksum:    info.URLs[0].Digests.SHA256,
 	}, apiURL, resp.StatusCode, nil
+}
+
+// parsePyPIUploadTime parses upload_time_iso_8601, which PyPI writes with
+// microseconds.
+func parsePyPIUploadTime(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05.999999Z07:00", s)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parsing upload_time_iso_8601 %q: %w", s, err)
+		}
+	}
+	return t, nil
 }
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
@@ -204,7 +236,11 @@ func parsePyPIFilename(filename string) (name, version string, ok bool) {
 	return "", "", false
 }
 
-// normalizePyPIName converts distribution name to canonical form (lowercase, _ → -).
+// pypiNameSeparators matches the runs PEP 503 folds into one "-".
+var pypiNameSeparators = regexp.MustCompile(`[-_.]+`)
+
+// normalizePyPIName converts a distribution name to its PEP 503 canonical
+// form: lowercase, every run of "-", "_" and "." folded into one "-".
 func normalizePyPIName(name string) string {
-	return strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	return pypiNameSeparators.ReplaceAllString(strings.ToLower(name), "-")
 }

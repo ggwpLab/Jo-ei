@@ -283,9 +283,11 @@ func makeUpstream(t *testing.T, name, version string, ageHours int) *httptest.Se
 					"license": "MIT", "author": "test",
 				},
 				"urls": []map[string]any{{
+					// The wheel the tests request: a wheel's file name spells
+					// the project with "_" where the normalized name has "-".
+					"filename":             strings.ReplaceAll(name, "-", "_") + "-" + version + "-py3-none-any.whl",
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
 					"url":                  "https://example.com/" + name + ".whl",
-					"digests":              map[string]any{"sha256": "abc123"},
 				}},
 			})
 			return
@@ -370,6 +372,7 @@ func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
 				"urls": []map[string]any{{
+					"filename":             "flask-3.0.0-py3-none-any.whl",
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
 					"url":                  "https://files.example.com/flask-3.0.0.whl",
 					"digests":              map[string]any{"sha256": "def456"},
@@ -637,6 +640,7 @@ func TestHandler_DownloadFallsBackToSecondUpstream(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
 				"urls": []map[string]any{{
+					"filename":             "requests-2.31.0-py3-none-any.whl",
 					"upload_time_iso_8601": published.Format(time.RFC3339),
 					"url":                  "https://example.com/requests.whl",
 					"digests":              map[string]any{"sha256": "abc"},
@@ -671,6 +675,7 @@ func TestHandler_DownloadAllNotFoundReturns404(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
 				"urls": []map[string]any{{
+					"filename":             "requests-2.31.0-py3-none-any.whl",
 					"upload_time_iso_8601": published.Format(time.RFC3339),
 					"url":                  "https://example.com/requests.whl",
 					"digests":              map[string]any{"sha256": "abc"},
@@ -744,6 +749,7 @@ func TestHandler_DownloadServerErrorReturns502(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "requests", "version": "2.31.0", "license": "MIT", "author": "x"},
 				"urls": []map[string]any{{
+					"filename":             "requests-2.31.0-py3-none-any.whl",
 					"upload_time_iso_8601": published.Format(time.RFC3339),
 					"url":                  "https://example.com/requests.whl",
 					"digests":              map[string]any{"sha256": "abc"},
@@ -883,6 +889,7 @@ func TestHandler_ServedArtifactCarriesContentLength(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "flask", "version": "3.0.0"},
 				"urls": []map[string]any{{
+					"filename":             "flask-3.0.0-py3-none-any.whl",
 					"upload_time_iso_8601": time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
 					"url":                  "https://files.example.com/flask-3.0.0.whl",
 				}},
@@ -965,7 +972,10 @@ func bigArtifactUpstream(t *testing.T, size int, withLength bool) *httptest.Serv
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "flask", "version": "3.0.0"},
-				"urls": []map[string]any{{"upload_time_iso_8601": time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)}},
+				"urls": []map[string]any{{
+					"filename":             "flask-3.0.0-py3-none-any.whl",
+					"upload_time_iso_8601": time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+				}},
 			})
 			return
 		}

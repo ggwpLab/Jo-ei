@@ -18,7 +18,6 @@ type rubygemsVersion struct {
 	Platform  string   `json:"platform"`
 	CreatedAt string   `json:"created_at"`
 	Licenses  []string `json:"licenses"`
-	SHA       string   `json:"sha"`
 }
 
 // RubyGemsAdapter implements gate.RegistryAdapter for a RubyGems repository.
@@ -153,7 +152,6 @@ func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, re
 			return &gate.PackageMetadata{
 				PublishedAt: publishedAt.UTC(),
 				License:     strings.Join(v.Licenses, ", "),
-				Checksum:    v.SHA,
 			}, apiURL, resp.StatusCode, nil
 		}
 	}
