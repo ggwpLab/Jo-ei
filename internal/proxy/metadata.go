@@ -183,7 +183,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, log)
+	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, tag, log)
 }
 
 // credentialTag fingerprints the headers that carry a caller's upstream
@@ -356,15 +356,16 @@ func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io
 }
 
 // writeMetadataDocument serves a rewritten document. It gets this proxy's own
-// validator and loses upstream's, so no client can revalidate its way back
+// validator, tag (syntheticETag of body, already computed by the caller for
+// its 304 check), and loses upstream's, so no client can revalidate its way back
 // into a stale rewrite. The body is re-compressed when the client asked for
 // gzip, so rewriting costs the client hop nothing.
-func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.Header, status int, body []byte, log zerolog.Logger) {
+func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.Header, status int, body []byte, tag string, log zerolog.Logger) {
 	copyProxyHeaders(w.Header(), header)
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
 	w.Header().Del("Last-Modified")
-	w.Header().Set("ETag", syntheticETag(body))
+	w.Header().Set("ETag", tag)
 
 	payload := body
 	if clientAcceptsGzip(r) {

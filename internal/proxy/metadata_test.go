@@ -168,7 +168,7 @@ func TestWriteMetadataDocument_BoundsTheWrite(t *testing.T) {
 	body := bytes.Repeat([]byte("x"), 1<<20)
 	r := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
 
-	writeMetadataDocument(w, r, http.Header{}, http.StatusOK, body, zerolog.Nop())
+	writeMetadataDocument(w, r, http.Header{}, http.StatusOK, body, syntheticETag(body), zerolog.Nop())
 
 	require.NotEmpty(t, w.deadlines, "no write deadline was armed")
 	assert.False(t, w.deadlines[0].IsZero())
