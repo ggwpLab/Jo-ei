@@ -172,6 +172,17 @@ yarn config set npmRegistryServer http://localhost:8080/yarn/
 yarn config set registry http://localhost:8080/yarn/
 ```
 
+> **Known limitation — tarballs can bypass the gates.** The proxy serves npm
+> packuments with their `dist.tarball` URLs unchanged, and those URLs point at
+> the upstream registry. npm swaps the host for the configured registry only
+> when the URL is on `registry.npmjs.org`, so npm is gated with the default
+> upstream. Yarn Classic (1.22) and pnpm (9.15) download tarballs from the URL
+> as given, straight from `registry.npmjs.org`, and npm does the same when the
+> upstream is another host (Nexus, Verdaccio): no supply-chain, CVE or malware
+> check runs for those downloads. Until the proxy rewrites tarball URLs, block
+> clients' direct access to the upstream registry, so such an install fails
+> instead of going around the proxy. Yarn Berry has not been checked.
+
 **RubyGems / Bundler:**
 ```bash
 # bundler

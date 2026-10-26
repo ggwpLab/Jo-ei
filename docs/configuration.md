@@ -176,6 +176,11 @@ Client-facing paths: `/pypi/simple/…`, `/npm/…` (alias `/yarn/`),
 as a `registry-mirrors` entry. Yarn uses the npm protocol; the `/yarn/` alias
 exists so both package managers can be pointed at the proxy independently.
 
+npm packuments are served with their `dist.tarball` URLs unchanged, so Yarn
+Classic, pnpm — and npm with an upstream other than `registry.npmjs.org` —
+download tarballs from the upstream directly, around the gates; see the known
+limitation in the README.
+
 Upstream credentials go in the URL (`https://user:token@nexus.example.org/…`);
 the console and `GET /api/registries` show them masked. Requests forwarded
 upstream also carry the client's own headers, `Authorization` included, but
