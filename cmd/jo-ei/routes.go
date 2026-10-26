@@ -10,6 +10,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/metrics"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
@@ -40,6 +41,9 @@ type sharedDeps struct {
 	cveRecheckTTL       time.Duration
 	malwareRecheckTTL   time.Duration
 	metadataFilterMaxMB int
+	// publicBase derives the client-facing base URL for links written into
+	// rewritten metadata documents.
+	publicBase *httpx.PublicBaseResolver
 	// tempDir holds downloads while they are checked (on the cache volume).
 	tempDir string
 	// maxArtifactBytes caps a package artifact download (0 = unlimited).
@@ -173,7 +177,24 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		HTTPClient:          shared.downloadClient,
 		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
+		PublicBase:          shared.publicBase,
 		TempDir:             shared.tempDir,
 		MaxArtifactBytes:    shared.maxArtifactBytes,
 	})
+}
+
+// recommendedMetadataCapMB is the default server.metadata_filter_max_mb: room
+// for the largest public npm packuments (vite ~37 MB, renovate ~70 MB).
+const recommendedMetadataCapMB = 256
+
+// metadataCapWarning explains a server.metadata_filter_max_mb that is likely
+// a leftover from an older config, or "" when there is nothing to say.
+func metadataCapWarning(mb int) string {
+	switch {
+	case mb == 0:
+		return "metadata_filter_max_mb is 0: npm metadata documents are buffered with no size cap"
+	case mb < recommendedMetadataCapMB:
+		return "metadata_filter_max_mb is below the default 256: npm packuments larger than the cap fail with 502 metadata_rewrite_failed"
+	}
+	return ""
 }

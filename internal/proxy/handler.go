@@ -37,11 +37,14 @@ type HandlerConfig struct {
 	CVERecheckTTL     time.Duration
 	MalwareRecheckTTL time.Duration
 	// MetadataFilterMaxMB caps the decompressed size of a metadata document the
-	// handler will buffer in order to hide versions policy would block at
-	// download time. A larger document is streamed through unfiltered, and the
-	// artifact gate blocks it at download time instead. Zero disables metadata
-	// filtering entirely.
+	// handler buffers to hide versions policy would block at download time and
+	// to point its download links at the proxy. A larger document fails the
+	// request. Zero means no cap.
 	MetadataFilterMaxMB int
+	// PublicBase derives the client-facing base URL written into rewritten
+	// metadata links. Optional: nil uses the request's own Host and TLS state
+	// and trusts no forwarding header.
+	PublicBase *httpx.PublicBaseResolver
 	// HTTPClient downloads artifacts and serves transparent proxy requests.
 	// Optional; nil uses a private client with a 60s timeout. Pass a client whose
 	// transport caps per-host concurrency (shared with the adapters) so artifact

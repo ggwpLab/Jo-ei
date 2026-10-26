@@ -31,30 +31,6 @@ func TestSyntheticETag_IsStableAndBodyDependent(t *testing.T) {
 	assert.True(t, strings.HasSuffix(a, `"`), "must be a quoted ETag: %s", a)
 }
 
-func TestHoldsSyntheticETag(t *testing.T) {
-	ours := syntheticETag([]byte(`{}`))
-
-	tests := []struct {
-		name string
-		inm  string
-		want bool
-	}{
-		{name: "empty", inm: ""},
-		{name: "upstream tag", inm: `"e83879f942df342315ccdeff2139a89a"`},
-		{name: "ours", inm: ours, want: true},
-		{name: "ours second in a list", inm: `"e83879f9", ` + ours, want: true},
-		{name: "ours first in a list", inm: ours + `, "e83879f9"`, want: true},
-		{name: "wildcard is not ours", inm: "*"},
-		{name: "garbage", inm: "not-a-tag"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, holdsSyntheticETag(tt.inm))
-		})
-	}
-}
-
 func TestETagMatches(t *testing.T) {
 	ours := syntheticETag([]byte(`{}`))
 
@@ -192,7 +168,7 @@ func TestWriteMetadataDocument_BoundsTheWrite(t *testing.T) {
 	body := bytes.Repeat([]byte("x"), 1<<20)
 	r := httptest.NewRequest(http.MethodGet, "/left-pad", nil)
 
-	writeMetadataDocument(w, r, http.Header{}, http.StatusOK, body, true, zerolog.Nop())
+	writeMetadataDocument(w, r, http.Header{}, http.StatusOK, body, syntheticETag(body), zerolog.Nop())
 
 	require.NotEmpty(t, w.deadlines, "no write deadline was armed")
 	assert.False(t, w.deadlines[0].IsZero())

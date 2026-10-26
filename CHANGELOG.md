@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **npm, pnpm and Yarn downloads now go through the proxy's gates.** npm
+  packuments were served with their `dist.tarball` URLs unchanged, pointing at
+  the upstream registry: Yarn Classic and pnpm fetched tarballs straight from
+  `registry.npmjs.org`, and npm did the same with any other upstream, so no
+  supply-chain, CVE or malware check ran. Every packument and single-version
+  manifest is now served with its tarball links rewritten to the proxy, under
+  the address the client used. A document the proxy cannot rewrite (over
+  `metadata_filter_max_mb`, an undecodable coding, a non-200 status,
+  unparseable) is answered with `502 metadata_rewrite_failed` instead of being
+  served as-is, and client validators are no longer forwarded upstream, so a
+  copy cached before the upgrade cannot be revalidated back into use.
+  Lockfiles that pin tarball URLs still bypass the proxy; regenerate them.
 - **pip downloads now go through the proxy's gates.** PyPI index pages were
   proxied untouched, and pypi.org links every file by absolute URL on
   `files.pythonhosted.org`, so pip, uv and poetry fetched packages straight
@@ -49,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`server.public_url`** sets the base URL written into npm tarball links.
+  Without it the proxy derives the URL per request from `Host`, or from
+  `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port`,
+  `X-Forwarded-Prefix` and `Forwarded` sent by a peer in
+  `server.trusted_proxies`.
 - **`server.max_artifact_mb`** (default 2048, the ClamAV stream limit the
   compose file ships; `0` = unlimited) refuses a larger package artifact with
   `403 artifact_too_large` before it can fill the cache volume.
@@ -69,6 +86,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`server.metadata_filter_max_mb: 0` means no size cap.** It used to disable
+  npm metadata filtering; filtering and tarball-link rewriting now always run,
+  so a config that set `0` to switch filtering off now buffers documents of
+  any size.
+- **`server.metadata_filter_max_mb` defaults to 256** (was 32). A document over
+  the cap now fails instead of being relayed, and full packuments of popular
+  packages already exceed 32 MB (`vite` ~37 MB, `renovate` ~70 MB). A config
+  copied from the old sample sets `32` explicitly and keeps it: raise or remove
+  the key. Startup logs a warning for a cap below 256, and for `0`.
+- **npm single-version manifests (`/<pkg>/<version>`) are rewritten** like
+  packuments, and every npm metadata response carries a proxy-minted `ETag`.
 - **Every config key can be set from the environment.** `JOEI_*` variables
   used to override only keys present in the config file, so setting one for a
   key the file left out (or commented out) was silently ignored. Every scalar

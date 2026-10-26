@@ -592,7 +592,7 @@ func TestLoad_TLSSectionIsOptional(t *testing.T) {
 	}
 }
 
-func TestLoad_MetadataFilterMaxMB_DefaultsTo32(t *testing.T) {
+func TestLoad_MetadataFilterMaxMB_DefaultsTo256(t *testing.T) {
 	path := writeTempConfig(t, `server:
   listen: ":8080"
 database:
@@ -600,10 +600,10 @@ database:
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, 32, cfg.Server.MetadataFilterMaxMB)
+	assert.Equal(t, 256, cfg.Server.MetadataFilterMaxMB)
 }
 
-func TestLoad_MetadataFilterMaxMB_ZeroDisables(t *testing.T) {
+func TestLoad_MetadataFilterMaxMB_ZeroMeansNoCap(t *testing.T) {
 	path := writeTempConfig(t, `server:
   listen: ":8080"
   metadata_filter_max_mb: 0
@@ -612,7 +612,7 @@ database:
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, 0, cfg.Server.MetadataFilterMaxMB, "an explicit zero is the kill switch, not a request for the default")
+	assert.Equal(t, 0, cfg.Server.MetadataFilterMaxMB, "an explicit zero means no cap, not a request for the default")
 }
 
 func TestValidate_RejectsNegativeMetadataFilterMaxMB(t *testing.T) {
@@ -892,5 +892,39 @@ func TestValidate_RejectsScannerNamesOfCVEEngines(t *testing.T) {
 		err := c.Validate()
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "malware.scanners[0]", name)
+	}
+}
+
+func TestLoad_PublicURLFromEnv(t *testing.T) {
+	t.Setenv("JOEI_SERVER_PUBLIC_URL", "https://reg.example.com/joei")
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	assert.Equal(t, "https://reg.example.com/joei", cfg.Server.PublicURL)
+	assert.Empty(t, cfg.UnknownEnv)
+}
+
+func TestValidate_PublicURL(t *testing.T) {
+	for _, tc := range []struct {
+		url string
+		ok  bool
+	}{
+		{"", true},
+		{"https://reg.example.com", true},
+		{"http://x/y/", true},
+		{"ftp://x", false},
+		{"https://x?q=1", false},
+		{"/relative", false},
+	} {
+		c := &config.Config{}
+		c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+		c.Server.Listen = ":8080"
+		c.Server.PublicURL = tc.url
+		err := c.Validate()
+		if tc.ok {
+			assert.NoError(t, err, tc.url)
+		} else {
+			require.Error(t, err, tc.url)
+			assert.Contains(t, err.Error(), "server.public_url", tc.url)
+		}
 	}
 }

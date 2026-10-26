@@ -172,16 +172,18 @@ yarn config set npmRegistryServer http://localhost:8080/yarn/
 yarn config set registry http://localhost:8080/yarn/
 ```
 
-> **Known limitation — tarballs can bypass the gates.** The proxy serves npm
-> packuments with their `dist.tarball` URLs unchanged, and those URLs point at
-> the upstream registry. npm swaps the host for the configured registry only
-> when the URL is on `registry.npmjs.org`, so npm is gated with the default
-> upstream. Yarn Classic (1.22) and pnpm (9.15) download tarballs from the URL
-> as given, straight from `registry.npmjs.org`, and npm does the same when the
-> upstream is another host (Nexus, Verdaccio): no supply-chain, CVE or malware
-> check runs for those downloads. Until the proxy rewrites tarball URLs, block
-> clients' direct access to the upstream registry, so such an install fails
-> instead of going around the proxy. Yarn Berry has not been checked.
+Every npm metadata document is served with its `dist.tarball` links pointing
+at the proxy, under the address the client used, so npm, pnpm and Yarn all
+download through the gates whatever the upstream. Behind a reverse proxy, list
+it in `server.trusted_proxies` (or set `server.public_url`) so the links carry
+the external address; see [Behind a reverse proxy](docs/configuration.md#behind-a-reverse-proxy).
+
+> **Existing lockfiles.** A lockfile written before the project used Jō-ei can
+> pin full tarball URLs (`resolved` in `yarn.lock` and in `package-lock.json`),
+> and a client installing from it fetches those URLs without asking the proxy
+> for metadata. Regenerate such lockfiles against the proxy, and block clients'
+> direct access to `registry.npmjs.org` so a lockfile you missed fails the
+> install instead of going around the gates.
 
 **RubyGems / Bundler:**
 ```bash

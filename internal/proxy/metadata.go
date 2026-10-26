@@ -36,19 +36,6 @@ func syntheticETag(body []byte) string {
 	return syntheticETagPrefix + hex.EncodeToString(sum[:8]) + `"`
 }
 
-// holdsSyntheticETag reports whether an If-None-Match header carries a tag this
-// proxy minted. The header is a list, and one of ours anywhere in it means the
-// client is holding a rewritten document. "*" is not ours: it asks about any
-// representation at all, which upstream can answer.
-func holdsSyntheticETag(ifNoneMatch string) bool {
-	for _, tag := range strings.Split(ifNoneMatch, ",") {
-		if strings.HasPrefix(strings.TrimSpace(tag), syntheticETagPrefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // etagMatches reports whether an If-None-Match list contains tag exactly. The
 // tags this proxy mints are strong validators, so a weak comparison would be
 // wrong here.
@@ -61,13 +48,10 @@ func etagMatches(ifNoneMatch, tag string) bool {
 	return false
 }
 
-// metadataFilterRef reports the package a filterable metadata request describes.
-// It is false unless filtering is enabled and this registry's adapter can
-// rewrite documents at all, which keeps the cost off every other ecosystem.
+// metadataFilterRef reports the package a metadata request describes. It is
+// false unless this registry's adapter can rewrite documents at all, which
+// keeps the cost off every other ecosystem.
 func (h *Handler) metadataFilterRef(r *http.Request) (*gate.MetadataRef, bool) {
-	if h.cfg.MetadataFilterMaxMB <= 0 {
-		return nil, false
-	}
 	filterer, ok := h.cfg.Adapter.(gate.MetadataFilterer)
 	if !ok {
 		return nil, false
@@ -75,12 +59,13 @@ func (h *Handler) metadataFilterRef(r *http.Request) (*gate.MetadataRef, bool) {
 	return filterer.NormalizeMetadataRequest(r)
 }
 
-// proxyMetadata serves a metadata document with the versions policy would block
-// at download time hidden from it, so the client's own resolver never picks one.
-// Every path that cannot filter — an oversized document, a coding this proxy
-// does not decode, a non-200 response, an unparseable document, a policy that
-// rejects everything — serves the document untouched, because the artifact
-// gate remains the enforcement boundary.
+// proxyMetadata serves a metadata document only with every download link
+// pointed at the proxy, under the address the client used to reach it, and
+// with the versions policy would block at download time hidden. Served
+// untouched, the document would send the client's downloads around every
+// gate, so each path that cannot rewrite — an oversized document, a coding
+// this proxy does not decode, a status with no document, an unparseable
+// document — fails the request instead.
 func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *gate.MetadataRef) {
 	filterer, ok := h.cfg.Adapter.(gate.MetadataFilterer)
 	if !ok { // unreachable: metadataFilterRef already asserted the capability
@@ -94,104 +79,71 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		Str("path", r.URL.Path).
 		Logger()
 
-	// The whole cost model rests on this branch, and it is decided from the
-	// request alone: a client holding one of our tags needs a fresh body to
-	// filter, so its validators must not reach upstream. Everyone else keeps
-	// their conditional request, and with it the chance of a cheap 304.
-	//
-	// Header.Values, not Header.Get: repeated If-None-Match field lines are
-	// legal HTTP and mean the same thing as one comma-joined line, so joining
-	// them here is what makes detection independent of which shape the client
-	// chose to send.
-	clientTag := strings.Join(r.Header.Values("If-None-Match"), ", ")
-	clientHoldsOurTag := holdsSyntheticETag(clientTag)
-
-	outbound := r
-	if clientHoldsOurTag {
-		outbound = r.Clone(r.Context())
-		outbound.Header.Del("If-None-Match")
-		outbound.Header.Del("If-Modified-Since")
+	base, err := h.cfg.PublicBase.Base(r)
+	if err != nil {
+		log.Warn().Err(err).Msg("refusing a request whose host or forwarding header cannot form a link")
+		writeJSONError(w, http.StatusBadRequest, "bad_forwarded_header")
+		return
+	}
+	linkBase := base.String()
+	if prefix := RoutePrefix(r.Context()); prefix != "" {
+		linkBase += "/" + prefix
 	}
 
-	// Requests that would get different answers must not be coalesced: the
-	// full request URI — not just the path — picks the document, since
-	// UpstreamURLs builds the fetch from it query string included; Accept
-	// picks the document's shape; and the validators actually forwarded
-	// upstream (after a held synthetic tag is stripped above) decide whether
-	// upstream can answer 304 at all. Folding in the forwarded validators
-	// themselves, rather than just whether one was held, is what matters: two
-	// callers that both forward nothing share a flight safely (neither can
-	// get a 304), but a caller forwarding no validator must never share a
-	// flight with one forwarding a validator upstream might honour — sharing
-	// that flight would hand the first caller a bodyless 304 for a request
-	// that has nothing to revalidate. Every field line of a validator counts,
-	// for the reason given at clientTag above: the flight forwards them all.
-	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s",
-		r.URL.RequestURI(),
-		r.Header.Get("Accept"),
-		strings.Join(outbound.Header.Values("If-None-Match"), ", "),
-		strings.Join(outbound.Header.Values("If-Modified-Since"), ", "),
-	)
+	// Every document this proxy serves is rewritten, so a client's validators
+	// name either one of our own tags — which upstream cannot answer — or a
+	// copy cached before rewriting, which upstream's 304 would keep alive with
+	// its links around the proxy. Neither may reach upstream. gzip is the only
+	// coding readMetadataDocument decodes, so ask for exactly that rather than
+	// relaying the client's own Accept-Encoding; a partial response is a
+	// slice of a document that cannot be rewritten.
+	clientTag := strings.Join(r.Header.Values("If-None-Match"), ", ")
+	outbound := r.Clone(r.Context())
+	outbound.Header.Del("If-None-Match")
+	outbound.Header.Del("If-Modified-Since")
+	outbound.Header.Del("Range")
+	outbound.Header.Del("If-Range")
+	outbound.Header.Set("Accept-Encoding", "gzip")
 
-	fetch, relay, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)
+	// The full request URI — not just the path — picks the document, since
+	// UpstreamURLs builds the fetch from it; Accept picks its shape. The
+	// flight forwards the leader's own headers upstream, so callers whose
+	// credentials differ must not share one: a private registry would hand
+	// one caller a document fetched with another's token. The rewrite below
+	// runs per caller, so callers behind different addresses share a flight
+	// safely.
+	key := r.URL.RequestURI() + "\x00" + r.Header.Get("Accept") + "\x00" + credentialTag(r)
+
+	fetch, atts, err := h.fetchMetadataDocument(outbound, key, h.metadataLimit())
 	switch {
-	case relay != "":
-		// Not shareable across callers: whatever the flight read (or chose not
-		// to read) belongs to that one attempt, so this caller fetches its own
-		// copy. outbound's body was already drained and closed by the flight's
-		// own attempt — Clone shares the Body field by reference rather than
-		// deep-copying it, so fetchMetadataDocument's internal clone consumed
-		// the same body this one would reuse — so this retry needs a fresh one.
-		// Metadata GETs never carry a request body, so NoBody is exact here,
-		// not just a stand-in.
-		retry := outbound.Clone(outbound.Context())
-		retry.Body = http.NoBody
-		h.streamOversizedMetadata(w, retry, &log, relay)
-		return
 	case fetch == nil && (err == nil || errors.Is(err, errNoUpstreams) || errors.Is(err, errUnreadableRequestBody)):
 		// forwardUpstream itself never produced a usable response — every
 		// mirror failed, or none is configured — and writeForwardError already
-		// knows how to report that precisely (404 vs 502 vs 500). A document-read
-		// failure never lands here: forwardUpstream returns no error but these
-		// two sentinels, so any other non-nil err below is readMetadataDocument's.
+		// knows how to report that precisely (404 vs 502 vs 500).
 		h.writeForwardError(w, atts, err, log)
 		return
 	case err != nil:
-		// A cancelled context would mean the client hung up mid-fetch, not a
-		// genuine upstream or read failure — but fetchMetadataDocument detaches
-		// the flight's own request context (context.WithoutCancel), precisely so
-		// one caller's disconnect cannot cancel the fetch for every other waiter
-		// sharing it. That means this specific read can no longer observe THIS
-		// caller's cancellation: an aborted npm install now surfaces later, at
-		// the write in writeMetadataDocument, which carries the matching
-		// demotion. This branch is kept defensive-only, in case a future path
-		// ever reaches readMetadataDocument without that detachment.
+		// fetchMetadataDocument detaches the flight from any one caller's
+		// context, so a cancellation here is defensive only: an aborted install
+		// surfaces at the write in writeMetadataDocument instead.
 		event := log.Error()
 		if errors.Is(err, context.Canceled) {
 			event = log.Debug()
 		}
-		event.Err(err).Msg("reading upstream document")
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		failMetadata(w, event.Err(err))
 		return
 	}
-
-	// Upstream answered 304, which it can only do for a validator we
-	// forwarded — and every caller sharing this flight forwarded the exact
-	// same validator, because the coalescing key folds it in above. A client
-	// holding one of our tags never reaches this branch, because its
-	// validators were stripped above and upstream never 304s an empty
-	// conditional. There is no body to filter and none is needed.
-	if fetch.status == http.StatusNotModified {
+	if fetch.status == http.StatusNoContent {
 		copyProxyHeaders(w.Header(), fetch.header)
-		w.WriteHeader(http.StatusNotModified)
+		w.WriteHeader(fetch.status)
 		return
 	}
 
 	var undated int
-	filtered, err := filterer.FilterVersions(fetch.doc, h.versionDecider(r.Context(), mref, &undated))
+	filtered, err := filterer.FilterVersions(fetch.doc, mref, h.versionDecider(r.Context(), mref, &undated), linkBase)
 	if err != nil {
-		log.Warn().Err(err).Msg("unparseable document, serving unfiltered")
-		filtered = gate.FilteredDocument{Body: fetch.doc}
+		failMetadata(w, log.Error().Err(err))
+		return
 	}
 	if undated > 0 {
 		// The abbreviated packument has no publish dates at all, so min-age
@@ -200,75 +152,103 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		log.Debug().Int("versions", undated).
 			Msg("document carries no publish dates, so the age rule is mute here")
 	}
-
+	if n := len(filtered.Unmappable); n > 0 {
+		examples := filtered.Unmappable
+		if len(examples) > maxLoggedDrops {
+			examples = examples[:maxLoggedDrops]
+		}
+		log.Warn().Int("count", n).Strs("examples", examples).
+			Msg("hid versions whose download link cannot route through the proxy")
+	}
 	switch {
 	case filtered.AllRejected:
 		log.Info().Strs("versions", filtered.Removed).
-			Msg("every version is blocked, serving the document unchanged")
+			Msg("every version is blocked, serving them all for the artifact gate to refuse")
 	case len(filtered.Removed) > 0:
 		log.Info().Strs("versions", filtered.Removed).Int("count", len(filtered.Removed)).
 			Msg("hid blocked versions")
 	}
 
-	rewritten := len(filtered.Removed) > 0 && !filtered.AllRejected
-	if rewritten {
-		tag := syntheticETag(filtered.Body)
-		if clientHoldsOurTag && etagMatches(clientTag, tag) {
-			// Same document, same policy, same rewrite: the copy the client
-			// already has is current.
-			w.Header().Set("ETag", tag)
-			if cc := fetch.header.Get("Cache-Control"); cc != "" {
-				w.Header().Set("Cache-Control", cc)
-			}
-			if vary := fetch.header.Get("Vary"); vary != "" {
-				w.Header().Set("Vary", vary)
-			}
-			w.WriteHeader(http.StatusNotModified)
-			return
+	tag := syntheticETag(filtered.Body)
+	if etagMatches(clientTag, tag) {
+		// Same document, same policy, same address: the copy the client
+		// already has is current.
+		w.Header().Set("ETag", tag)
+		if cc := fetch.header.Get("Cache-Control"); cc != "" {
+			w.Header().Set("Cache-Control", cc)
 		}
+		if vary := fetch.header.Get("Vary"); vary != "" {
+			w.Header().Set("Vary", vary)
+		}
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
-	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, rewritten, log)
+	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, tag, log)
 }
 
-// metadataFetch is one coalesced upstream document: the bytes, and the response
-// header and status they came with. A document over the cap is not shareable —
-// its remainder is a live reader belonging to one request — so oversized
-// fetches are reported and the caller retries alone.
+// credentialTag fingerprints the headers that carry a caller's upstream
+// credentials, so the coalescing key can tell callers apart without holding
+// their secrets.
+func credentialTag(r *http.Request) string {
+	auth, cookie := r.Header.Values("Authorization"), r.Header.Values("Cookie")
+	if len(auth) == 0 && len(cookie) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(auth, "\n") + "\x00" + strings.Join(cookie, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// metadataLimit is the byte cap on a decoded metadata document; zero means no
+// cap.
+func (h *Handler) metadataLimit() int64 {
+	if h.cfg.MetadataFilterMaxMB <= 0 {
+		return 0
+	}
+	return int64(h.cfg.MetadataFilterMaxMB) << 20
+}
+
+// failMetadata logs why a metadata document cannot be served and answers 502:
+// served untouched, it would hand the client links around the proxy.
+func failMetadata(w http.ResponseWriter, event *zerolog.Event) {
+	event.Msg("upstream metadata document cannot be rewritten")
+	writeJSONError(w, http.StatusBadGateway, "metadata_rewrite_failed")
+}
+
+// writeJSONError answers status with {"error": code}.
+func writeJSONError(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"error":"` + code + `"}`))
+}
+
+// metadataFetch is one coalesced upstream document: the bytes, and the
+// response header and status they came with. doc is nil for a 204.
 type metadataFetch struct {
 	doc    []byte
 	header http.Header
 	status int
 }
 
-// relayReason names why a fetched response cannot be filtered and must instead
-// be relayed verbatim by streamOversizedMetadata. The empty value means the
-// document is filterable.
-type relayReason string
-
-const (
-	relayOversized   relayReason = "oversized" // exceeded the configured cap
-	relayEncoding    relayReason = "encoding"  // a Content-Encoding this proxy does not decode
-	relayNonOKStatus relayReason = "status"    // not a 200 document (redirect, 204, ...); 304 is handled separately
+// Reasons an upstream answer cannot become a rewritten document.
+var (
+	errMetadataOversized = errors.New("document exceeds server.metadata_filter_max_mb")
+	errMetadataEncoding  = errors.New("document in a content-encoding the proxy cannot decode")
+	errMetadataStatus    = errors.New("upstream status carries no document to rewrite")
 )
 
 // fetchMetadataDocument fetches and decompresses a metadata document, collapsing
-// concurrent callers for the same package onto one upstream request — the case
+// concurrent callers for the same document onto one upstream request — the case
 // that matters is a CI fleet resolving the same dependency tree at once, which
 // would otherwise cost one upstream fetch per worker instead of one overall.
-// A non-empty relay reason means the caller must fetch and stream the document
-// itself instead of filtering it: an oversized body's remainder is a live
-// reader that cannot be handed to more than one waiter, an unsupported coding
-// was left untouched precisely so it could still be relayed, and a non-200
-// status is not a document to filter at all.
+// limit caps the decoded document (0 = no cap).
 //
 // The upstream request is detached from the triggering caller's context before
 // the fetch runs, the same way recheckExpired detaches its own flight: a leader
 // whose client disconnects mid-flight must not cancel the fetch for every other
 // waiter sharing it.
-func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64) (f *metadataFetch, relay relayReason, atts upstream.Attempts, err error) {
+func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64) (*metadataFetch, upstream.Attempts, error) {
 	type result struct {
 		fetch *metadataFetch
-		relay relayReason
 		atts  upstream.Attempts
 		err   error
 	}
@@ -280,68 +260,30 @@ func (h *Handler) fetchMetadataDocument(r *http.Request, key string, limit int64
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode == http.StatusNotModified {
+		switch resp.StatusCode {
+		case http.StatusOK:
+		case http.StatusNoContent:
 			return result{fetch: &metadataFetch{header: resp.Header.Clone(), status: resp.StatusCode}}, nil
-		}
-		if resp.StatusCode != http.StatusOK {
-			// A mirror answering with a redirect, 204, or similar sub-400 status
-			// (forwardUpstream accepts anything under 400) has no document to
-			// filter. Relay it exactly as proxyTransparent would have, rather
-			// than buffering it, failing to parse it, and relaying it anyway
-			// with a Content-Length that no longer matches nothing consumed.
-			return result{relay: relayNonOKStatus}, nil
+		default:
+			// The HTTP client follows redirects itself, so a 3xx here is one it
+			// gave up on — or a 304 to a request that sent no validator, or a
+			// 2xx that is not a whole document. None can be rewritten.
+			return result{err: fmt.Errorf("%w: %d", errMetadataStatus, resp.StatusCode)}, nil
 		}
 
 		doc, rest, unsupportedEncoding, err := readMetadataDocument(resp, limit)
-		if err != nil {
+		switch {
+		case err != nil:
 			return result{err: err}, nil
-		}
-		if rest != nil {
-			reason := relayOversized
-			if unsupportedEncoding {
-				reason = relayEncoding
-			}
-			return result{relay: reason}, nil
+		case unsupportedEncoding:
+			return result{err: fmt.Errorf("%w: %q", errMetadataEncoding, resp.Header.Get("Content-Encoding"))}, nil
+		case rest != nil:
+			return result{err: errMetadataOversized}, nil
 		}
 		return result{fetch: &metadataFetch{doc: doc, header: resp.Header.Clone(), status: resp.StatusCode}}, nil
 	})
 	res := v.(result)
-	return res.fetch, res.relay, res.atts, res.err
-}
-
-// streamOversizedMetadata serves a document this proxy cannot filter: too
-// large to buffer, compressed with a coding it does not decode, or not a 200
-// document at all. In every case the artifact gate blocks the download
-// instead, which is the behaviour that predates metadata filtering. It streams
-// the upstream body verbatim, compression (and status) and all, rather than
-// resuming a partially-read body from a coalesced attempt — that body's
-// remainder belongs to whichever request read it, not to this one, so this
-// caller fetches its own copy alone.
-func (h *Handler) streamOversizedMetadata(w http.ResponseWriter, outbound *http.Request, log *zerolog.Logger, relay relayReason) {
-	switch relay {
-	case relayOversized:
-		log.Warn().Int("cap_mb", h.cfg.MetadataFilterMaxMB).
-			Msg("document over cap, serving unfiltered")
-	case relayEncoding:
-		log.Warn().Msg("content-encoding not supported, serving unfiltered")
-	default:
-		// A non-200 sub-400 status is not a filtering degradation — there was
-		// never a document to filter — so it does not earn a Warn.
-		log.Debug().Msg("non-200 upstream response, relaying unfiltered")
-	}
-
-	resp, atts, err := h.forwardUpstream(outbound)
-	if resp == nil {
-		h.writeForwardError(w, atts, err, *log)
-		return
-	}
-	defer resp.Body.Close()
-
-	copyProxyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	if _, err := httpx.CopyWithWriteDeadline(w, resp.Body, httpx.DefaultWriteIdleTimeout); err != nil {
-		log.Error().Err(err).Msg("streaming oversized document")
-	}
+	return res.fetch, res.atts, res.err
 }
 
 // versionDecider builds the per-version predicate the filter asks. It mirrors
@@ -372,21 +314,16 @@ func (h *Handler) versionDecider(ctx context.Context, mref *gate.MetadataRef, un
 }
 
 // readMetadataDocument reads a decompressed metadata document, at most limit
-// bytes of it. A non-nil rest means the document cannot be filtered and must be
-// streamed instead: either it is larger than limit, in which case rest is
-// positioned at the remainder, or its Content-Encoding is a coding this proxy
-// does not decode, in which case rest is resp.Body itself, still untouched.
-// unsupportedEncoding distinguishes the two so the caller can log accurately;
-// both route to the same verbatim relay.
+// bytes of it (0 = no cap). A non-nil rest means the document cannot be
+// rewritten: either it is larger than limit, in which case rest is positioned
+// at the remainder, or its Content-Encoding is a coding this proxy does not
+// decode, in which case rest is resp.Body itself, still untouched.
+// unsupportedEncoding distinguishes the two so the caller can log accurately.
 //
 // Only a bare "gzip" is decoded. Anything else this proxy might see —
-// "deflate", "br", "zstd", or a coding list such as "gzip, identity" — is left
-// alone deliberately: decoding here happens before anything has been read from
-// resp.Body, so an unsupported coding can still be relayed byte-for-byte. The
-// alternative — reading it as if it were plain JSON — is silent corruption:
-// FilterVersions fails to unmarshal the still-compressed bytes, "unfiltered"
-// serving then strips the Content-Encoding that described them and ships a
-// body the client is told is plain JSON but cannot decode.
+// "deflate", "br", "zstd", or a coding list such as "gzip, identity" — is
+// reported rather than read as plain JSON, which would fail to parse as a
+// document no matter what it holds.
 func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io.Reader, unsupportedEncoding bool, err error) {
 	src := io.Reader(resp.Body)
 	switch coding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); {
@@ -401,6 +338,13 @@ func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io
 	default:
 		return nil, resp.Body, true, nil
 	}
+	if limit <= 0 {
+		buf, err := io.ReadAll(src)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("reading metadata document: %w", err)
+		}
+		return buf, nil, false, nil
+	}
 	buf, err := io.ReadAll(io.LimitReader(src, limit+1))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("reading metadata document: %w", err)
@@ -411,19 +355,17 @@ func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io
 	return buf, src, false, nil
 }
 
-// writeMetadataDocument serves a buffered document. A rewritten body gets this
-// proxy's own validator and loses upstream's, so no client can revalidate its
-// way back into a stale rewrite; an untouched body keeps upstream's validators
-// and with them the cheap 304 that follows. The body is re-compressed when the
-// client asked for gzip, so rewriting costs the client hop nothing.
-func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.Header, status int, body []byte, rewritten bool, log zerolog.Logger) {
+// writeMetadataDocument serves a rewritten document. It gets this proxy's own
+// validator, tag (syntheticETag of body, already computed by the caller for
+// its 304 check), and loses upstream's, so no client can revalidate its way back
+// into a stale rewrite. The body is re-compressed when the client asked for
+// gzip, so rewriting costs the client hop nothing.
+func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.Header, status int, body []byte, tag string, log zerolog.Logger) {
 	copyProxyHeaders(w.Header(), header)
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
-	if rewritten {
-		w.Header().Del("Last-Modified")
-		w.Header().Set("ETag", syntheticETag(body))
-	}
+	w.Header().Del("Last-Modified")
+	w.Header().Set("ETag", tag)
 
 	payload := body
 	if clientAcceptsGzip(r) {
@@ -442,11 +384,9 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 	w.WriteHeader(status)
 	if _, err := httpx.CopyWithWriteDeadline(w, bytes.NewReader(payload), httpx.DefaultWriteIdleTimeout); err != nil {
 		// The flight's own fetch context is detached from any one caller's
-		// disconnect (see fetchMetadataDocument), so an aborted npm install no
-		// longer shows up as a cancelled read — it shows up here instead, as a
-		// write against a connection the client already closed. That is the
-		// same "client hung up, not a proxy failure" case the read path used to
-		// demote, just relocated to where it now actually occurs.
+		// disconnect (see fetchMetadataDocument), so an aborted npm install
+		// shows up here, as a write against a connection the client already
+		// closed: a client hanging up, not a proxy failure.
 		event := log.Error()
 		if r.Context().Err() != nil {
 			event = log.Debug()

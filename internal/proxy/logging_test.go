@@ -169,14 +169,14 @@ func TestLogging_TransparentFailureCarriesRequestIDAndPath(t *testing.T) {
 		Logger:  zerolog.New(&buf),
 	})
 
-	req := withRequestID(httptest.NewRequest(http.MethodGet, "/left-pad", nil), "rid-tp")
+	req := withRequestID(httptest.NewRequest(http.MethodGet, "/-/v1/search", nil), "rid-tp")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	require.Equal(t, http.StatusBadGateway, w.Code)
 
 	lines := logLines(t, &buf)
 	requireCommonFields(t, lines, "rid-tp", "proxy")
-	assert.Equal(t, "/left-pad", lines[0]["path"])
+	assert.Equal(t, "/-/v1/search", lines[0]["path"])
 }
 
 func TestLogging_MuxUnknownPrefixCarriesRequestID(t *testing.T) {

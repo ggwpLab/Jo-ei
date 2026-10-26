@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ggwpLab/Jo-ei/internal/config"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
+	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 )
@@ -315,4 +318,38 @@ func TestConsoleSecurityHeaders(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "registry/health traffic carries no CSP")
+}
+
+// The public base resolver reaches the npm handler: links in a served
+// packument carry server.public_url and the route prefix.
+func TestBuildHandlers_NPMLinksUsePublicBase(t *testing.T) {
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"left-pad","versions":{"1.3.0":{"dist":{"tarball":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}}}`))
+	}))
+	defer upstreamSrv.Close()
+
+	cfg := &config.Config{}
+	cfg.Registries.NPM.Enabled = true
+	cfg.Registries.NPM.Upstreams = []string{upstreamSrv.URL}
+	base, err := httpx.NewPublicBaseResolver("https://reg.example/joei", nil, zerolog.Nop())
+	require.NoError(t, err)
+
+	h := buildHandlers(cfg, sharedDeps{logger: zerolog.Nop(), publicBase: base})
+	mux := proxy.NewMux(h, nil, zerolog.Nop())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/yarn/left-pad", nil))
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"tarball":"https://reg.example/joei/yarn/left-pad/-/left-pad-1.3.0.tgz"`)
+}
+
+// A cap carried over from an older config changes behaviour silently: 0 used
+// to switch filtering off, and a small cap now fails large packuments instead
+// of relaying them. Both earn a startup warning; the default does not.
+func TestMetadataCapWarning(t *testing.T) {
+	assert.Empty(t, metadataCapWarning(256))
+	assert.Empty(t, metadataCapWarning(512))
+	assert.Contains(t, metadataCapWarning(0), "no size cap")
+	assert.Contains(t, metadataCapWarning(32), "502")
 }

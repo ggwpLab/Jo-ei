@@ -7,6 +7,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -74,12 +75,20 @@ type DownloadMetadataExtractor interface {
 	MetadataFromHeader(h http.Header) *PackageMetadata
 }
 
-// MetadataRef names the package a metadata document describes. It is a
-// PackageRef without a version, because the document covers every version.
+// MetadataRef names the package a metadata document describes.
 type MetadataRef struct {
 	Ecosystem string
 	Name      string
+	// Version is empty for a document covering every version (an npm
+	// packument), and names the requested version or dist-tag for a
+	// single-version manifest.
+	Version string
 }
+
+// ErrNoServableVersions means no version of a metadata document is left with a
+// download link the proxy can route through its gates, so the document cannot
+// be served at all.
+var ErrNoServableVersions = errors.New("no version left with a rewritable download link")
 
 // VersionDecider reports whether one version of a package may be served.
 // publishedAt is the zero time when the document carries no publish date for
@@ -88,31 +97,40 @@ type VersionDecider func(version string, publishedAt time.Time) bool
 
 // FilteredDocument is the result of rewriting a metadata document.
 type FilteredDocument struct {
-	// Body is the document to serve. It is the input document itself, byte for
-	// byte, when nothing was removed — which lets the caller forward the
-	// upstream validators along with it.
+	// Body is the document to serve, re-encoded with every download link
+	// pointing at the proxy.
 	Body []byte
-	// Removed lists the versions hidden from Body, sorted.
+	// Removed lists the versions hidden from Body because policy rejects them,
+	// sorted.
 	Removed []string
+	// Unmappable lists the versions hidden from Body because their download
+	// link cannot be routed through the proxy, sorted.
+	Unmappable []string
 	// AllRejected reports that policy rejected every version in the document.
-	// Body is then the original: an empty version list would turn every install
-	// of that package into a resolution error instead of a gate verdict, so the
-	// artifact gate is left to state the real reason at download time.
+	// Those versions then stay in Body: an empty version list would turn every
+	// install of that package into a resolution error instead of a gate
+	// verdict, so the artifact gate is left to state the real reason at
+	// download time.
 	AllRejected bool
 }
 
 // MetadataFilterer is an optional RegistryAdapter capability: rewriting a
 // metadata document so that versions policy will not serve are absent from it,
 // letting the client's own resolver pick an allowed version instead of failing
-// on a blocked download. npm implements it; adapters whose clients resolve
+// on a blocked download, and so that every download link points at the proxy
+// rather than around it. npm implements it; adapters whose clients resolve
 // server-side do not.
 type MetadataFilterer interface {
 	// NormalizeMetadataRequest reports whether r asks for a filterable metadata
 	// document, and names the package it describes.
 	NormalizeMetadataRequest(r *http.Request) (*MetadataRef, bool)
 
-	// FilterVersions rewrites doc, dropping every version decide rejects.
-	FilterVersions(doc []byte, decide VersionDecider) (FilteredDocument, error)
+	// FilterVersions rewrites doc, dropping every version decide rejects and
+	// pointing every download link under linkBase (the proxy's client-facing
+	// URL for this registry, without a trailing slash). A single-version
+	// manifest (ref.Version set) is rewritten but not filtered. An error means
+	// the document cannot be served.
+	FilterVersions(doc []byte, ref *MetadataRef, decide VersionDecider, linkBase string) (FilteredDocument, error)
 }
 
 // IndexRewriter is an optional RegistryAdapter capability for registries whose

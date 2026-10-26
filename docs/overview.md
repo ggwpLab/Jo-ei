@@ -51,9 +51,11 @@ Developer (pip / npm / mvn / go / bundle / docker pull)
    Upstream registry
 ```
 
-Index and metadata requests (for example `/simple/requests/` for pip) pass
-straight through without scanning. Only what actually gets installed is
-checked.
+Index and metadata requests (for example `/simple/requests/` for pip) are not
+scanned; only what actually gets installed is checked. PyPI index pages and npm
+metadata documents are rewritten so that every download link points at the
+proxy, and a document the proxy cannot rewrite is refused rather than served
+with links around the gates.
 
 ## Four layers of protection
 

@@ -92,6 +92,15 @@ func run(ctx context.Context, cfgPath string) error {
 		return err
 	}
 
+	trusted, err := httpx.ParseTrustedPeers(cfg.Server.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("server.trusted_proxies: %w", err)
+	}
+	publicBase, err := httpx.NewPublicBaseResolver(cfg.Server.PublicURL, trusted, serverLog)
+	if err != nil {
+		return fmt.Errorf("server.public_url: %w", err)
+	}
+
 	shared := sharedDeps{
 		filter:         st.policy,
 		cache:          cache.AsArtifactCache(st.cache),
@@ -104,8 +113,13 @@ func run(ctx context.Context, cfgPath string) error {
 		cveRecheckTTL:       time.Duration(cfg.Cache.Revalidation.CVETTLMinutes) * time.Minute,
 		malwareRecheckTTL:   time.Duration(cfg.Cache.Revalidation.MalwareTTLMinutes) * time.Minute,
 		metadataFilterMaxMB: cfg.Server.MetadataFilterMaxMB,
+		publicBase:          publicBase,
 		tempDir:             st.tempDir,
 		maxArtifactBytes:    int64(cfg.Server.MaxArtifactMB) << 20,
+	}
+
+	if msg := metadataCapWarning(cfg.Server.MetadataFilterMaxMB); msg != "" {
+		serverLog.Warn().Int("metadata_filter_max_mb", cfg.Server.MetadataFilterMaxMB).Msg(msg)
 	}
 
 	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
