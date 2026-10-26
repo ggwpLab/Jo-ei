@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,9 +35,11 @@ func newTestRegistry(t *testing.T, packageName, version string, ageHours int) *h
 					"license": "MIT", "author": "test",
 				},
 				"urls": []map[string]any{{
+					// The wheel the tests request: its file name spells the
+					// project with "_" where the normalized name has "-".
+					"filename":             strings.ReplaceAll(packageName, "-", "_") + "-" + version + "-py3-none-any.whl",
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
 					"url":                  "https://example.com/" + packageName + ".whl",
-					"digests":              map[string]any{"sha256": "abc123"},
 				}},
 			})
 			return
@@ -116,9 +119,9 @@ func TestIntegration_CacheHitNoUpstreamOnSecondRequest(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"info": map[string]any{"name": "flask", "version": "3.0.0", "license": "BSD", "author": "PF"},
 				"urls": []map[string]any{{
+					"filename":             "flask-3.0.0-py3-none-any.whl",
 					"upload_time_iso_8601": publishedAt.Format(time.RFC3339),
 					"url":                  "https://files.example.com/flask-3.0.0.whl",
-					"digests":              map[string]any{"sha256": "def456"},
 				}},
 			})
 			return
