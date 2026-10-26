@@ -8,8 +8,12 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
-// mavenArtifactExts are the binary artifact extensions we intercept and scan.
-var mavenArtifactExts = []string{".jar", ".war", ".aar"}
+// mavenSidecarExts are the extensions of files that sit beside an artifact and
+// carry no code: the POM, Gradle module metadata, repository metadata,
+// checksums and signatures. Every other file in a version directory is an
+// artifact and goes through the gates — native executables, archives and
+// plugin bundles ship code as surely as a jar does.
+var mavenSidecarExts = []string{".pom", ".module", ".xml", ".md5", ".sha1", ".sha256", ".sha512", ".asc", ".sig"}
 
 // MavenAdapter implements gate.RegistryAdapter for a Maven repository.
 type MavenAdapter struct {
@@ -32,12 +36,10 @@ func NewMavenAdapter(upstreams []string, opts ...Option) *MavenAdapter {
 
 func (a *MavenAdapter) Name() string { return "maven" }
 
-// NormalizeRequest intercepts binary artifact downloads (.jar/.war/.aar).
-// Sidecar files (.pom, .sha1, .md5, .asc) are proxied transparently.
+// NormalizeRequest intercepts artifact downloads: any file in a version
+// directory except the sidecars in mavenSidecarExts, which are proxied
+// transparently.
 func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
-	if !hasMavenArtifactExt(r.URL.Path) {
-		return nil, false
-	}
 	name, version, classifier, ok := parseMavenPath(r.URL.Path)
 	if !ok {
 		return nil, false
@@ -50,9 +52,17 @@ func (a *MavenAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool
 	}, true
 }
 
-func hasMavenArtifactExt(path string) bool {
-	for _, ext := range mavenArtifactExts {
-		if strings.HasSuffix(path, ext) {
+// IsArtifactPath implements gate.ArtifactPathMatcher. In the Maven layout an
+// artifact is recognised by the same rule that names it, so every artifact
+// path NormalizeRequest sees is one it can parse.
+func (a *MavenAdapter) IsArtifactPath(r *http.Request) bool {
+	_, _, _, ok := parseMavenPath(r.URL.Path)
+	return ok
+}
+
+func isMavenSidecar(file string) bool {
+	for _, ext := range mavenSidecarExts {
+		if strings.HasSuffix(file, ext) {
 			return true
 		}
 	}
@@ -60,12 +70,11 @@ func hasMavenArtifactExt(path string) bool {
 }
 
 // parseMavenPath parses "/<group/as/path>/<artifact>/<version>/<file>" into
-// name "group:artifact", the version, and the optional classifier.
-//
-// The file name follows "<artifact>-<version>[-<classifier>].<ext>". The
-// classifier (e.g. "sources", "javadoc") is returned separately so it can
-// disambiguate the cache key: without it, "foo-1.0.jar" and
-// "foo-1.0-sources.jar" would share one cache slot and serve each other's bytes.
+// name "group:artifact", the version, and the classifier that keeps the file's
+// cache slot apart from its siblings'. It reports false for anything that is
+// not an artifact file: a sidecar, a directory listing, or a file whose name
+// does not start with "<artifact>-", which every file Maven or Gradle resolves
+// from coordinates does.
 func parseMavenPath(path string) (name, version, classifier string, ok bool) {
 	segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(segs) < 4 {
@@ -78,24 +87,38 @@ func parseMavenPath(path string) (name, version, classifier string, ok bool) {
 	if group == "" || artifact == "" || version == "" {
 		return "", "", "", false
 	}
-	classifier = mavenClassifier(file, artifact, version)
-	return group + ":" + artifact, version, classifier, true
+	if !strings.HasPrefix(file, artifact+"-") || isMavenSidecar(file) {
+		return "", "", "", false
+	}
+	return group + ":" + artifact, version, mavenClassifier(file, artifact, version), true
 }
 
-// mavenClassifier extracts the classifier token from an artifact file name of
-// the form "<artifact>-<version>[-<classifier>].<ext>". It returns "" for the
-// main artifact or when the name does not match the expected prefix.
+// mavenClassifier names a file within its version directory, for the cache
+// key. A file "<artifact>-<version>[-<classifier>].<ext>" yields the classifier
+// token ("" for the main jar, "sources" for the sources jar) with ".<ext>"
+// appended unless the extension is "jar" — so "app-1.0.zip" (".zip") and
+// "app-1.0.jar" ("") do not share a slot, and jar keys stay as they were. Any
+// other name — notably a timestamped snapshot build such as
+// "foo-1.0-20231010.123456-1.jar" in directory "1.0-SNAPSHOT" — yields the
+// whole file name, which is unique within the directory.
 func mavenClassifier(file, artifact, version string) string {
-	prefix := artifact + "-" + version
-	rest, ok := strings.CutPrefix(file, prefix)
-	if !ok {
-		return ""
+	rest, ok := strings.CutPrefix(file, artifact+"-"+version)
+	if !ok || rest == "" {
+		return file
 	}
-	// rest is ".<ext>" (main) or "-<classifier>.<ext>".
-	if dot := strings.LastIndex(rest, "."); dot >= 0 {
-		rest = rest[:dot]
+	var cls, ext string
+	switch {
+	case strings.HasPrefix(rest, "-"):
+		cls, ext, _ = strings.Cut(rest[1:], ".")
+	case strings.HasPrefix(rest, "."):
+		ext = rest[1:]
+	default:
+		return file
 	}
-	return strings.TrimPrefix(rest, "-")
+	if ext == "jar" {
+		return cls
+	}
+	return cls + "." + ext
 }
 
 // FetchMetadata is a no-op for Maven: there is no separate metadata API to call.

@@ -119,7 +119,8 @@ func newRecheckHarness(t *testing.T, cveTTL, avTTL time.Duration) *recheckHarnes
 
 	hs := &recheckHarness{
 		srv: srv, fc: fc, cve: cve, av: av, rec: rec,
-		ref:  gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"},
+		ref: gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0",
+			Classifier: "victim-1.0.0-py3-none-any.whl"},
 		path: "/packages/py3/v/victim/victim-1.0.0-py3-none-any.whl",
 	}
 	resp, err := http.Get(srv.URL + hs.path)
@@ -238,7 +239,8 @@ func TestRecheck_NilScannersSkipRecheck(t *testing.T) {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
-	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0",
+		Classifier: "victim-1.0.0-py3-none-any.whl"}
 	path := "/packages/py3/v/victim/victim-1.0.0-py3-none-any.whl"
 
 	resp, err := http.Get(srv.URL + path)
@@ -333,7 +335,8 @@ func newCoalesceHarness(t *testing.T, infected bool) *coalesceHarness {
 
 	hs := &coalesceHarness{
 		srv: srv, fc: fc, av: av, rec: rec, entered: &entered,
-		ref:  gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"},
+		ref: gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0",
+			Classifier: "victim-1.0.0-py3-none-any.whl"},
 		path: "/packages/py3/v/victim/victim-1.0.0-py3-none-any.whl",
 	}
 	// Seed pull passes with the gate open (no re-check on a fresh insert; the

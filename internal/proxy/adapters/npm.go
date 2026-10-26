@@ -46,9 +46,6 @@ type npmMetadata struct {
 	Time     map[string]string `json:"time"`
 	Versions map[string]struct {
 		License npmLicense `json:"license"`
-		Dist    struct {
-			Shasum string `json:"shasum"`
-		} `json:"dist"`
 	} `json:"versions"`
 }
 
@@ -94,6 +91,13 @@ func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) 
 		return nil, false
 	}
 	return &gate.PackageRef{Ecosystem: "npm", Name: name, Version: version}, true
+}
+
+// IsArtifactPath implements gate.ArtifactPathMatcher: a tarball is any ".tgz"
+// under a "/-/" segment, whether or not NormalizeRequest can read the version
+// out of its file name.
+func (a *NPMAdapter) IsArtifactPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".tgz") && strings.Contains(r.URL.Path, "/-/")
 }
 
 // parseNPMVersion extracts the version from a tarball filename "<unscoped>-<version>.tgz".
@@ -168,7 +172,6 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *ga
 	return &gate.PackageMetadata{
 		PublishedAt: publishedAt.UTC(),
 		License:     string(versionInfo.License),
-		Checksum:    versionInfo.Dist.Shasum,
 	}, apiURL, resp.StatusCode, nil
 }
 

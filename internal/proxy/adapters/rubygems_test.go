@@ -78,7 +78,6 @@ func TestRubyGemsAdapter_FetchMetadata_RubyPlatform(t *testing.T) {
 	require.NoError(t, err)
 	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
 	assert.Equal(t, "MIT", meta.License)
-	assert.Equal(t, "abc123", meta.Checksum)
 }
 
 func TestRubyGemsAdapter_FetchMetadata_MatchesPlatform(t *testing.T) {
@@ -95,7 +94,6 @@ func TestRubyGemsAdapter_FetchMetadata_MatchesPlatform(t *testing.T) {
 	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "nokogiri", Version: "1.15.0-x86_64-linux"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
-	assert.Equal(t, "linuxsha", meta.Checksum)
 	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
 }
 
@@ -114,7 +112,7 @@ func TestRubyGemsAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
-	assert.Equal(t, "abc123", meta.Checksum)
+	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
 }
 
 func TestRubyGemsAdapter_FetchMetadata_VersionNotFound(t *testing.T) {
@@ -146,5 +144,5 @@ func TestRubyGemsAdapter_FetchMetadata_FallsBackWhenVersionAbsent(t *testing.T) 
 	ref := &gate.PackageRef{Ecosystem: "rubygems", Name: "rails", Version: "7.0.4"}
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
-	assert.Equal(t, "newsha", meta.Checksum)
+	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
 }

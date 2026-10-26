@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
@@ -119,4 +120,35 @@ func TestWrapHandler_NilMetricsPassThrough(t *testing.T) {
 	got := m.WrapHandler(h, nil)
 	require.NotNil(t, got)
 	assert.Same(t, h, got.(*stubHandler))
+}
+
+// A response write that fails on the server's side — an expired write
+// deadline, as httpx.CopyWithWriteDeadline sets for a stalled client — is an
+// aborted request even while the client's connection is still open.
+func TestWrapHandler_CountsFailedWriteAsAborted(t *testing.T) {
+	m := newTestMetrics()
+	done := make(chan struct{})
+	h := m.WrapHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(-time.Second))
+		w.WriteHeader(http.StatusOK)
+		chunk := make([]byte, 64<<10)
+		for i := 0; i < 16; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}), NewRouteFunc([]string{"pypi"}))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(done)
+		h.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	go func() {
+		if resp, err := http.Get(srv.URL + "/pypi/x"); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	<-done
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.http.aborted.WithLabelValues("pypi")))
 }

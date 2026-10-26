@@ -172,6 +172,17 @@ yarn config set npmRegistryServer http://localhost:8080/yarn/
 yarn config set registry http://localhost:8080/yarn/
 ```
 
+> **Known limitation — tarballs can bypass the gates.** The proxy serves npm
+> packuments with their `dist.tarball` URLs unchanged, and those URLs point at
+> the upstream registry. npm swaps the host for the configured registry only
+> when the URL is on `registry.npmjs.org`, so npm is gated with the default
+> upstream. Yarn Classic (1.22) and pnpm (9.15) download tarballs from the URL
+> as given, straight from `registry.npmjs.org`, and npm does the same when the
+> upstream is another host (Nexus, Verdaccio): no supply-chain, CVE or malware
+> check runs for those downloads. Until the proxy rewrites tarball URLs, block
+> clients' direct access to the upstream registry, so such an install fails
+> instead of going around the proxy. Yarn Berry has not been checked.
+
 **RubyGems / Bundler:**
 ```bash
 # bundler
@@ -268,8 +279,8 @@ the effective policy at runtime. It is backed by a JSON API under `/api/`:
 | `/api/requests?limit=N` | GET | recent request events, newest first (SQLite-backed, cursor pagination, `limit` capped at 500; `verdict=` filters, `q=` searches `package@version` and request ID) |
 | `/api/events` | GET | Server-Sent Events stream of new request events |
 | `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
-| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |
-| `/api/registries` | GET | configured registries and upstreams |
+| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically, and fields it omits keep their current value |
+| `/api/registries` | GET / PUT | configured registries and upstreams; credentials in upstream URLs come back masked (`user:***@`), and a PUT that returns a masked URL keeps the stored one |
 
 Policy edits made through the console apply immediately without restart and
 are **persisted to the database**: they survive restarts, and the YAML policy

@@ -351,3 +351,99 @@ func TestPutPolicy_PersistFailed(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	assert.Equal(t, "persist_failed", out.Error)
 }
+
+// Upstream URLs may carry credentials ("https://user:pass@host/..."). The
+// registries screen is open to operators, so the API must never return them.
+func credentialedSix() []console.RegistryInfo {
+	regs := allSix(false)
+	regs[0].Upstreams = []string{
+		"https://ci:s3cret@nexus.example.org/repository/pypi",
+		"https://tok123@mirror.example.org/simple",
+		"https://pypi.org/simple",
+	}
+	return regs
+}
+
+func getRegistries(t *testing.T, url string) (*http.Response, []byte) {
+	t.Helper()
+	resp, err := http.Get(url + "/api/registries")
+	require.NoError(t, err)
+	out := new(bytes.Buffer)
+	_, _ = out.ReadFrom(resp.Body)
+	_ = resp.Body.Close()
+	return resp, out.Bytes()
+}
+
+func decodeRegistries(t *testing.T, body []byte) []console.RegistryInfo {
+	t.Helper()
+	var got struct {
+		Registries []console.RegistryInfo `json:"registries"`
+	}
+	require.NoError(t, json.Unmarshal(body, &got))
+	return got.Registries
+}
+
+func TestGetRegistries_MasksUpstreamCredentials(t *testing.T) {
+	store := &fakeRegStore{regs: credentialedSix(), ok: true}
+	srv := regHandler(t, store, credentialedSix(), false)
+
+	resp, body := getRegistries(t, srv.URL)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, string(body), "s3cret")
+	assert.NotContains(t, string(body), "tok123")
+
+	regs := decodeRegistries(t, body)
+	assert.Equal(t, []string{
+		"https://ci:***@nexus.example.org/repository/pypi",
+		"https://***@mirror.example.org/simple",
+		"https://pypi.org/simple",
+	}, regs[0].Upstreams)
+
+	var flags struct {
+		Pending bool `json:"pending_restart"`
+	}
+	require.NoError(t, json.Unmarshal(body, &flags))
+	assert.False(t, flags.Pending, "masking must not make the running set look changed")
+}
+
+func TestPutRegistries_MaskedUpstreamKeepsStoredCredentials(t *testing.T) {
+	store := &fakeRegStore{regs: credentialedSix(), ok: true}
+	srv := regHandler(t, store, credentialedSix(), false)
+
+	_, body := getRegistries(t, srv.URL)
+	regs := decodeRegistries(t, body)
+	// Reorder the masked entries, as the screen's up/down buttons do.
+	regs[0].Upstreams[0], regs[0].Upstreams[1] = regs[0].Upstreams[1], regs[0].Upstreams[0]
+
+	resp, out := putRegistries(t, srv.URL, regs)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(out))
+	assert.NotContains(t, string(out), "s3cret")
+	assert.Equal(t, []string{
+		"https://tok123@mirror.example.org/simple",
+		"https://ci:s3cret@nexus.example.org/repository/pypi",
+		"https://pypi.org/simple",
+	}, store.regs[0].Upstreams)
+}
+
+func TestPutRegistries_UnknownMaskedUpstreamRejected(t *testing.T) {
+	store := &fakeRegStore{regs: credentialedSix(), ok: true}
+	srv := regHandler(t, store, credentialedSix(), false)
+
+	regs := credentialedSix()
+	regs[0].Upstreams = []string{"https://ci:***@other.example.org/pypi"}
+	resp, _ := putRegistries(t, srv.URL, regs)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "https://ci:s3cret@nexus.example.org/repository/pypi", store.regs[0].Upstreams[0], "store untouched")
+}
+
+func TestPutRegistries_NewCredentialsStoredVerbatim(t *testing.T) {
+	store := &fakeRegStore{regs: allSix(false), ok: true}
+	srv := regHandler(t, store, allSix(false), false)
+
+	regs := allSix(false)
+	regs[0].Upstreams = []string{"https://ci:n3w@nexus.example.org/pypi"}
+	resp, out := putRegistries(t, srv.URL, regs)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "https://ci:n3w@nexus.example.org/pypi", store.regs[0].Upstreams[0])
+	assert.NotContains(t, string(out), "n3w")
+}

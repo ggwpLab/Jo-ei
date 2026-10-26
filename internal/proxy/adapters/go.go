@@ -109,6 +109,13 @@ func (a *GoAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
 	return &gate.PackageRef{Ecosystem: "go", Name: module, Version: version}, true
 }
 
+// IsArtifactPath implements gate.ArtifactPathMatcher: a module zip is any
+// ".zip" under "/@v/", including one whose case-encoding NormalizeRequest
+// rejects.
+func (a *GoAdapter) IsArtifactPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".zip") && strings.Contains(r.URL.Path, "/@v/")
+}
+
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 // The client already sent case-encoded paths, so RequestURI() is forwarded
 // verbatim.

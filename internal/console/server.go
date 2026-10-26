@@ -375,12 +375,13 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
-	// List fields are pointers: absent keeps the current list (so settings-only
-	// saves cannot clobber concurrent list edits), present replaces it.
+	// Every field is a pointer: absent keeps the current value (so a
+	// settings-only save cannot clobber concurrent list edits, and an omitted
+	// min_age_hours cannot turn into 0), present replaces it.
 	var in struct {
-		Mode            string    `json:"mode"`
-		MinAgeHours     int       `json:"min_age_hours"`
-		CVEBlockOn      string    `json:"cve_block_on"`
+		Mode            *string   `json:"mode"`
+		MinAgeHours     *int      `json:"min_age_hours"`
+		CVEBlockOn      *string   `json:"cve_block_on"`
 		AllowlistSupply *[]string `json:"allowlist_supply"`
 		AllowlistCVE    *[]string `json:"allowlist_cve"`
 		Denylist        *[]string `json:"denylist"`
@@ -402,7 +403,15 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.cfg.Policy.Update(func(cur policy.RuntimeParams) policy.RuntimeParams {
-		cur.Mode, cur.MinAgeHours, cur.CVEBlockOn = in.Mode, in.MinAgeHours, in.CVEBlockOn
+		if in.Mode != nil {
+			cur.Mode = *in.Mode
+		}
+		if in.MinAgeHours != nil {
+			cur.MinAgeHours = *in.MinAgeHours
+		}
+		if in.CVEBlockOn != nil {
+			cur.CVEBlockOn = *in.CVEBlockOn
+		}
 		if in.AllowlistSupply != nil {
 			cur.AllowlistSupply = *in.AllowlistSupply
 		}
@@ -512,8 +521,27 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.writeJSON(w, r, http.StatusRequestEntityTooLarge, map[string]any{
+				"error": "invalid_registries", "field": "body", "message": "request body too large",
+			})
+			return
+		}
 		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_registries", "field": "body", "message": err.Error(),
+		})
+		return
+	}
+	stored, err := s.storedRegistries()
+	if err != nil {
+		s.log(r).Error().Err(err).Msg("loading registries")
+		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "registries_unavailable"})
+		return
+	}
+	if field, msg := unmaskRegistries(in.Registries, stored); field != "" {
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+			"error": "invalid_registries", "field": field, "message": msg,
 		})
 		return
 	}
@@ -533,6 +561,12 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
 		return
 	}
+	logged := make([]RegistryInfo, len(in.Registries))
+	for i, reg := range in.Registries {
+		logged[i] = RegistryInfo{Ecosystem: reg.Ecosystem, Enabled: reg.Enabled, Upstreams: maskUpstreams(reg.Upstreams)}
+	}
+	user, _ := auth.UserFromContext(r.Context())
+	s.log(r).Info().Str("user", user).Interface("registries", logged).Msg("registries updated")
 	s.writeRegistries(w, r, http.StatusOK, in.Registries)
 }
 
@@ -562,11 +596,83 @@ func (s *server) writeRegistries(w http.ResponseWriter, r *http.Request, status 
 		}
 	}
 	warnings := registryWarnings(out, s.cfg.ImageScanEnabled)
+	pending := s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries)
+	// Upstream URLs may embed credentials and this screen is open to
+	// operators: they leave the server masked, and PUT maps a masked URL back
+	// to the stored one (unmaskRegistries).
+	for i := range out {
+		out[i].Upstreams = maskUpstreams(out[i].Upstreams)
+	}
 	s.writeJSON(w, r, status, map[string]any{
 		"registries":      out,
-		"pending_restart": s.cfg.RegistryStore != nil && s.cfg.RunningRegistries != nil && !registriesEqual(out, s.cfg.RunningRegistries),
+		"pending_restart": pending,
 		"warnings":        warnings,
 	})
+}
+
+// credentialMask stands in for upstream credentials in API responses.
+const credentialMask = "***"
+
+// maskUpstream hides the credentials in an upstream URL: the password of
+// "user:pass@", or the whole userinfo when it is a bare token ("token@"),
+// since a token is a secret even in the user position. A URL without
+// userinfo is returned unchanged.
+func maskUpstream(raw string) string {
+	start := strings.Index(raw, "://")
+	if start < 0 {
+		return raw
+	}
+	start += len("://")
+	end := len(raw)
+	if i := strings.IndexAny(raw[start:], "/?#"); i >= 0 {
+		end = start + i
+	}
+	at := strings.LastIndex(raw[start:end], "@")
+	if at < 0 {
+		return raw
+	}
+	masked := credentialMask
+	if name, _, hasPassword := strings.Cut(raw[start:start+at], ":"); hasPassword {
+		masked = name + ":" + credentialMask
+	}
+	return raw[:start] + masked + raw[start+at:]
+}
+
+// maskUpstreams returns a masked copy of upstreams.
+func maskUpstreams(upstreams []string) []string {
+	out := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		out[i] = maskUpstream(u)
+	}
+	return out
+}
+
+// unmaskRegistries replaces, in place, each masked upstream a client sent back
+// with the stored URL it was masked from, matched within the same ecosystem.
+// A masked URL that matches none — edited, or never stored — cannot be
+// restored and is rejected rather than saved with "***" as its credentials.
+// It returns ("","") on success, otherwise the offending field and a message.
+func unmaskRegistries(in, stored []RegistryInfo) (field, msg string) {
+	originals := map[string]map[string]string{} // ecosystem → masked → stored
+	for _, reg := range stored {
+		m := map[string]string{}
+		for _, u := range reg.Upstreams {
+			m[maskUpstream(u)] = u
+		}
+		originals[reg.Ecosystem] = m
+	}
+	for i := range in {
+		for j, u := range in[i].Upstreams {
+			if orig, ok := originals[in[i].Ecosystem][u]; ok {
+				in[i].Upstreams[j] = orig
+				continue
+			}
+			if strings.Contains(u, credentialMask+"@") {
+				return in[i].Ecosystem, fmt.Sprintf("upstream %q has masked credentials that match no stored upstream; enter the full URL", u)
+			}
+		}
+	}
+	return "", ""
 }
 
 // validateRegistries checks the PUT payload. It returns ("","") when valid,
@@ -658,10 +764,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	ch, cancel := s.cfg.Broadcaster.Subscribe()
 	defer cancel()
 
-	// The server-wide Read/WriteTimeouts (cmd/jo-ei sets 120s) are armed once
-	// at request start, which poisons a long-lived stream: the first event
-	// written after the deadline kills the connection and is silently lost.
-	// Drop the read deadline and bound each write individually instead, so a
+	// The stream has no deadline as a whole: it lives as long as the tab.
+	// Clear any read deadline and bound each write individually instead, so a
 	// stalled client still cannot pin this goroutine forever.
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Time{})

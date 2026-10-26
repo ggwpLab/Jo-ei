@@ -18,7 +18,6 @@ type rubygemsVersion struct {
 	Platform  string   `json:"platform"`
 	CreatedAt string   `json:"created_at"`
 	Licenses  []string `json:"licenses"`
-	SHA       string   `json:"sha"`
 }
 
 // RubyGemsAdapter implements gate.RegistryAdapter for a RubyGems repository.
@@ -62,6 +61,12 @@ func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, b
 		return nil, false
 	}
 	return &gate.PackageRef{Ecosystem: "rubygems", Name: name, Version: version}, true
+}
+
+// IsArtifactPath implements gate.ArtifactPathMatcher: every ".gem" file is a
+// gem, wherever it sits and whatever its name.
+func (a *RubyGemsAdapter) IsArtifactPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".gem")
 }
 
 // parseGemFilename parses "<name>-<version>[-<platform>].gem". The version is the
@@ -153,7 +158,6 @@ func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, re
 			return &gate.PackageMetadata{
 				PublishedAt: publishedAt.UTC(),
 				License:     strings.Join(v.Licenses, ", "),
-				Checksum:    v.SHA,
 			}, apiURL, resp.StatusCode, nil
 		}
 	}

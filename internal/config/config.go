@@ -75,6 +75,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("malware.scanners[%d]: icap scanner requires a service", i)
 		}
 		name := sc.DisplayName()
+		// The CVE engines report scanner health under these names; an
+		// antivirus scanner using one would shadow that engine's row.
+		switch strings.ToLower(name) {
+		case "osv", "osv.dev", "trivy":
+			return fmt.Errorf("malware.scanners[%d]: name %q is reserved for a CVE engine; set a different name", i, name)
+		}
 		if j, dup := scannerNames[name]; dup {
 			return fmt.Errorf("malware.scanners[%d]: name %q already used by malware.scanners[%d]; set a distinct name", i, name, j)
 		}

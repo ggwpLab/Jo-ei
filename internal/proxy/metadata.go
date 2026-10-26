@@ -124,12 +124,13 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	// get a 304), but a caller forwarding no validator must never share a
 	// flight with one forwarding a validator upstream might honour — sharing
 	// that flight would hand the first caller a bodyless 304 for a request
-	// that has nothing to revalidate.
+	// that has nothing to revalidate. Every field line of a validator counts,
+	// for the reason given at clientTag above: the flight forwards them all.
 	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s",
 		r.URL.RequestURI(),
 		r.Header.Get("Accept"),
-		outbound.Header.Get("If-None-Match"),
-		outbound.Header.Get("If-Modified-Since"),
+		strings.Join(outbound.Header.Values("If-None-Match"), ", "),
+		strings.Join(outbound.Header.Values("If-Modified-Since"), ", "),
 	)
 
 	fetch, relay, atts, err := h.fetchMetadataDocument(outbound, key, int64(h.cfg.MetadataFilterMaxMB)<<20)

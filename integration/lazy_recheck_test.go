@@ -70,7 +70,7 @@ func pypiUpstream(t *testing.T) *httptest.Server {
 		if r.URL.Path == "/pypi/victim/1.0.0/json" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"info":{"name":"victim","version":"1.0.0"},` +
-				`"urls":[{"upload_time_iso_8601":"` + published.Format(time.RFC3339) + `","url":"x","digests":{"sha256":"a"}}]}`))
+				`"urls":[{"filename":"victim-1.0.0-py3-none-any.whl","upload_time_iso_8601":"` + published.Format(time.RFC3339) + `","url":"x"}]}`))
 			return
 		}
 		_, _ = w.Write([]byte("wheel-bytes"))
@@ -110,7 +110,7 @@ func TestLazyRecheckEvictsNewlyInfected(t *testing.T) {
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "seed pull must pass and cache")
 
-	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0", Classifier: "victim-1.0.0-py3-none-any.whl"}
 	entry, found := lc.Get(&ref)
 	require.True(t, found)
 
@@ -165,7 +165,7 @@ func TestLazyRecheckEvictsNewCVE(t *testing.T) {
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "seed pull must pass and cache")
 
-	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0"}
+	ref := gate.PackageRef{Ecosystem: "pypi", Name: "victim", Version: "1.0.0", Classifier: "victim-1.0.0-py3-none-any.whl"}
 	entry, found := lc.Get(&ref)
 	require.True(t, found)
 
