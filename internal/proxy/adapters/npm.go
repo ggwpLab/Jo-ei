@@ -196,17 +196,19 @@ func (a *NPMAdapter) NormalizeMetadataRequest(r *http.Request) (*gate.MetadataRe
 	if r.Method != http.MethodGet {
 		return nil, false
 	}
-	// A query string means this GET is the read half of npm's read-modify-write
-	// cycle (e.g. "?write=true" for `npm deprecate`/`npm owner`), whose PUT sends
-	// the whole document back. Rewriting the GET would carry hidden versions and
-	// proxy links into that PUT, so this passes through untouched — ordinary
-	// packument GETs never carry a query.
-	if r.URL.RawQuery != "" {
+	// "?write=true" marks the read half of npm's read-modify-write cycle
+	// (`npm deprecate`, `npm owner`), whose PUT sends the whole document back.
+	// Rewriting this GET would carry hidden versions and proxy links into that
+	// PUT, so it passes through untouched. Any other query is an ordinary read
+	// and is rewritten like one.
+	if r.URL.Query().Has("write") {
 		return nil, false
 	}
 	// URL.Path arrives percent-decoded, so npm's two spellings of a scoped name
-	// — "/@types%2fnode" and "/@types/node" — are the same string here.
-	name, version, ok := splitNPMMetadataPath(strings.TrimPrefix(r.URL.Path, "/"))
+	// — "/@types%2fnode" and "/@types/node" — are the same string here. A
+	// trailing slash names the same document.
+	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	name, version, ok := splitNPMMetadataPath(path)
 	if !ok {
 		return nil, false
 	}

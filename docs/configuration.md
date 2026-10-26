@@ -200,9 +200,9 @@ client used (`/npm/` or `/yarn/`, whichever it asked through). The proxy
 fetches that same path from the configured upstream, which npmjs, Verdaccio
 and Nexus serve; an upstream that serves tarballs only under other paths, such
 as GitHub Packages, is not supported. A version whose link cannot take that
-shape is hidden from the document. A `GET` with a query string (npm's
-`?write=true` read before a publish) is proxied untouched, since its document
-goes back upstream with the `PUT`. Lockfiles that pin tarball URLs bypass the
+shape is hidden from the document. A `GET` with a `write` query parameter (npm's
+`?write=true` read before `npm deprecate` or `npm owner`) is proxied untouched,
+since its document goes back upstream with the `PUT`. Lockfiles that pin tarball URLs bypass the
 metadata entirely; see "Existing lockfiles" in the README.
 
 Upstream credentials go in the URL (`https://user:token@nexus.example.org/…`);

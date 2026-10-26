@@ -308,6 +308,14 @@ func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
 		// owner add/rm`) carries "?write=true" and PUTs the whole document back;
 		// a rewritten GET here would carry hidden versions into that PUT.
 		{name: "write query", method: http.MethodGet, path: "/left-pad?write=true"},
+		{name: "write among other params", method: http.MethodGet, path: "/left-pad?a=1&write=true"},
+
+		// Any other GET of a document is rewritten: passing it through would
+		// hand the client links around the proxy.
+		{name: "other query", method: http.MethodGet, path: "/left-pad?a=1", wantOK: true, wantName: "left-pad"},
+		{name: "trailing slash", method: http.MethodGet, path: "/left-pad/", wantOK: true, wantName: "left-pad"},
+		{name: "scoped trailing slash", method: http.MethodGet, path: "/@types/node/", wantOK: true, wantName: "@types/node"},
+		{name: "manifest trailing slash", method: http.MethodGet, path: "/left-pad/1.3.0/", wantOK: true, wantName: "left-pad", wantVersion: "1.3.0"},
 
 		{name: "root", method: http.MethodGet, path: "/"},
 	}
