@@ -136,7 +136,7 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 				time.Sleep(reg.delay) // widen the window so coalescing is observable
 			}
 
-			if reg.honourConditional && r.Header.Get("If-None-Match") == reg.etag {
+			if reg.honourConditional && listsTag(r.Header.Values("If-None-Match"), reg.etag) {
 				w.Header().Set("ETag", reg.etag)
 				w.WriteHeader(http.StatusNotModified)
 				return
@@ -181,6 +181,19 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 	}))
 	t.Cleanup(reg.Close)
 	return reg
+}
+
+// listsTag reports whether any If-None-Match field line lists tag, the way a
+// real registry reads a header that may be repeated or comma-joined.
+func listsTag(lines []string, tag string) bool {
+	for _, line := range lines {
+		for _, candidate := range strings.Split(line, ",") {
+			if strings.TrimSpace(candidate) == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (reg *npmRegistry) lastPackumentRequest(t *testing.T) http.Header {
@@ -661,4 +674,52 @@ func TestIntegration_NPMMetadataFilter_MixedValidatorsDoNotShareAFlight(t *testi
 	// deterministically gets upstream's own 304 regardless of which goroutine
 	// the scheduler happens to run first.
 	assert.Equal(t, http.StatusNotModified, conditional.status)
+}
+
+// If-None-Match may arrive as several field lines. A caller listing a current
+// tag on its second line earns upstream's 304; a caller whose only tag is
+// stale must not be coalesced onto that flight and handed the same 304, or it
+// keeps a document upstream has since replaced.
+func TestIntegration_NPMMetadataFilter_RepeatedValidatorLinesDoNotShareAFlight(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{
+		OldHours: 240, FreshHours: 1, HonourConditional: true, Delay: 150 * time.Millisecond,
+	})
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	fetch := func(tags ...string) packumentResult {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/left-pad", nil)
+		if err != nil {
+			return packumentResult{err: err}
+		}
+		req.Header.Set("Accept", "application/json")
+		for _, tag := range tags {
+			req.Header.Add("If-None-Match", tag)
+		}
+		resp, err := (&http.Client{Transport: &http.Transport{DisableCompression: true}}).Do(req)
+		if err != nil {
+			return packumentResult{err: err}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		return packumentResult{status: resp.StatusCode, body: body, err: err}
+	}
+
+	var current, stale packumentResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		current = fetch(`"replaced-v0"`, `"upstream-v1"`)
+	}()
+	time.Sleep(30 * time.Millisecond) // let the two-line caller lead the flight
+	go func() {
+		defer wg.Done()
+		stale = fetch(`"replaced-v0"`)
+	}()
+	wg.Wait()
+
+	require.NoError(t, current.err)
+	require.NoError(t, stale.err)
+	assert.Equal(t, http.StatusNotModified, current.status)
+	assert.Equal(t, http.StatusOK, stale.status, "a caller holding only a replaced tag needs the new document")
 }
