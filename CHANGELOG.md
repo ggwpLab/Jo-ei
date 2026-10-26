@@ -87,7 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`server.metadata_filter_max_mb: 0` means no size cap.** It used to disable
-  npm metadata filtering; filtering and tarball-link rewriting now always run.
+  npm metadata filtering; filtering and tarball-link rewriting now always run,
+  so a config that set `0` to switch filtering off now buffers documents of
+  any size.
+- **`server.metadata_filter_max_mb` defaults to 256** (was 32). A document over
+  the cap now fails instead of being relayed, and full packuments of popular
+  packages already exceed 32 MB (`vite` ~37 MB, `renovate` ~70 MB).
 - **npm single-version manifests (`/<pkg>/<version>`) are rewritten** like
   packuments, and every npm metadata response carries a proxy-minted `ETag`.
 - **Every config key can be set from the environment.** `JOEI_*` variables

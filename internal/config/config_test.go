@@ -592,7 +592,7 @@ func TestLoad_TLSSectionIsOptional(t *testing.T) {
 	}
 }
 
-func TestLoad_MetadataFilterMaxMB_DefaultsTo32(t *testing.T) {
+func TestLoad_MetadataFilterMaxMB_DefaultsTo256(t *testing.T) {
 	path := writeTempConfig(t, `server:
   listen: ":8080"
 database:
@@ -600,10 +600,10 @@ database:
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, 32, cfg.Server.MetadataFilterMaxMB)
+	assert.Equal(t, 256, cfg.Server.MetadataFilterMaxMB)
 }
 
-func TestLoad_MetadataFilterMaxMB_ZeroDisables(t *testing.T) {
+func TestLoad_MetadataFilterMaxMB_ZeroMeansNoCap(t *testing.T) {
 	path := writeTempConfig(t, `server:
   listen: ":8080"
   metadata_filter_max_mb: 0
@@ -612,7 +612,7 @@ database:
 `)
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, 0, cfg.Server.MetadataFilterMaxMB, "an explicit zero is the kill switch, not a request for the default")
+	assert.Equal(t, 0, cfg.Server.MetadataFilterMaxMB, "an explicit zero means no cap, not a request for the default")
 }
 
 func TestValidate_RejectsNegativeMetadataFilterMaxMB(t *testing.T) {

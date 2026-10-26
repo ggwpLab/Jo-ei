@@ -182,7 +182,7 @@ type ServerConfig struct {
 	// its download links at the proxy. A document over the cap fails the
 	// request: served untouched, its links would send the client around the
 	// gates. Zero means no cap; unlike UpstreamMaxConcurrent above, zero here
-	// is not "unset" — the default (32) comes from Load's SetDefault, so an
+	// is not "unset" — the default (256) comes from Load's SetDefault, so an
 	// explicit zero in YAML survives rather than being replaced.
 	MetadataFilterMaxMB int `mapstructure:"metadata_filter_max_mb"`
 	// ShutdownTimeoutSeconds bounds how long a stopping server drains
@@ -417,7 +417,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("cache.revalidation.cve_ttl_minutes", 1440)
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
 	v.SetDefault("server.listen", ":8080")
-	v.SetDefault("server.metadata_filter_max_mb", 32)
+	v.SetDefault("server.metadata_filter_max_mb", 256)
 	v.SetDefault("server.public_url", "")
 	v.SetDefault("server.shutdown_timeout_seconds", 30)
 	v.SetDefault("server.max_artifact_mb", 2048)

@@ -10,8 +10,10 @@ server:
   # Max decompressed size (MB) of an npm metadata document the proxy buffers
   # to hide policy-blocked versions from it and point its tarball links at the
   # proxy. A larger document fails with 502: served as-is, its links would lead
-  # around the gates. Default 32 when unset; 0 = no cap.
-  metadata_filter_max_mb: 32
+  # around the gates. The largest public packuments run to tens of MB (vite
+  # ~37, renovate ~70), and each request in flight holds a few copies of one.
+  # Default 256 when unset; 0 = no cap.
+  metadata_filter_max_mb: 256
   # Largest package artifact (wheel, tarball, jar, gem, module zip) the proxy
   # downloads, in MB; a larger one is refused with 403 artifact_too_large
   # before it can fill the cache volume. Default 2048 — the ClamAV stream limit

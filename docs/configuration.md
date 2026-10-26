@@ -63,7 +63,7 @@ process exits non-zero.
 | `listen` | — | Listen address, e.g. `":8080"`. |
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
-| `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of an npm metadata document the proxy buffers to hide policy-blocked versions and point its tarball links at the proxy. A larger document fails with `502 metadata_rewrite_failed`. `0` = no cap. |
+| `metadata_filter_max_mb` | `256` | Max decompressed size (MB) of an npm metadata document the proxy buffers to hide policy-blocked versions and point its tarball links at the proxy. A larger document fails with `502 metadata_rewrite_failed`; raise the cap if a package hits it. The largest public packuments run to tens of MB (`vite` ~37, `renovate` ~70), and each request in flight holds a few copies of one. `0` = no cap. |
 | `max_artifact_mb` | `2048` | Largest package artifact (MB) the proxy downloads; a larger one is refused with `403 artifact_too_large`. `0` = unlimited. Docker layers use `image_scan.max_layer_bytes`. |
 | `shutdown_timeout_seconds` | `30` | How long a stopping server drains in-flight requests before closing the rest. |
 | `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
