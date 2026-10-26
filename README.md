@@ -268,8 +268,8 @@ the effective policy at runtime. It is backed by a JSON API under `/api/`:
 | `/api/requests?limit=N` | GET | recent request events, newest first (SQLite-backed, cursor pagination, `limit` capped at 500; `verdict=` filters, `q=` searches `package@version` and request ID) |
 | `/api/events` | GET | Server-Sent Events stream of new request events |
 | `/api/quarantine` | GET | active supply-chain holds (derived from recent block events) |
-| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically |
-| `/api/registries` | GET | configured registries and upstreams |
+| `/api/policy` | GET / PUT | effective policy; PUT validates and applies atomically, and fields it omits keep their current value |
+| `/api/registries` | GET / PUT | configured registries and upstreams; credentials in upstream URLs come back masked (`user:***@`), and a PUT that returns a masked URL keeps the stored one |
 
 Policy edits made through the console apply immediately without restart and
 are **persisted to the database**: they survive restarts, and the YAML policy

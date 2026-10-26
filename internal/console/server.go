@@ -375,12 +375,13 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10) // policy JSON is tiny; reject abuse
-	// List fields are pointers: absent keeps the current list (so settings-only
-	// saves cannot clobber concurrent list edits), present replaces it.
+	// Every field is a pointer: absent keeps the current value (so a
+	// settings-only save cannot clobber concurrent list edits, and an omitted
+	// min_age_hours cannot turn into 0), present replaces it.
 	var in struct {
-		Mode            string    `json:"mode"`
-		MinAgeHours     int       `json:"min_age_hours"`
-		CVEBlockOn      string    `json:"cve_block_on"`
+		Mode            *string   `json:"mode"`
+		MinAgeHours     *int      `json:"min_age_hours"`
+		CVEBlockOn      *string   `json:"cve_block_on"`
 		AllowlistSupply *[]string `json:"allowlist_supply"`
 		AllowlistCVE    *[]string `json:"allowlist_cve"`
 		Denylist        *[]string `json:"denylist"`
@@ -402,7 +403,15 @@ func (s *server) putPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.cfg.Policy.Update(func(cur policy.RuntimeParams) policy.RuntimeParams {
-		cur.Mode, cur.MinAgeHours, cur.CVEBlockOn = in.Mode, in.MinAgeHours, in.CVEBlockOn
+		if in.Mode != nil {
+			cur.Mode = *in.Mode
+		}
+		if in.MinAgeHours != nil {
+			cur.MinAgeHours = *in.MinAgeHours
+		}
+		if in.CVEBlockOn != nil {
+			cur.CVEBlockOn = *in.CVEBlockOn
+		}
 		if in.AllowlistSupply != nil {
 			cur.AllowlistSupply = *in.AllowlistSupply
 		}
@@ -512,6 +521,13 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.writeJSON(w, r, http.StatusRequestEntityTooLarge, map[string]any{
+				"error": "invalid_registries", "field": "body", "message": "request body too large",
+			})
+			return
+		}
 		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
 			"error": "invalid_registries", "field": "body", "message": err.Error(),
 		})
@@ -545,6 +561,12 @@ func (s *server) putRegistries(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, r, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
 		return
 	}
+	logged := make([]RegistryInfo, len(in.Registries))
+	for i, reg := range in.Registries {
+		logged[i] = RegistryInfo{Ecosystem: reg.Ecosystem, Enabled: reg.Enabled, Upstreams: maskUpstreams(reg.Upstreams)}
+	}
+	user, _ := auth.UserFromContext(r.Context())
+	s.log(r).Info().Str("user", user).Interface("registries", logged).Msg("registries updated")
 	s.writeRegistries(w, r, http.StatusOK, in.Registries)
 }
 

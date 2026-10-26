@@ -847,3 +847,60 @@ func TestCacheCleanup_ClientGoneIsNotAFailure(t *testing.T) {
 	assert.NotContains(t, logBuf.String(), `"level":"error"`)
 	assert.Contains(t, logBuf.String(), `"removed":3`)
 }
+
+// A PUT carrying only some fields must change only those: an absent
+// min_age_hours must not silently become 0 and switch the age rule off.
+func TestPutPolicy_AbsentSettingsKeepTheirValues(t *testing.T) {
+	rt := policy.NewRuntime(
+		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
+		config.CVEConfig{BlockOn: "HIGH"}, config.PolicyProfile{}, nil,
+	)
+	h := newHandler(console.Config{
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
+		Policy: rt, Logger: zerolog.Nop(),
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/api/policy", strings.NewReader(`{"denylist":["npm/evil"]}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	p := rt.Current()
+	assert.Equal(t, "enforce", p.Mode)
+	assert.Equal(t, 24, p.MinAgeHours)
+	assert.Equal(t, "HIGH", p.CVEBlockOn)
+	assert.Equal(t, []string{"npm/evil"}, p.Denylist)
+}
+
+func TestPutRegistries_OversizedBodyIs413(t *testing.T) {
+	srv := regHandler(t, &fakeRegStore{}, nil, false)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/registries",
+		strings.NewReader(`{"registries":[{"eco":"pypi","upstreams":["`+strings.Repeat("a", 70<<10)+`"]}]}`))
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestPutRegistries_LogsWhoChangedWhatWithoutSecrets(t *testing.T) {
+	var logBuf bytes.Buffer
+	store := &fakeRegStore{}
+	h := newHandler(console.Config{
+		Store: newTelemetryStore(t), Broadcaster: telemetry.NewBroadcaster(),
+		RegistryStore: store, Logger: zerolog.New(&logBuf),
+	})
+	regs := allSix(false)
+	regs[0].Upstreams = []string{"https://ci:s3cret@nexus.example.org/pypi"}
+	body, _ := json.Marshal(map[string]any{"registries": regs})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/registries", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	logged := logBuf.String()
+	assert.Contains(t, logged, "registries updated")
+	assert.Contains(t, logged, `"user":"admin"`)
+	assert.Contains(t, logged, "nexus.example.org")
+	assert.NotContains(t, logged, "s3cret")
+}
