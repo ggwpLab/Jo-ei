@@ -107,7 +107,7 @@ func (h *Handler) proxyIndex(w http.ResponseWriter, r *http.Request, rw gate.Ind
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	writeMetadataDocument(w, r, resp.Header, resp.StatusCode, out.Body, true, log)
+	writeMetadataDocument(w, r, resp.Header, resp.StatusCode, out.Body, log)
 }
 
 // failIndex logs why an index could not be rewritten and answers 502: serving
