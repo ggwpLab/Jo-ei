@@ -63,11 +63,12 @@ process exits non-zero.
 | `listen` | — | Listen address, e.g. `":8080"`. |
 | `upstream_max_concurrent` | `6` | Max concurrent in-flight requests **per upstream host** (metadata + transparent proxy + downloads combined). Keeps parallel dependency resolution under registry limits. |
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
-| `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of a metadata document the proxy will buffer to filter out policy-blocked versions. `0` disables filtering. |
+| `metadata_filter_max_mb` | `32` | Max decompressed size (MB) of an npm metadata document the proxy buffers to hide policy-blocked versions and point its tarball links at the proxy. A larger document fails with `502 metadata_rewrite_failed`. `0` = no cap. |
 | `max_artifact_mb` | `2048` | Largest package artifact (MB) the proxy downloads; a larger one is refused with `403 artifact_too_large`. `0` = unlimited. Docker layers use `image_scan.max_layer_bytes`. |
 | `shutdown_timeout_seconds` | `30` | How long a stopping server drains in-flight requests before closing the rest. |
 | `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
+| `public_url` | — | Base URL clients reach the proxy at (e.g. `https://registry.example.com/joei`), written into npm tarball links. Empty derives it per request; see [Behind a reverse proxy](#behind-a-reverse-proxy). Must be an absolute `http`/`https` URL without query or fragment. |
 
 Upstream responses of 429/503 additionally trip a per-host circuit breaker
 with exponential cooldown (1s–20s, honoring `Retry-After`). When the other
@@ -83,12 +84,18 @@ filtering hides blocked versions from the document itself, so npm's resolver
 lands on a version the policy allows instead. Only the checks that need no
 network round-trip take part: the minimum-age rule and the denylist. CVE and
 malware verdicts still block at download time, since they can only be decided
-once the artifact is in hand. Set `metadata_filter_max_mb` to `0` to disable
-the feature entirely; a document larger than the configured cap is also
-streamed through untouched rather than buffered. This applies to npm only —
-every other registry's metadata is proxied untouched regardless of this
-setting. It cannot help a lockfile-pinned install (`npm ci`): there is no
-range left to resolve, so a blocked exact version still fails with `423`.
+once the artifact is in hand. This applies to npm only. It cannot help a
+lockfile-pinned install (`npm ci`): there is no range left to resolve, so a
+blocked exact version still fails with `423`.
+
+The same pass points every `dist.tarball` link at the proxy (see
+[`registries`](#registries)). A document the proxy cannot rewrite is never
+served as-is, since its links would lead around the gates: one over
+`metadata_filter_max_mb`, in a `Content-Encoding` other than gzip, with an
+upstream status other than 200, or unparseable is answered with
+`502 metadata_rewrite_failed`. Client validators are not forwarded upstream
+for npm metadata, so every revalidation is a full upstream fetch;
+concurrent identical requests still share one.
 
 ### Behind a reverse proxy
 
@@ -113,6 +120,16 @@ server:
     # - 172.18.0.0/16   # or the proxy's network, if its address changes
   client_ip_header: X-Forwarded-For
 ```
+
+The npm tarball links the proxy writes carry the address the client used.
+From a trusted proxy that is `X-Forwarded-Proto`, `X-Forwarded-Host` (first
+entry of a list; `X-Forwarded-Port` is added when the host has no port) and
+`X-Forwarded-Prefix`, or `proto=`/`host=` of `Forwarded` when neither
+`X-Forwarded-Proto` nor `X-Forwarded-Host` is present. Otherwise it is the
+request's `Host`, over `https` when the connection is TLS. A value that is
+not a valid scheme, host or path prefix fails the request with
+`400 bad_forwarded_header`. `server.public_url`, when set, replaces all of
+this; use it when the reverse proxy cannot send these headers.
 
 > **Warning:** list only proxy addresses, never client ranges. Every peer in a
 > trusted range may set the forwarding header to any value, so a broad CIDR
@@ -176,10 +193,17 @@ Client-facing paths: `/pypi/simple/…`, `/npm/…` (alias `/yarn/`),
 as a `registry-mirrors` entry. Yarn uses the npm protocol; the `/yarn/` alias
 exists so both package managers can be pointed at the proxy independently.
 
-npm packuments are served with their `dist.tarball` URLs unchanged, so Yarn
-Classic, pnpm — and npm with an upstream other than `registry.npmjs.org` —
-download tarballs from the upstream directly, around the gates; see the known
-limitation in the README.
+npm packuments and single-version manifests are served with every
+`dist.tarball` rewritten to the proxy, in the canonical
+`/<prefix>/<name>/-/<unscoped-name>-<version>.tgz` shape under the address the
+client used (`/npm/` or `/yarn/`, whichever it asked through). The proxy
+fetches that same path from the configured upstream, which npmjs, Verdaccio
+and Nexus serve; an upstream that serves tarballs only under other paths, such
+as GitHub Packages, is not supported. A version whose link cannot take that
+shape is hidden from the document. A `GET` with a query string (npm's
+`?write=true` read before a publish) is proxied untouched, since its document
+goes back upstream with the `PUT`. Lockfiles that pin tarball URLs bypass the
+metadata entirely; see "Existing lockfiles" in the README.
 
 Upstream credentials go in the URL (`https://user:token@nexus.example.org/…`);
 the console and `GET /api/registries` show them masked. Requests forwarded
