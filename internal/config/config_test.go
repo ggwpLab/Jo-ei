@@ -894,3 +894,37 @@ func TestValidate_RejectsScannerNamesOfCVEEngines(t *testing.T) {
 		assert.Contains(t, err.Error(), "malware.scanners[0]", name)
 	}
 }
+
+func TestLoad_PublicURLFromEnv(t *testing.T) {
+	t.Setenv("JOEI_SERVER_PUBLIC_URL", "https://reg.example.com/joei")
+	cfg, err := config.Load(writeTempConfig(t, minimalYAML))
+	require.NoError(t, err)
+	assert.Equal(t, "https://reg.example.com/joei", cfg.Server.PublicURL)
+	assert.Empty(t, cfg.UnknownEnv)
+}
+
+func TestValidate_PublicURL(t *testing.T) {
+	for _, tc := range []struct {
+		url string
+		ok  bool
+	}{
+		{"", true},
+		{"https://reg.example.com", true},
+		{"http://x/y/", true},
+		{"ftp://x", false},
+		{"https://x?q=1", false},
+		{"/relative", false},
+	} {
+		c := &config.Config{}
+		c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
+		c.Server.Listen = ":8080"
+		c.Server.PublicURL = tc.url
+		err := c.Validate()
+		if tc.ok {
+			assert.NoError(t, err, tc.url)
+		} else {
+			require.Error(t, err, tc.url)
+			assert.Contains(t, err.Error(), "server.public_url", tc.url)
+		}
+	}
+}

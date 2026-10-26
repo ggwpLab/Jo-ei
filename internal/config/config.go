@@ -8,6 +8,8 @@ import (
 	"unicode"
 
 	"github.com/spf13/viper"
+
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 )
 
 type Config struct {
@@ -51,6 +53,11 @@ func (c *Config) Validate() error {
 	for i, entry := range c.Server.TrustedProxies {
 		if err := validateTrustedProxy(entry); err != nil {
 			return fmt.Errorf("server.trusted_proxies[%d]: %w", i, err)
+		}
+	}
+	if c.Server.PublicURL != "" {
+		if _, err := httpx.ParsePublicURL(c.Server.PublicURL); err != nil {
+			return fmt.Errorf("server.public_url: %w", err)
 		}
 	}
 	switch strings.ToLower(c.Server.ClientIPHeader) {
@@ -171,14 +178,12 @@ type ServerConfig struct {
 	// (DefaultUpstreamRatePerSecond); set a large value to effectively disable.
 	UpstreamRatePerSecond int `mapstructure:"upstream_rate_per_second"`
 	// MetadataFilterMaxMB caps the decompressed size of a registry metadata
-	// document the proxy will buffer in order to hide versions policy blocks, so
-	// a client's own resolver picks an allowed version instead of failing on a
-	// blocked download. A document over the cap is streamed through unfiltered
-	// and the artifact gate blocks it at download time instead. Zero disables
-	// metadata filtering entirely; unlike UpstreamMaxConcurrent above, zero here
+	// document the proxy buffers to hide versions policy blocks and to point
+	// its download links at the proxy. A document over the cap fails the
+	// request: served untouched, its links would send the client around the
+	// gates. Zero means no cap; unlike UpstreamMaxConcurrent above, zero here
 	// is not "unset" — the default (32) comes from Load's SetDefault, so an
-	// explicit zero in YAML survives as the feature's kill switch rather than
-	// being replaced.
+	// explicit zero in YAML survives rather than being replaced.
 	MetadataFilterMaxMB int `mapstructure:"metadata_filter_max_mb"`
 	// ShutdownTimeoutSeconds bounds how long a stopping server drains
 	// in-flight requests before closing the rest. Default 30.
@@ -193,6 +198,11 @@ type ServerConfig struct {
 	// ClientIPHeader selects the forwarding header read from a trusted proxy:
 	// X-Forwarded-For (default when empty), X-Real-IP or Forwarded.
 	ClientIPHeader string `mapstructure:"client_ip_header"`
+	// PublicURL is the base URL clients reach this proxy at, used for the
+	// download links it writes into metadata documents. Empty (the default)
+	// derives it per request from Host, or from a trusted proxy's forwarding
+	// headers.
+	PublicURL string `mapstructure:"public_url"`
 }
 
 // DefaultUpstreamMaxConcurrent is the per-host outbound concurrency cap applied
@@ -408,6 +418,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("cache.revalidation.malware_ttl_minutes", 1440)
 	v.SetDefault("server.listen", ":8080")
 	v.SetDefault("server.metadata_filter_max_mb", 32)
+	v.SetDefault("server.public_url", "")
 	v.SetDefault("server.shutdown_timeout_seconds", 30)
 	v.SetDefault("server.max_artifact_mb", 2048)
 	v.SetDefault("image_scan.client_wait_seconds", 25)
