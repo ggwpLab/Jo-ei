@@ -182,3 +182,19 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		MaxArtifactBytes:    shared.maxArtifactBytes,
 	})
 }
+
+// recommendedMetadataCapMB is the default server.metadata_filter_max_mb: room
+// for the largest public npm packuments (vite ~37 MB, renovate ~70 MB).
+const recommendedMetadataCapMB = 256
+
+// metadataCapWarning explains a server.metadata_filter_max_mb that is likely
+// a leftover from an older config, or "" when there is nothing to say.
+func metadataCapWarning(mb int) string {
+	switch {
+	case mb == 0:
+		return "metadata_filter_max_mb is 0: npm metadata documents are buffered with no size cap"
+	case mb < recommendedMetadataCapMB:
+		return "metadata_filter_max_mb is below the default 256: npm packuments larger than the cap fail with 502 metadata_rewrite_failed"
+	}
+	return ""
+}

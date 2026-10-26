@@ -92,7 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any size.
 - **`server.metadata_filter_max_mb` defaults to 256** (was 32). A document over
   the cap now fails instead of being relayed, and full packuments of popular
-  packages already exceed 32 MB (`vite` ~37 MB, `renovate` ~70 MB).
+  packages already exceed 32 MB (`vite` ~37 MB, `renovate` ~70 MB). A config
+  copied from the old sample sets `32` explicitly and keeps it: raise or remove
+  the key. Startup logs a warning for a cap below 256, and for `0`.
 - **npm single-version manifests (`/<pkg>/<version>`) are rewritten** like
   packuments, and every npm metadata response carries a proxy-minted `ETag`.
 - **Every config key can be set from the environment.** `JOEI_*` variables

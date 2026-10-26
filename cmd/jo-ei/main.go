@@ -118,6 +118,10 @@ func run(ctx context.Context, cfgPath string) error {
 		maxArtifactBytes:    int64(cfg.Server.MaxArtifactMB) << 20,
 	}
 
+	if msg := metadataCapWarning(cfg.Server.MetadataFilterMaxMB); msg != "" {
+		serverLog.Warn().Int("metadata_filter_max_mb", cfg.Server.MetadataFilterMaxMB).Msg(msg)
+	}
+
 	if shared.cveRecheckTTL <= 0 && shared.malwareRecheckTTL <= 0 {
 		serverLog.Warn().Msg("cache re-validation disabled: cached artifacts are never re-checked")
 	} else {

@@ -343,3 +343,13 @@ func TestBuildHandlers_NPMLinksUsePublicBase(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), `"tarball":"https://reg.example/joei/yarn/left-pad/-/left-pad-1.3.0.tgz"`)
 }
+
+// A cap carried over from an older config changes behaviour silently: 0 used
+// to switch filtering off, and a small cap now fails large packuments instead
+// of relaying them. Both earn a startup warning; the default does not.
+func TestMetadataCapWarning(t *testing.T) {
+	assert.Empty(t, metadataCapWarning(256))
+	assert.Empty(t, metadataCapWarning(512))
+	assert.Contains(t, metadataCapWarning(0), "no size cap")
+	assert.Contains(t, metadataCapWarning(32), "502")
+}
