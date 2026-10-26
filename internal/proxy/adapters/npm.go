@@ -93,6 +93,13 @@ func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) 
 	return &gate.PackageRef{Ecosystem: "npm", Name: name, Version: version}, true
 }
 
+// IsArtifactPath implements gate.ArtifactPathMatcher: a tarball is any ".tgz"
+// under a "/-/" segment, whether or not NormalizeRequest can read the version
+// out of its file name.
+func (a *NPMAdapter) IsArtifactPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".tgz") && strings.Contains(r.URL.Path, "/-/")
+}
+
 // parseNPMVersion extracts the version from a tarball filename "<unscoped>-<version>.tgz".
 func parseNPMVersion(name, filename string) (string, bool) {
 	base := strings.TrimSuffix(filename, ".tgz")

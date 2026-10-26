@@ -63,6 +63,12 @@ func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, b
 	return &gate.PackageRef{Ecosystem: "rubygems", Name: name, Version: version}, true
 }
 
+// IsArtifactPath implements gate.ArtifactPathMatcher: every ".gem" file is a
+// gem, wherever it sits and whatever its name.
+func (a *RubyGemsAdapter) IsArtifactPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".gem")
+}
+
 // parseGemFilename parses "<name>-<version>[-<platform>].gem". The version is the
 // first hyphen-separated segment beginning with a digit (gem versions contain no
 // hyphens); everything before it is the name; any trailing segments are the
