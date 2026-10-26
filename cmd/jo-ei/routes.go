@@ -10,6 +10,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/httpx"
 	"github.com/ggwpLab/Jo-ei/internal/metrics"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
@@ -40,6 +41,9 @@ type sharedDeps struct {
 	cveRecheckTTL       time.Duration
 	malwareRecheckTTL   time.Duration
 	metadataFilterMaxMB int
+	// publicBase derives the client-facing base URL for links written into
+	// rewritten metadata documents.
+	publicBase *httpx.PublicBaseResolver
 	// tempDir holds downloads while they are checked (on the cache volume).
 	tempDir string
 	// maxArtifactBytes caps a package artifact download (0 = unlimited).
@@ -173,6 +177,7 @@ func buildHandler(adapter gate.RegistryAdapter, shared sharedDeps) *proxy.Handle
 		HTTPClient:          shared.downloadClient,
 		Throttles:           shared.throttles,
 		MetadataFilterMaxMB: shared.metadataFilterMaxMB,
+		PublicBase:          shared.publicBase,
 		TempDir:             shared.tempDir,
 		MaxArtifactBytes:    shared.maxArtifactBytes,
 	})
