@@ -300,21 +300,16 @@ func (h *Handler) versionDecider(ctx context.Context, mref *gate.MetadataRef, un
 }
 
 // readMetadataDocument reads a decompressed metadata document, at most limit
-// bytes of it (0 = no cap). A non-nil rest means the document cannot be filtered and must be
-// streamed instead: either it is larger than limit, in which case rest is
-// positioned at the remainder, or its Content-Encoding is a coding this proxy
-// does not decode, in which case rest is resp.Body itself, still untouched.
-// unsupportedEncoding distinguishes the two so the caller can log accurately;
-// both route to the same verbatim relay.
+// bytes of it (0 = no cap). A non-nil rest means the document cannot be
+// rewritten: either it is larger than limit, in which case rest is positioned
+// at the remainder, or its Content-Encoding is a coding this proxy does not
+// decode, in which case rest is resp.Body itself, still untouched.
+// unsupportedEncoding distinguishes the two so the caller can log accurately.
 //
 // Only a bare "gzip" is decoded. Anything else this proxy might see —
-// "deflate", "br", "zstd", or a coding list such as "gzip, identity" — is left
-// alone deliberately: decoding here happens before anything has been read from
-// resp.Body, so an unsupported coding can still be relayed byte-for-byte. The
-// alternative — reading it as if it were plain JSON — is silent corruption:
-// FilterVersions fails to unmarshal the still-compressed bytes, "unfiltered"
-// serving then strips the Content-Encoding that described them and ships a
-// body the client is told is plain JSON but cannot decode.
+// "deflate", "br", "zstd", or a coding list such as "gzip, identity" — is
+// reported rather than read as plain JSON, which would fail to parse as a
+// document no matter what it holds.
 func readMetadataDocument(resp *http.Response, limit int64) (doc []byte, rest io.Reader, unsupportedEncoding bool, err error) {
 	src := io.Reader(resp.Body)
 	switch coding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); {
@@ -374,11 +369,9 @@ func writeMetadataDocument(w http.ResponseWriter, r *http.Request, header http.H
 	w.WriteHeader(status)
 	if _, err := httpx.CopyWithWriteDeadline(w, bytes.NewReader(payload), httpx.DefaultWriteIdleTimeout); err != nil {
 		// The flight's own fetch context is detached from any one caller's
-		// disconnect (see fetchMetadataDocument), so an aborted npm install no
-		// longer shows up as a cancelled read — it shows up here instead, as a
-		// write against a connection the client already closed. That is the
-		// same "client hung up, not a proxy failure" case the read path used to
-		// demote, just relocated to where it now actually occurs.
+		// disconnect (see fetchMetadataDocument), so an aborted npm install
+		// shows up here, as a write against a connection the client already
+		// closed: a client hanging up, not a proxy failure.
 		event := log.Error()
 		if r.Context().Err() != nil {
 			event = log.Debug()
