@@ -188,7 +188,7 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	}
 
 	var undated int
-	filtered, err := filterer.FilterVersions(fetch.doc, h.versionDecider(r.Context(), mref, &undated))
+	filtered, err := filterer.FilterVersions(fetch.doc, mref, h.versionDecider(r.Context(), mref, &undated), "")
 	if err != nil {
 		log.Warn().Err(err).Msg("unparseable document, serving unfiltered")
 		filtered = gate.FilteredDocument{Body: fetch.doc}

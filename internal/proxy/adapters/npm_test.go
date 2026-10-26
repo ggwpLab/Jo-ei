@@ -275,19 +275,24 @@ func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
 	tests := []struct {
-		name     string
-		method   string
-		path     string
-		wantOK   bool
-		wantName string
+		name        string
+		method      string
+		path        string
+		wantOK      bool
+		wantName    string
+		wantVersion string
 	}{
 		{name: "bare package", method: http.MethodGet, path: "/left-pad", wantOK: true, wantName: "left-pad"},
 		{name: "scoped encoded", method: http.MethodGet, path: "/@types%2fnode", wantOK: true, wantName: "@types/node"},
 		{name: "scoped plain", method: http.MethodGet, path: "/@types/node", wantOK: true, wantName: "@types/node"},
 
-		// A single-version manifest has no version list to rewrite.
-		{name: "version manifest", method: http.MethodGet, path: "/left-pad/1.3.0"},
-		{name: "scoped version manifest", method: http.MethodGet, path: "/@types/node/20.0.0"},
+		// A single-version manifest carries a tarball link too.
+		{name: "version manifest", method: http.MethodGet, path: "/left-pad/1.3.0", wantOK: true, wantName: "left-pad", wantVersion: "1.3.0"},
+		{name: "dist-tag manifest", method: http.MethodGet, path: "/left-pad/latest", wantOK: true, wantName: "left-pad", wantVersion: "latest"},
+		{name: "scoped version manifest", method: http.MethodGet, path: "/@types/node/20.0.0", wantOK: true, wantName: "@types/node", wantVersion: "20.0.0"},
+		{name: "scoped encoded version manifest", method: http.MethodGet, path: "/@types%2fnode/20.0.0", wantOK: true, wantName: "@types/node", wantVersion: "20.0.0"},
+		{name: "extra segment", method: http.MethodGet, path: "/left-pad/1.3.0/extra"},
+		{name: "scoped extra segment", method: http.MethodGet, path: "/@types/node/20.0.0/extra"},
 
 		// Tarballs belong to NormalizeRequest, service endpoints to nobody.
 		{name: "tarball", method: http.MethodGet, path: "/left-pad/-/left-pad-1.3.0.tgz"},
@@ -319,6 +324,7 @@ func TestNPMAdapter_NormalizeMetadataRequest(t *testing.T) {
 			require.NotNil(t, ref)
 			assert.Equal(t, "npm", ref.Ecosystem)
 			assert.Equal(t, tt.wantName, ref.Name)
+			assert.Equal(t, tt.wantVersion, ref.Version)
 		})
 	}
 }
@@ -338,8 +344,8 @@ const fullPackument = `{
     "1.3.0": "2018-01-01T00:00:00.000Z"
   },
   "versions": {
-    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa"}},
-    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb"}}
+    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa", "tarball": "https://registry.npmjs.org/left-pad/-/left-pad-1.2.0.tgz"}},
+    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb", "tarball": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}
   }
 }`
 
@@ -350,10 +356,33 @@ const abbreviatedPackument = `{
   "dist-tags": {"latest": "1.3.0"},
   "modified": "2018-01-01T00:00:00.000Z",
   "versions": {
-    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa"}},
-    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb"}}
+    "1.2.0": {"name": "left-pad", "version": "1.2.0", "dist": {"shasum": "aaa", "tarball": "https://registry.npmjs.org/left-pad/-/left-pad-1.2.0.tgz"}},
+    "1.3.0": {"name": "left-pad", "version": "1.3.0", "dist": {"shasum": "bbb", "tarball": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}
   }
 }`
+
+// linkBase is where every rewritten tarball link must point.
+const linkBase = "https://reg.example/npm"
+
+var packumentRef = &gate.MetadataRef{Ecosystem: "npm", Name: "left-pad"}
+
+// tarballs decodes a packument and returns each version's dist.tarball.
+func tarballs(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+	var doc struct {
+		Versions map[string]struct {
+			Dist struct {
+				Tarball string `json:"tarball"`
+			} `json:"dist"`
+		} `json:"versions"`
+	}
+	require.NoError(t, json.Unmarshal(body, &doc))
+	out := make(map[string]string, len(doc.Versions))
+	for v, m := range doc.Versions {
+		out[v] = m.Dist.Tarball
+	}
+	return out
+}
 
 // rejectVersions builds a decider that hides exactly the named versions.
 func rejectVersions(names ...string) gate.VersionDecider {
@@ -367,7 +396,7 @@ func rejectVersions(names ...string) gate.VersionDecider {
 func TestNPMAdapter_FilterVersions_RemovesVersionAndItsTimeEntry(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
-	got, err := a.FilterVersions([]byte(fullPackument), rejectVersions("1.3.0"))
+	got, err := a.FilterVersions([]byte(fullPackument), packumentRef, rejectVersions("1.3.0"), linkBase)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1.3.0"}, got.Removed)
 	assert.False(t, got.AllRejected)
@@ -392,30 +421,132 @@ func TestNPMAdapter_FilterVersions_RemovesVersionAndItsTimeEntry(t *testing.T) {
 	assert.Equal(t, "1.3.0", doc.DistTags["latest"])
 }
 
-func TestNPMAdapter_FilterVersions_NothingRemovedReturnsOriginalBytes(t *testing.T) {
+func TestNPMAdapter_FilterVersions_RewritesEveryTarball(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
-	doc := []byte(fullPackument)
 
-	got, err := a.FilterVersions(doc, rejectVersions())
+	got, err := a.FilterVersions([]byte(fullPackument), packumentRef, rejectVersions(), linkBase)
 	require.NoError(t, err)
 	assert.Empty(t, got.Removed)
-	assert.False(t, got.AllRejected)
-	// Byte identity, not just equality: the caller forwards the upstream ETag
-	// with this body, and Go marshals maps with sorted keys, so a re-marshal
-	// would silently reorder the document the ETag describes.
-	assert.Same(t, &doc[0], &got.Body[0])
-	assert.Equal(t, doc, got.Body)
+	assert.Empty(t, got.Unmappable)
+	assert.Equal(t, map[string]string{
+		"1.2.0": "https://reg.example/npm/left-pad/-/left-pad-1.2.0.tgz",
+		"1.3.0": "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz",
+	}, tarballs(t, got.Body))
+
+	var doc struct {
+		Readme   string `json:"readme"`
+		Versions map[string]struct {
+			Dist map[string]string `json:"dist"`
+		} `json:"versions"`
+	}
+	require.NoError(t, json.Unmarshal(got.Body, &doc))
+	assert.Equal(t, "# left-pad", doc.Readme, "unknown top-level fields must survive")
+	assert.Equal(t, "bbb", doc.Versions["1.3.0"].Dist["shasum"], "other dist fields must survive")
 }
 
-func TestNPMAdapter_FilterVersions_AllRejectedKeepsOriginal(t *testing.T) {
+func TestNPMAdapter_FilterVersions_AllRejectedStillRewritten(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
-	doc := []byte(fullPackument)
 
-	got, err := a.FilterVersions(doc, rejectVersions("1.2.0", "1.3.0"))
+	got, err := a.FilterVersions([]byte(fullPackument), packumentRef, rejectVersions("1.2.0", "1.3.0"), linkBase)
 	require.NoError(t, err)
 	assert.True(t, got.AllRejected)
 	assert.Equal(t, []string{"1.2.0", "1.3.0"}, got.Removed)
-	assert.Equal(t, doc, got.Body, "an empty version list would break every install of this package")
+	// An empty version list would break every install of this package, so
+	// every version stays — but none may link around the proxy.
+	assert.Equal(t, map[string]string{
+		"1.2.0": "https://reg.example/npm/left-pad/-/left-pad-1.2.0.tgz",
+		"1.3.0": "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz",
+	}, tarballs(t, got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_ScopedName(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://nexus.example/repository/npm-proxy"})
+	doc := `{"name":"@babel/core","versions":{"7.26.0":{"dist":{"tarball":"https://nexus.example/repository/npm-proxy/@babel/core/-/core-7.26.0.tgz"}}}}`
+
+	got, err := a.FilterVersions([]byte(doc), &gate.MetadataRef{Ecosystem: "npm", Name: "@babel/core"}, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"7.26.0": "https://reg.example/npm/@babel/core/-/core-7.26.0.tgz"}, tarballs(t, got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_ArtifactoryStyleFilenameIgnored(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://art.example/api/npm/npm"})
+	doc := `{"name":"@scope/name","versions":{"1.0.0":{"dist":{"tarball":"https://art.example/api/npm/npm/@scope/name/-/@scope/name-1.0.0.tgz"}}}}`
+
+	got, err := a.FilterVersions([]byte(doc), &gate.MetadataRef{Ecosystem: "npm", Name: "@scope/name"}, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"1.0.0": "https://reg.example/npm/@scope/name/-/name-1.0.0.tgz"}, tarballs(t, got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_UnmappableVersionDropped(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := `{"name":"left-pad","time":{"1.0.0/../x":"2017-01-01T00:00:00.000Z","1.3.0":"2018-01-01T00:00:00.000Z"},` +
+		`"versions":{"1.0.0/../x":{"dist":{"tarball":"https://registry.npmjs.org/x.tgz"}},"1.3.0":{"dist":{"tarball":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}}}`
+
+	got, err := a.FilterVersions([]byte(doc), packumentRef, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1.0.0/../x"}, got.Unmappable)
+	assert.Empty(t, got.Removed)
+	assert.Equal(t, map[string]string{"1.3.0": "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz"}, tarballs(t, got.Body))
+	assert.NotContains(t, string(got.Body), "1.0.0/../x", "its time entry must go too")
+}
+
+func TestNPMAdapter_FilterVersions_AllUnmappable(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := `{"name":"left-pad","versions":{"bad version":{"dist":{"tarball":"https://registry.npmjs.org/x.tgz"}}}}`
+
+	_, err := a.FilterVersions([]byte(doc), packumentRef, rejectVersions(), linkBase)
+	require.ErrorIs(t, err, gate.ErrNoServableVersions)
+}
+
+func TestNPMAdapter_FilterVersions_VersionWithoutDistLeftAlone(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := `{"name":"left-pad","versions":{"1.0.0":{"name":"left-pad"},"1.3.0":{"dist":{"tarball":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}}}`
+
+	got, err := a.FilterVersions([]byte(doc), packumentRef, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Empty(t, got.Unmappable)
+	assert.Equal(t, map[string]string{"1.0.0": "", "1.3.0": "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz"}, tarballs(t, got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_EmptyVersions(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	got, err := a.FilterVersions([]byte(`{"name":"left-pad","versions":{}}`), packumentRef, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Empty(t, tarballs(t, got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_AbbreviatedRewritten(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+
+	got, err := a.FilterVersions([]byte(abbreviatedPackument), packumentRef, rejectVersions(), linkBase)
+	require.NoError(t, err)
+	assert.Equal(t, "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz", tarballs(t, got.Body)["1.3.0"])
+}
+
+func TestNPMAdapter_FilterVersions_SingleVersionManifest(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := `{"name":"left-pad","version":"1.3.0","readme":"x","dist":{"shasum":"bbb","tarball":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}}`
+	never := func(string, time.Time) bool { t.Fatal("a manifest is not filtered"); return false }
+
+	got, err := a.FilterVersions([]byte(doc), &gate.MetadataRef{Ecosystem: "npm", Name: "left-pad", Version: "latest"}, never, linkBase)
+	require.NoError(t, err)
+	var m struct {
+		Readme string            `json:"readme"`
+		Dist   map[string]string `json:"dist"`
+	}
+	require.NoError(t, json.Unmarshal(got.Body, &m))
+	assert.Equal(t, "https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz", m.Dist["tarball"])
+	assert.Equal(t, "bbb", m.Dist["shasum"])
+	assert.Equal(t, "x", m.Readme)
+}
+
+func TestNPMAdapter_FilterVersions_SingleVersionManifestUnmappable(t *testing.T) {
+	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
+	doc := `{"name":"left-pad","version":"bad/v","dist":{"tarball":"https://registry.npmjs.org/x.tgz"}}`
+
+	_, err := a.FilterVersions([]byte(doc), &gate.MetadataRef{Ecosystem: "npm", Name: "left-pad", Version: "latest"}, rejectVersions(), linkBase)
+	require.ErrorIs(t, err, gate.ErrNoServableVersions)
 }
 
 func TestNPMAdapter_FilterVersions_AbbreviatedHasNoDates(t *testing.T) {
@@ -430,7 +561,7 @@ func TestNPMAdapter_FilterVersions_AbbreviatedHasNoDates(t *testing.T) {
 		return true
 	}
 
-	got, err := a.FilterVersions([]byte(abbreviatedPackument), decide)
+	got, err := a.FilterVersions([]byte(abbreviatedPackument), packumentRef, decide, linkBase)
 	require.NoError(t, err)
 	assert.Empty(t, got.Removed)
 	assert.True(t, seen["1.2.0"].IsZero(), "no time map means no publish date to judge")
@@ -446,7 +577,7 @@ func TestNPMAdapter_FilterVersions_PassesPublishDates(t *testing.T) {
 		return true
 	}
 
-	_, err := a.FilterVersions([]byte(fullPackument), decide)
+	_, err := a.FilterVersions([]byte(fullPackument), packumentRef, decide, linkBase)
 	require.NoError(t, err)
 	assert.Equal(t, "2018-01-01T00:00:00Z", seen["1.3.0"].Format(time.RFC3339))
 	assert.Equal(t, "2017-01-01T00:00:00Z", seen["1.2.0"].Format(time.RFC3339))
@@ -455,7 +586,7 @@ func TestNPMAdapter_FilterVersions_PassesPublishDates(t *testing.T) {
 func TestNPMAdapter_FilterVersions_MalformedDocument(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 
-	_, err := a.FilterVersions([]byte(`{"versions": [`), rejectVersions("1.0.0"))
+	_, err := a.FilterVersions([]byte(`{"versions": [`), packumentRef, rejectVersions("1.0.0"), linkBase)
 	require.Error(t, err)
 }
 
@@ -463,8 +594,8 @@ func TestNPMAdapter_FilterVersions_DocumentWithoutVersions(t *testing.T) {
 	a := adapters.NewNPMAdapter([]string{"https://registry.npmjs.org"})
 	doc := []byte(`{"name": "left-pad"}`)
 
-	got, err := a.FilterVersions(doc, rejectVersions("1.3.0"))
+	got, err := a.FilterVersions(doc, packumentRef, rejectVersions("1.3.0"), linkBase)
 	require.NoError(t, err)
-	assert.Equal(t, doc, got.Body)
+	assert.JSONEq(t, string(doc), string(got.Body))
 	assert.Empty(t, got.Removed)
 }
