@@ -106,11 +106,13 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 	outbound.Header.Set("Accept-Encoding", "gzip")
 
 	// The full request URI — not just the path — picks the document, since
-	// UpstreamURLs builds the fetch from it; Accept picks its shape. Nothing
-	// else the flight forwards varies between callers, and the rewrite below
+	// UpstreamURLs builds the fetch from it; Accept picks its shape. The
+	// flight forwards the leader's own headers upstream, so callers whose
+	// credentials differ must not share one: a private registry would hand
+	// one caller a document fetched with another's token. The rewrite below
 	// runs per caller, so callers behind different addresses share a flight
 	// safely.
-	key := r.URL.RequestURI() + "\x00" + r.Header.Get("Accept")
+	key := r.URL.RequestURI() + "\x00" + r.Header.Get("Accept") + "\x00" + credentialTag(r)
 
 	fetch, atts, err := h.fetchMetadataDocument(outbound, key, h.metadataLimit())
 	switch {
@@ -182,6 +184,18 @@ func (h *Handler) proxyMetadata(w http.ResponseWriter, r *http.Request, mref *ga
 		return
 	}
 	writeMetadataDocument(w, r, fetch.header, fetch.status, filtered.Body, log)
+}
+
+// credentialTag fingerprints the headers that carry a caller's upstream
+// credentials, so the coalescing key can tell callers apart without holding
+// their secrets.
+func credentialTag(r *http.Request) string {
+	auth, cookie := r.Header.Values("Authorization"), r.Header.Values("Cookie")
+	if len(auth) == 0 && len(cookie) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(auth, "\n") + "\x00" + strings.Join(cookie, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // metadataLimit is the byte cap on a decoded metadata document; zero means no

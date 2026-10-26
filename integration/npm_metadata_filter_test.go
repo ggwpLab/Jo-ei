@@ -67,6 +67,9 @@ type npmRegistryOptions struct {
 	Garbage bool
 	// BadVersions serves version keys that cannot form a tarball path.
 	BadVersions bool
+	// RequireAuth answers the packument with 401 unless Authorization equals
+	// it, the way a private registry does.
+	RequireAuth string
 }
 
 // newNPMMetadataRegistry serves "left-pad" with 1.2.0 published OldHours ago
@@ -125,6 +128,10 @@ func newNPMMetadataRegistry(t *testing.T, opts npmRegistryOptions) *npmRegistry 
 
 			if opts.Delay > 0 {
 				time.Sleep(opts.Delay) // widen the window so coalescing is observable
+			}
+			if opts.RequireAuth != "" && r.Header.Get("Authorization") != opts.RequireAuth {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
 			}
 			if opts.HonourConditional && listsTag(r.Header.Values("If-None-Match"), reg.etag) {
 				w.Header().Set("ETag", reg.etag)
@@ -654,4 +661,33 @@ func TestIntegration_NPMMetadataFilter_CoalescesConcurrentFetches(t *testing.T) 
 	// barely happened" as a pass.
 	assert.LessOrEqual(t, reg.bodyCount(), 2,
 		"8 simultaneous, identical clients should collapse onto (at most) one upstream fetch")
+}
+
+// Callers with different credentials must not share a flight: the leader's
+// Authorization goes upstream, so a shared result would hand a private
+// document to a caller without the token, or the leader's 401 to one with it.
+func TestIntegration_NPMMetadataFilter_CredentialsDoNotShareAFlight(t *testing.T) {
+	reg := newNPMMetadataRegistry(t, npmRegistryOptions{
+		OldHours: 240, FreshHours: 200, RequireAuth: "Bearer secret", Delay: 150 * time.Millisecond,
+	})
+	srv := newNPMProxy(t, reg, 24, "enforce", 32)
+
+	var authed, anonymous packumentResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		anonymous = fetchPackument(srv, nil)
+	}()
+	time.Sleep(30 * time.Millisecond) // let the anonymous caller lead the flight
+	go func() {
+		defer wg.Done()
+		authed = fetchPackument(srv, map[string]string{"Authorization": "Bearer secret"})
+	}()
+	wg.Wait()
+
+	require.NoError(t, authed.err)
+	require.NoError(t, anonymous.err)
+	assert.Equal(t, http.StatusOK, authed.status, "the caller holding the token must get the document")
+	assert.NotEqual(t, http.StatusOK, anonymous.status, "the caller without a token must not get it")
 }
