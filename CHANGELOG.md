@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was proxied transparently, around every gate; it now gets `403
   unrecognized_artifact`. All sdist formats pip accepts (`.tar.bz2`, `.tgz`,
   `.tar.xz`, …) and upper-case extensions are now recognized and gated.
+- **The PyPI age check dates the file requested, not the release.** It read
+  the upload time of the release's first file, and PyPI accepts new files into
+  an existing release, so a wheel added today to a two-year-old version passed
+  `min_age_hours`. A file the release does not list is now refused.
+- **Every Maven artifact type is gated.** Only `.jar`, `.war` and `.aar` went
+  through the gates; native executables (such as `protoc`), `.zip` and
+  `.tar.gz` distributions, `.ear` and Jenkins `.hpi` plugins streamed through
+  unchecked. Now only the files that carry no code — `.pom`, `.module`,
+  `.xml`, checksums, `.asc`, `.sig` — pass through as-is.
+- **Unrecognized npm, RubyGems and Go downloads are refused.** A tarball, gem
+  or module zip whose path the proxy could not name was proxied around every
+  gate; it now gets `403 unrecognized_artifact`, as on PyPI.
+- **Upstream credentials are masked in the console.** `GET /api/registries`
+  returned upstream URLs verbatim, showing `user:password@` to operators; it
+  now returns `user:***@` (or `***@` for a bare token), and a `PUT` that sends
+  a masked URL back keeps the stored credentials.
 
 ### Added
 
@@ -184,6 +200,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manifests under check were buffered in the container's `/tmp`, on the host's
   root filesystem; they now go to `<cache.local.path>/tmp`, and files left
   there by an interrupted run are removed at startup.
+- **Each PyPI file has its own cache slot.** The cache keyed PyPI artifacts on
+  name and version, so every wheel and the sdist of one version shared a slot
+  and the first one downloaded was served for all of them (a hash mismatch in
+  pip, or the wrong platform's wheel). PyPI artifacts cached before the
+  upgrade are not reused and age out of the cache.
+- **Maven snapshot builds no longer share a cache slot.** Every timestamped
+  build of a `-SNAPSHOT` version, and its sources jar, was cached under one
+  key and the first one was served forever. Non-jar artifacts of one version
+  (`.zip`, `.war`) are kept apart too; `.war` and `.aar` entries cached before
+  the upgrade are not reused.
+- **PyPI project names follow PEP 503**: runs of `-`, `_` and `.` fold to one
+  `-`, so `zope.interface` matches a list entry `pypi/zope-interface`.
+- **`PUT /api/policy` keeps the settings a request omits.** Leaving out
+  `min_age_hours` set it to 0, switching the age rule off. `PUT
+  /api/registries` answers 413 for an oversized body and is logged with the
+  user who made it.
+- **A client holding a replaced npm packument gets the new one.** Concurrent
+  revalidations whose `If-None-Match` differed only after the first field line
+  shared one upstream request, and the stale caller could be answered 304.
+- **An antivirus scanner may no longer be named `osv`, `osv.dev` or `trivy`**;
+  such a name hid that CVE engine's health row in the console and in
+  `jo_ei_scanner_up`, and now fails config validation.
 
 ## [0.6.0] - 2026-10-24
 
