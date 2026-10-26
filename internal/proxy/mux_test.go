@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -80,4 +81,21 @@ func TestMux_HealthEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestMux_SetsRoutePrefix(t *testing.T) {
+	var got []string
+	record := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, proxy.RoutePrefix(r.Context()))
+	})
+	mux := proxy.NewMux(map[string]*proxy.Handler{}, map[string]http.Handler{"npm": record, "yarn": record}, zerolog.Nop())
+	for _, path := range []string{"/yarn/lodash", "/npm/@types%2fnode"} {
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(got) != 2 || got[0] != "yarn" || got[1] != "npm" {
+		t.Fatalf("RoutePrefix = %v, want [yarn npm]", got)
+	}
+	if p := proxy.RoutePrefix(context.Background()); p != "" {
+		t.Fatalf("RoutePrefix(empty ctx) = %q", p)
+	}
 }

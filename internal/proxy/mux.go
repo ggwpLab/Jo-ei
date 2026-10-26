@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -46,6 +47,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefix, rest := splitPrefix(r.URL.Path)
+	r = r.WithContext(context.WithValue(r.Context(), routePrefixKey{}, prefix))
 
 	if rh, ok := m.raw[prefix]; ok {
 		r.URL.Path = rest
@@ -80,6 +82,17 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // unknown-registry warning.
 func isBrowserNoise(path string) bool {
 	return strings.HasPrefix(path, "/.well-known/")
+}
+
+type routePrefixKey struct{}
+
+// RoutePrefix returns the registry prefix the mux stripped from the request
+// path ("npm", "yarn", ...), or "" for a request that did not come through the
+// mux. Links a handler writes back to its client must carry it: one handler
+// serves several prefixes.
+func RoutePrefix(ctx context.Context) string {
+	p, _ := ctx.Value(routePrefixKey{}).(string)
+	return p
 }
 
 // splitPrefix splits "/npm/foo/bar" into ("npm", "/foo/bar").
