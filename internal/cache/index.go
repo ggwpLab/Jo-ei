@@ -51,8 +51,11 @@ func NewIndex(path string) (*Index, error) {
 	// busy_timeout first, so switching the journal mode tolerates brief
 	// contention too. WAL keeps another process's reads (a backup, an
 	// operator's sqlite3) from blocking this one's writes; within the process
-	// the single connection serializes anyway.
-	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL"} {
+	// the single connection serializes anyway. synchronous=NORMAL drops the
+	// fsync from every commit, which otherwise caps cache hits (each bumps
+	// hit_count) at the disk's fsync rate; an OS crash or power loss can roll
+	// back only the last hit counts, never corrupt the index.
+	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"} {
 		if _, err := db.Exec(pragma); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("applying %q: %w", pragma, err)

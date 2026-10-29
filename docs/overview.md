@@ -226,7 +226,9 @@ Key technical decisions:
 
 - **One SQLite file** (pure Go, no cgo) for telemetry, settings and the cache
   index, with per-component migrations. Every event is written in a
-  synchronous transaction, so there is no window for data loss on a crash.
+  transaction before the request completes, so a process crash loses nothing.
+  WAL with `synchronous=NORMAL` skips the fsync per commit: an OS crash or
+  power loss can roll back the last commits, never corrupt the database.
 - **Outbound request discipline** (`internal/httpx`): each upstream host gets
   a concurrency semaphore, a token-bucket rate limiter and a circuit breaker
   on 429/503. All requests share one `http.Client` and draw on the same

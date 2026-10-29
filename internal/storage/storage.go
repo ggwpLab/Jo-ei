@@ -36,10 +36,14 @@ func Open(path string) (*DB, error) {
 	sqlDB.SetMaxOpenConns(1) // SQLite: single writer
 	// busy_timeout first: a second process (jo-ei backup, reset-admin-password)
 	// opening the file during a checkpoint must wait, not fail on the journal
-	// mode switch with SQLITE_BUSY.
+	// mode switch with SQLITE_BUSY. synchronous=NORMAL drops the fsync from
+	// every commit (WAL syncs at checkpoints instead): a process crash loses
+	// nothing, and an OS crash or power loss can roll back only the last
+	// commits, never corrupt the file.
 	for _, pragma := range []string{
 		"PRAGMA busy_timeout=5000",
 		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
 		"PRAGMA foreign_keys=ON",
 	} {
 		if _, err := sqlDB.Exec(pragma); err != nil {

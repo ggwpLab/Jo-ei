@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **SQLite commits no longer wait for fsync.** Both databases (telemetry,
+  settings and users; the cache index) run WAL with `synchronous=NORMAL`.
+  Every cache hit commits twice (the hit count and the request event), and an
+  fsync per commit capped cache hits at the disk's sync rate (about 120 per
+  second on Docker Desktop). A process crash still loses nothing; an OS crash
+  or power loss can roll back the last commits, never corrupt the database.
+
 ## [1.0.0] - 2026-10-26
 
 The first stable release. It closes every route the review of 0.6 found
