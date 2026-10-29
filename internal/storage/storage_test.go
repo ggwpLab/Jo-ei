@@ -21,6 +21,16 @@ func TestOpen_CreatesDirAndDB(t *testing.T) {
 	assert.Equal(t, "wal", mode)
 }
 
+// synchronous=NORMAL is per connection, so it is read on the store's own one.
+func TestOpen_SynchronousNormal(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "jo-ei.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	var sync int
+	require.NoError(t, db.SQL().QueryRow("PRAGMA synchronous").Scan(&sync))
+	assert.Equal(t, 1, sync) // 1 = NORMAL
+}
+
 func TestApplyMigrations_IdempotentAndVersioned(t *testing.T) {
 	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 	db, err := storage.Open(path)

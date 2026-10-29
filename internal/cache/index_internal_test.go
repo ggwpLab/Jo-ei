@@ -90,3 +90,14 @@ func TestMigrateCheckTimestampsOnPreClassifierDB(t *testing.T) {
 	require.EqualValues(t, 100, ea.LastCVECheck.Unix())
 	require.EqualValues(t, 100, ea.LastMalwareCheck.Unix())
 }
+
+// synchronous=NORMAL is per connection and does not persist in the file, so
+// it is read on the index's own connection.
+func TestNewIndex_SynchronousNormal(t *testing.T) {
+	idx, err := NewIndex(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+	defer idx.Close()
+	var sync int
+	require.NoError(t, idx.db.QueryRow("PRAGMA synchronous").Scan(&sync))
+	require.Equal(t, 1, sync) // 1 = NORMAL
+}
