@@ -4,7 +4,7 @@ FROM aquasec/trivy:0.76.1 AS trivy
 # Build stage
 # Pinned to go.mod's toolchain line, so the image is built with exactly the Go
 # release govulncheck and CI check (bump both together).
-FROM golang:1.26.10-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
