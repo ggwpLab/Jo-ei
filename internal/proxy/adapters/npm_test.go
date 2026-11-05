@@ -1,8 +1,10 @@
 package adapters_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -606,4 +608,151 @@ func TestNPMAdapter_FilterVersions_DocumentWithoutVersions(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, string(doc), string(got.Body))
 	assert.Empty(t, got.Removed)
+}
+
+func TestNPMAdapter_FilterVersions_PreservesRawValues(t *testing.T) {
+	const unknown = `{"large":9007199254740993,"exponent":1e+09,"nullable":null,"nested":[true,{"x":"雪"}],"text":"<>&\""}`
+	const encoded = `{"large":9007199254740993,"exponent":1e+09,"nullable":null,"nested":[true,{"x":"雪"}],"text":"\u003c\u003e\u0026\""}`
+	version := `{"version":"1.3.0","unknown":` + unknown + `,"dist":{"unknown":` + unknown + `,"tarball":null}}`
+	wantVersion := `{"dist":{"tarball":"https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz","unknown":` + encoded + `},"unknown":` + encoded + `,"version":"1.3.0"}`
+	for _, manifest := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manifest=%t", manifest), func(t *testing.T) {
+			doc, want := version, wantVersion
+			ref := *packumentRef
+			if manifest {
+				ref.Version = "latest"
+			} else {
+				doc = `{"unknown":` + unknown + `,"versions":{"1.3.0":` + version + `}}`
+				want = `{"unknown":` + encoded + `,"versions":{"1.3.0":` + wantVersion + `}}`
+			}
+			got, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(doc), &ref, rejectVersions(), linkBase)
+			require.NoError(t, err)
+			assert.Equal(t, want, string(got.Body))
+			var output map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(got.Body, &output))
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(output["unknown"], &fields))
+			assert.Equal(t, "9007199254740993", string(fields["large"]))
+			assert.Equal(t, "1e+09", string(fields["exponent"]))
+			assert.Equal(t, "null", string(fields["nullable"]))
+		})
+	}
+}
+
+func TestNPMAdapter_FilterVersions_ObjectShapes(t *testing.T) {
+	tests := []struct {
+		name, doc, want string
+		unmappable      bool
+		decodeError     bool
+	}{
+		{name: "absent versions", doc: `{ "name": "left-pad" }`, want: `{ "name": "left-pad" }`},
+		{name: "null versions", doc: `{"versions":null}`, want: `{"versions":null}`},
+		{name: "empty versions", doc: `{"versions":{}}`, want: `{"versions":{}}`},
+		{name: "null version", doc: `{"versions":{"1.3.0":null}}`, want: `{"versions":{"1.3.0":null}}`},
+		{name: "absent dist", doc: `{"versions":{"1.3.0":{}}}`, want: `{"versions":{"1.3.0":{}}}`},
+		{name: "null dist", doc: `{"versions":{"1.3.0":{"dist":null}}}`, want: `{"versions":{"1.3.0":{"dist":null}}}`},
+		{name: "empty dist", doc: `{"versions":{"1.3.0":{"dist":{}}}}`, want: `{"versions":{"1.3.0":{"dist":{}}}}`},
+		{name: "null tarball", doc: `{"versions":{"1.3.0":{"dist":{"tarball":null}}}}`, want: `{"versions":{"1.3.0":{"dist":{"tarball":"https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz"}}}}`},
+		{name: "null time", doc: `{"versions":{},"time":null}`, want: `{"time":null,"versions":{}}`},
+		{name: "empty time", doc: `{"versions":{},"time":{}}`, want: `{"time":{},"versions":{}}`},
+		{name: "array version", doc: `{"versions":{"1.3.0":[]}}`, unmappable: true},
+		{name: "numeric version", doc: `{"versions":{"1.3.0":42}}`, unmappable: true},
+		{name: "array dist", doc: `{"versions":{"1.3.0":{"dist":[]}}}`, unmappable: true},
+		{name: "string dist", doc: `{"versions":{"1.3.0":{"dist":"bad"}}}`, unmappable: true},
+		{name: "array versions", doc: `{"versions":[]}`, decodeError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(tt.doc), packumentRef, rejectVersions(), linkBase)
+			switch {
+			case tt.unmappable:
+				require.ErrorIs(t, err, gate.ErrNoServableVersions)
+			case tt.decodeError:
+				require.Error(t, err)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, string(got.Body))
+			}
+		})
+	}
+}
+
+func TestNPMAdapter_FilterVersions_MixedRejections(t *testing.T) {
+	doc := `{"time":{"1.2.0":"2017-01-01T00:00:00Z","1.1.0":"2017-01-01T00:00:00Z","1.0.0":"2017-01-01T00:00:00Z"},"versions":{"1.1.0":{"dist":[]},"1.0.0":{"dist":"bad"},"1.2.0":{"dist":{"tarball":"upstream"}}}}`
+	var seen []string
+	got, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(doc), packumentRef, func(v string, _ time.Time) bool {
+		seen = append(seen, v)
+		return false
+	}, linkBase)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1.2.0"}, seen)
+	assert.Equal(t, []string{"1.0.0", "1.1.0"}, got.Unmappable)
+	assert.Equal(t, []string{"1.2.0"}, got.Removed)
+	assert.True(t, got.AllRejected)
+	assert.Equal(t, `{"time":{"1.2.0":"2017-01-01T00:00:00Z"},"versions":{"1.2.0":{"dist":{"tarball":"https://reg.example/npm/left-pad/-/left-pad-1.2.0.tgz"}}}}`, string(got.Body))
+}
+
+func TestNPMAdapter_FilterVersions_SharedInput(t *testing.T) {
+	doc := []byte(fullPackument)
+	original := bytes.Clone(doc)
+	a := adapters.NewNPMAdapter(nil)
+	type result struct {
+		base string
+		doc  gate.FilteredDocument
+		err  error
+	}
+	results := make(chan result, 16)
+	for i := range 16 {
+		base := []string{"https://a.example/npm", "https://b.example/npm"}[i%2]
+		go func() {
+			got, err := a.FilterVersions(doc, packumentRef, rejectVersions(), base)
+			results <- result{base: base, doc: got, err: err}
+		}()
+	}
+	bodies := make(map[string][]byte)
+	for range 16 {
+		got := <-results
+		require.NoError(t, got.err)
+		assert.Equal(t, map[string]string{
+			"1.2.0": got.base + "/left-pad/-/left-pad-1.2.0.tgz",
+			"1.3.0": got.base + "/left-pad/-/left-pad-1.3.0.tgz",
+		}, tarballs(t, got.doc.Body))
+		if previous, ok := bodies[got.base]; ok {
+			assert.Equal(t, previous, got.doc.Body)
+		}
+		bodies[got.base] = got.doc.Body
+	}
+	assert.Equal(t, original, doc)
+}
+
+func TestNPMAdapter_FilterVersions_ParsingCompatibility(t *testing.T) {
+	for _, version := range []string{`"version":"1.3.0"`, `"VERSION":"1.3.0"`, `"version":"1.2.0","version":"1.3.0"`} {
+		t.Run(version, func(t *testing.T) {
+			doc := `{"dist":{"tarball":"upstream"},` + version + `}`
+			got, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(doc), &gate.MetadataRef{Name: "left-pad", Version: "latest"}, func(string, time.Time) bool {
+				t.Fatal("single manifest must not evaluate policy")
+				return false
+			}, linkBase)
+			require.NoError(t, err)
+			assert.Contains(t, string(got.Body), `"tarball":"https://reg.example/npm/left-pad/-/left-pad-1.3.0.tgz"`)
+		})
+	}
+	t.Run("numeric manifest version", func(t *testing.T) {
+		_, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(`{"version":42,"dist":{"tarball":"upstream"}}`), &gate.MetadataRef{Name: "left-pad", Version: "latest"}, rejectVersions(), linkBase)
+		require.Error(t, err)
+	})
+	t.Run("non-string publish date", func(t *testing.T) {
+		doc := `{"versions":{"1.2.0":{},"1.3.0":{}},"time":{"1.2.0":"2017-01-01T00:00:00Z","1.3.0":42}}`
+		seen := make(map[string]time.Time)
+		got, err := adapters.NewNPMAdapter(nil).FilterVersions([]byte(doc), packumentRef, func(v string, at time.Time) bool {
+			seen[v] = at
+			return true
+		}, linkBase)
+		require.NoError(t, err)
+		require.Len(t, seen, 2)
+		for _, at := range seen {
+			assert.True(t, at.IsZero())
+		}
+		assert.Contains(t, string(got.Body), `"1.3.0":42`)
+	})
 }
