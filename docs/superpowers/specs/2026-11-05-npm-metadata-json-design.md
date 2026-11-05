@@ -1,6 +1,6 @@
 # PERF-01: reduce npm metadata JSON serialization
 
-Date: 2026-11-05. Status: implemented and validated; final independent review pending.
+Date: 2026-11-05. Status: implemented, validated, and independently reviewed.
 
 ## Intent and scope
 
