@@ -273,10 +273,23 @@ func npmTarballURL(linkBase, name, version string) (string, bool) {
 // is nothing to rewrite in it.
 var errNoTarballLink = errors.New("no dist.tarball")
 
+// npmJSONFields keeps unknown values raw while allowing modified objects to
+// share the document's final encoding rather than being encoded at each level.
+func npmJSONFields(fields map[string]json.RawMessage) map[string]any {
+	if fields == nil {
+		return nil
+	}
+	out := make(map[string]any, len(fields))
+	for key, value := range fields {
+		out[key] = value
+	}
+	return out
+}
+
 // rewriteNPMTarball points one version object's dist.tarball at linkBase. A
 // version without a dist.tarball is returned unchanged with errNoTarballLink;
 // any other error means the link cannot be routed through the proxy.
-func rewriteNPMTarball(raw json.RawMessage, linkBase, name, version string) (json.RawMessage, error) {
+func rewriteNPMTarball(raw json.RawMessage, linkBase, name, version string) (any, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("decoding version %s: %w", version, err)
@@ -294,15 +307,11 @@ func rewriteNPMTarball(raw json.RawMessage, linkBase, name, version string) (jso
 	if !ok {
 		return nil, fmt.Errorf("version %q cannot form a tarball path", version)
 	}
-	encodedLink, err := json.Marshal(link)
-	if err != nil {
-		return nil, err
-	}
-	dist["tarball"] = encodedLink
-	if obj["dist"], err = json.Marshal(dist); err != nil {
-		return nil, err
-	}
-	return json.Marshal(obj)
+	rewrittenDist := npmJSONFields(dist)
+	rewrittenDist["tarball"] = link
+	rewritten := npmJSONFields(obj)
+	rewritten["dist"] = rewrittenDist
+	return rewritten, nil
 }
 
 // FilterVersions implements gate.MetadataFilterer. For a packument it drops
@@ -331,14 +340,15 @@ func (a *NPMAdapter) FilterVersions(doc []byte, ref *gate.MetadataRef, decide ga
 	if !ok {
 		return gate.FilteredDocument{Body: doc}, nil
 	}
-	var versions map[string]json.RawMessage
-	if err := json.Unmarshal(rawVersions, &versions); err != nil {
+	var rawVersionMap map[string]json.RawMessage
+	if err := json.Unmarshal(rawVersions, &rawVersionMap); err != nil {
 		return gate.FilteredDocument{}, fmt.Errorf("decoding npm packument versions: %w", err)
 	}
+	versions := npmJSONFields(rawVersionMap)
 	total := len(versions)
 
 	var unmappable []string
-	for version, raw := range versions {
+	for version, raw := range rawVersionMap {
 		rewritten, err := rewriteNPMTarball(raw, linkBase, ref.Name, version)
 		switch {
 		case errors.Is(err, errNoTarballLink):
@@ -373,11 +383,8 @@ func (a *NPMAdapter) FilterVersions(doc []byte, ref *gate.MetadataRef, decide ga
 		}
 	}
 
-	encodedVersions, err := json.Marshal(versions)
-	if err != nil {
-		return gate.FilteredDocument{}, fmt.Errorf("encoding npm packument versions: %w", err)
-	}
-	top["versions"] = encodedVersions
+	rewrittenTop := npmJSONFields(top)
+	rewrittenTop["versions"] = versions
 
 	if raw, ok := top["time"]; ok {
 		var times map[string]json.RawMessage
@@ -390,13 +397,11 @@ func (a *NPMAdapter) FilterVersions(doc []byte, ref *gate.MetadataRef, decide ga
 					delete(times, v)
 				}
 			}
-			if encoded, err := json.Marshal(times); err == nil {
-				top["time"] = encoded
-			}
+			rewrittenTop["time"] = times
 		}
 	}
 
-	body, err := json.Marshal(top)
+	body, err := json.Marshal(rewrittenTop)
 	if err != nil {
 		return gate.FilteredDocument{}, fmt.Errorf("encoding npm packument: %w", err)
 	}
@@ -413,12 +418,16 @@ func rewriteNPMManifest(doc []byte, name, linkBase string) (gate.FilteredDocumen
 	if err := json.Unmarshal(doc, &head); err != nil {
 		return gate.FilteredDocument{}, fmt.Errorf("decoding npm manifest: %w", err)
 	}
-	body, err := rewriteNPMTarball(doc, linkBase, name, head.Version)
+	rewritten, err := rewriteNPMTarball(doc, linkBase, name, head.Version)
 	switch {
 	case errors.Is(err, errNoTarballLink):
 		return gate.FilteredDocument{Body: doc}, nil
 	case err != nil:
 		return gate.FilteredDocument{}, fmt.Errorf("%w: %w", gate.ErrNoServableVersions, err)
+	}
+	body, err := json.Marshal(rewritten)
+	if err != nil {
+		return gate.FilteredDocument{}, fmt.Errorf("encoding npm manifest: %w", err)
 	}
 	return gate.FilteredDocument{Body: body}, nil
 }
