@@ -96,27 +96,6 @@ func TestIndex_GetMissing(t *testing.T) {
 	assert.False(t, found)
 }
 
-func TestIndex_IncrementHitCount(t *testing.T) {
-	idx, cleanup := newTestIndex(t)
-	defer cleanup()
-
-	ref := gate.PackageRef{Ecosystem: "pypi", Name: "flask", Version: "3.0.0"}
-	entry := cache.CacheEntry{
-		ArtifactPath: "/cache/flask.whl",
-		ScanClean:    true,
-		StoredAt:     time.Now().UTC(),
-		SizeBytes:    1024,
-	}
-	require.NoError(t, idx.Insert(&ref, &entry))
-
-	require.NoError(t, idx.IncrementHit(&ref))
-	require.NoError(t, idx.IncrementHit(&ref))
-
-	got, found := idx.Get(&ref)
-	require.True(t, found)
-	assert.Equal(t, int64(2), got.HitCount)
-}
-
 func TestIndex_Delete(t *testing.T) {
 	idx, cleanup := newTestIndex(t)
 	defer cleanup()
@@ -180,7 +159,7 @@ func TestIndex_StaleSizeBytes(t *testing.T) {
 		ArtifactPath: "/c/fresh", StoredAt: now, SizeBytes: 11,
 	}))
 
-	got, err := idx.StaleSizeBytes(now.Add(-30 * 24 * time.Hour).Unix())
+	got, err := idx.StaleSizeBytes(context.Background(), now.Add(-30*24*time.Hour).Unix())
 	require.NoError(t, err)
 	assert.Equal(t, int64(100), got, "only the idle entry counts")
 }

@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 // LocalCacheConfig configures the local filesystem cache.
@@ -31,6 +33,8 @@ type LocalCache struct {
 	evictions atomic.Int64 // entries evicted by evictToSize since process start
 	workerWG  sync.WaitGroup
 	closeOnce sync.Once
+	closeErr  error
+	usage     *usageWriter
 	// workerCtx is the eviction worker's context; stopWorker (called by
 	// Close) cancels it so an eviction sweep in progress stops promptly.
 	workerCtx  context.Context
@@ -53,6 +57,7 @@ func NewLocalCache(cfg LocalCacheConfig) (*LocalCache, error) {
 	}
 
 	lc := &LocalCache{cfg: cfg, index: idx, evictCh: make(chan struct{}, 1)}
+	lc.usage = newUsageWriter(idx.ApplyUsageBatch, defaultUsageWriterOptions)
 	lc.workerCtx, lc.stopWorker = context.WithCancel(context.Background())
 	lc.workerWG.Add(1)
 	go lc.evictWorker()
@@ -69,7 +74,7 @@ func (lc *LocalCache) artifactPath(ref *gate.PackageRef) string {
 
 // Get returns a cached entry, or (nil, false) on miss.
 func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
-	entry, found := lc.index.Get(ref)
+	entry, rowID, found := lc.index.GetWithID(ref)
 	if !found {
 		return nil, false
 	}
@@ -80,7 +85,7 @@ func (lc *LocalCache) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 		return nil, false
 	}
 
-	_ = lc.index.IncrementHit(ref)
+	lc.usage.record(rowID, time.Now())
 	return entry, true
 }
 
@@ -168,15 +173,17 @@ func (lc *LocalCache) staleCutoff() int64 {
 
 // Stats returns aggregate cache statistics.
 func (lc *LocalCache) Stats() (CacheStats, error) {
-	size, err := lc.index.TotalSizeBytes(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	size, err := lc.index.TotalSizeBytes(ctx)
 	if err != nil {
 		return CacheStats{}, err
 	}
-	count, err := lc.index.Count()
+	count, err := lc.index.Count(ctx)
 	if err != nil {
 		return CacheStats{}, err
 	}
-	stale, err := lc.index.StaleSizeBytes(lc.staleCutoff())
+	stale, err := lc.index.StaleSizeBytes(ctx, lc.staleCutoff())
 	if err != nil {
 		return CacheStats{}, err
 	}
@@ -195,6 +202,9 @@ func (lc *LocalCache) PurgeStale(ctx context.Context) (removed, freedBytes int64
 	cutoff := lc.staleCutoff()
 	for {
 		if err := ctx.Err(); err != nil {
+			return removed, freedBytes, err
+		}
+		if err := lc.FlushUsage(ctx); err != nil {
 			return removed, freedBytes, err
 		}
 		candidates, err := lc.index.StaleCandidates(ctx, cutoff, purgeBatch)
@@ -223,11 +233,16 @@ func (lc *LocalCache) PurgeStale(ctx context.Context) (removed, freedBytes int64
 	}
 }
 
-// evictWorker drains eviction triggers until the channel is closed.
+// evictWorker handles eviction triggers until maintenance is cancelled.
 func (lc *LocalCache) evictWorker() {
 	defer lc.workerWG.Done()
-	for range lc.evictCh {
-		lc.evictIfNeeded(lc.workerCtx)
+	for {
+		select {
+		case <-lc.workerCtx.Done():
+			return
+		case <-lc.evictCh:
+			lc.evictIfNeeded(lc.workerCtx)
+		}
 	}
 }
 
@@ -248,6 +263,9 @@ func (lc *LocalCache) evictToSize(ctx context.Context, maxBytes int64) {
 		return
 	}
 	for total > maxBytes && ctx.Err() == nil {
+		if err := lc.FlushUsage(ctx); err != nil {
+			return
+		}
 		candidates, err := lc.index.LRUCandidates(ctx, 10)
 		if err != nil || len(candidates) == 0 {
 			return
@@ -279,14 +297,28 @@ func (lc *LocalCache) MarkMalwareChecked(ref *gate.PackageRef, ts time.Time) err
 	return lc.index.MarkMalwareChecked(ref, ts.Unix())
 }
 
-// Close stops the eviction worker and closes the index. Safe to call twice.
+// RequestUsageFlush wakes the usage writer without waiting for persistence.
+func (lc *LocalCache) RequestUsageFlush() { lc.usage.requestFlush() }
+
+// FlushUsage fences accepted hits, for maintenance only.
+func (lc *LocalCache) FlushUsage(ctx context.Context) error { return lc.usage.flush(ctx) }
+
+// UsageWriterStats reads only in-memory observational state.
+func (lc *LocalCache) UsageWriterStats() storage.WriterStats { return lc.usage.stats() }
+
+// Shutdown stops maintenance, then drains usage under the caller's budget.
+func (lc *LocalCache) Shutdown(ctx context.Context) error {
+	lc.stopWorker()
+	lc.workerWG.Wait()
+	return lc.usage.shutdown(ctx)
+}
+
+// Close stops the workers before closing the index. Safe to call twice.
 func (lc *LocalCache) Close() error {
-	var closeErr error
 	lc.closeOnce.Do(func() {
-		lc.stopWorker()
-		close(lc.evictCh)
-		lc.workerWG.Wait()
-		closeErr = lc.index.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		lc.closeErr = errors.Join(lc.Shutdown(ctx), lc.index.Close())
 	})
-	return closeErr
+	return lc.closeErr
 }

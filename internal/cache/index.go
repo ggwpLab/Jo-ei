@@ -55,10 +55,9 @@ func NewIndex(path string) (*Index, error) {
 	// busy_timeout first, so switching the journal mode tolerates brief
 	// contention too. WAL keeps another process's reads (a backup, an
 	// operator's sqlite3) from blocking this one's writes; within the process
-	// the single connection serializes anyway. synchronous=NORMAL drops the
-	// fsync from every commit, which otherwise caps cache hits (each bumps
-	// hit_count) at the disk's fsync rate; an OS crash or power loss can roll
-	// back only the last hit counts, never corrupt the index.
+	// the single connection serializes anyway. synchronous=NORMAL syncs WAL
+	// at checkpoints rather than every commit. Usage writes are batched;
+	// cache entries and security check timestamps retain synchronous writes.
 	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"} {
 		if _, err := db.Exec(pragma); err != nil {
 			_ = db.Close()
@@ -328,16 +327,6 @@ func (idx *Index) ApplyUsageBatch(ctx context.Context, token string, deltas []Us
 	return tx.Commit()
 }
 
-// IncrementHit bumps the hit counter and updates last_hit timestamp.
-func (idx *Index) IncrementHit(ref *gate.PackageRef) error {
-	_, err := idx.db.Exec(`
-		UPDATE artifacts SET hit_count=hit_count+1, last_hit=?
-		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
-		time.Now().Unix(), ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
-	)
-	return err
-}
-
 // Delete removes an entry from the index, reporting how many rows matched
 // (0 when the entry was already gone — callers use this to avoid counting
 // no-op deletions).
@@ -412,17 +401,17 @@ func (idx *Index) TotalSizeBytes(ctx context.Context) (int64, error) {
 
 // StaleSizeBytes returns the sum of size_bytes for entries whose last_hit is
 // older than cutoff — the reclaimable portion surfaced in the console.
-func (idx *Index) StaleSizeBytes(cutoff int64) (int64, error) {
+func (idx *Index) StaleSizeBytes(ctx context.Context, cutoff int64) (int64, error) {
 	var total int64
-	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
+	err := idx.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
 		cutoff).Scan(&total)
 	return total, err
 }
 
 // Count returns the total number of entries in the index.
-func (idx *Index) Count() (int64, error) {
+func (idx *Index) Count(ctx context.Context) (int64, error) {
 	var n int64
-	err := idx.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&n)
+	err := idx.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts`).Scan(&n)
 	return n, err
 }
 
