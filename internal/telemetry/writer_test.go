@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -286,4 +287,48 @@ func TestWriter_FlushFencesAcceptedWatermark(t *testing.T) {
 	awaitSignal(t, entered)
 	awaitSignal(t, flushed)
 	assert.Equal(t, int64(1), s.WriterStats().UnsavedItems)
+}
+
+type blockedProducerLog struct {
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (l *blockedProducerLog) Write(p []byte) (int, error) {
+	l.calls.Add(1)
+	<-l.release
+	return len(p), nil
+}
+
+func TestWriter_RejectedLargeEventDoesNotCopyOrLog(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	log := &blockedProducerLog{release: make(chan struct{})}
+	r := batchDecorator{write: func(ctx context.Context, _ string, _ []BatchEvent) error {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	opts := writerTestOptions()
+	opts.QueueCapacity = 1
+	s := newWithWriterOptions(r, zerolog.New(log), opts)
+	defer s.Close()
+	defer close(release)
+	defer close(log.release)
+	s.Record(gate.Event{})
+	awaitSignal(t, entered)
+	s.Record(gate.Event{})
+	large := gate.Event{Verdict: gate.VerdictBlock, BlockedBy: make([]string, 1000), CVEs: make([]gate.CVEFinding, 1000)}
+	for i := range large.CVEs {
+		large.CVEs[i].Aliases = make([]string, 10)
+	}
+	returned := make(chan struct{})
+	go func() { s.Record(large); close(returned) }()
+	awaitSignal(t, returned)
+	assert.Zero(t, testing.AllocsPerRun(100, func() { s.Record(large) }), "rejected payload must not be cloned or delegated to another goroutine")
+	assert.Zero(t, log.calls.Load(), "drop path attempted synchronous logging")
 }
