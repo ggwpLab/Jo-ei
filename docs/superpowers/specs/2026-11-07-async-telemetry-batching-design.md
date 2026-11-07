@@ -1,6 +1,6 @@
 # PERF-02: asynchronous telemetry and cache-usage batching
 
-Date: 2026-11-07. Status: approved by the owner; implementation plan in preparation.
+Date: 2026-11-07. Status: design and plan updated for the owner's nonblocking-overflow decision; implementation not started.
 Starting source: `0b5e669`. Design branch: `perf/async-telemetry-batching`.
 
 ## Intent
@@ -22,19 +22,23 @@ result belongs to changing SQLite synchronous mode, not this design.
 - Select the full option: telemetry plus cache-usage counters.
 - Losing the most recent unflushed events on process crash is acceptable.
 - Telemetry loss must not alter checks or permit serving an unchecked artifact.
-- When bounded queues fill, requests wait for capacity; overflow must not drop
-  audit events. Sustained saturation may be an attack whose traces must remain.
+- Latest owner decision supersedes the earlier blocking policy: telemetry must
+  never make package handling wait for queue capacity, a flush or persistence.
+  If its bounded queue is full, discard the incoming observation and return.
+  Apply the same rule to cache-usage admission so it cannot remain a hidden
+  bookkeeping wait on the package path. Count all such losses in metrics.
 - Up to 30 seconds of normal-operation console event/statistics delay is
   acceptable. This is not an event-dropping timeout or a bound during outages.
 
 ## Goals and boundaries
 
-- Retain every individual telemetry event; batch transactions and aggregate
-  counter deltas rather than sampling or collapsing the audit history.
+- Retain every admitted telemetry event; batch transactions and aggregate
+  counter deltas rather than merging the admitted audit history. Admission is
+  best effort under saturation for PASS, CACHE, BLOCK and ERROR alike.
 - Coalesce usage updates for the same cache entry into a count delta and the
   maximum observed hit time.
-- Bound pending work, apply backpressure, expose pressure and write failures,
-  and drain on healthy orderly shutdown.
+- Bound pending work, shed incoming observations instead of waiting on overflow,
+  expose losses/pressure/write failures, and drain on healthy orderly shutdown.
 - Preserve security decisions, cache validity, counter correctness, daily UTC
   attribution, concurrent ownership, and safe cache cleanup.
 
@@ -68,8 +72,8 @@ implementations small and local; their payloads and read/cleanup semantics diffe
 | Telemetry | 1024 events | 128 events | 10 seconds |
 | Cache usage | 4096 distinct cache row IDs | 256 row deltas | 10 seconds |
 
-Flush on size or timer, whichever comes first; wake immediately when producers
-are blocked. These conservative internal defaults leave room under the accepted
+Flush on size or timer, whichever comes first; signal a prompt flush on overflow
+without waiting for it. These internal defaults leave room under the accepted
 30-second normal visibility target; validate actual oldest-event age before
 acceptance. Tune them only from the recorded workload, without new public
 configuration unless a concrete requirement appears.
@@ -82,10 +86,14 @@ There is one background writer per component, not a goroutine per event/key.
 
 ## Telemetry path
 
-`Recorder.Record` takes an immutable, component-owned snapshot of the event
-before returning; copied data must include mutable nested findings/slices. It
-waits for a queue slot if necessary. Do not hold a database connection, shared
-map lock, or other lock needed by the writer while waiting.
+`Recorder.Record` tries to reserve a queue slot without waiting. When full or
+closed, increment the corresponding in-memory loss counter and return without
+copying, synchronous logging, SQL, flush waits or spawning a goroutine. Drop
+the incoming event; keep already admitted events in order. After successful
+reservation, take an immutable owned snapshot, including mutable nested
+findings/slices, before returning. Synchronization must be short and must never
+be held across writer I/O or callbacks. Ordinary snapshot/counter work remains
+local CPU/memory work; this does not promise a hard real-time execution bound.
 
 The writer processes FIFO batches. For each batch, a single transaction:
 
@@ -101,7 +109,9 @@ batch order only after commit has been confirmed; enqueueing is not publication.
 Preserve the broadcaster's existing slow-subscriber behavior: durable event
 history is authoritative, while an SSE connection is not a durable queue.
 Prometheus request/verdict counters can continue updating immediately, so a
-short difference from committed console totals is expected.
+short difference from committed console totals is expected. Under saturation,
+dropped events cause a permanent history/counter gap until retention/reset;
+expose its size, and do not publish dropped events as committed SSE history.
 
 ## Cache-usage path
 
@@ -110,6 +120,12 @@ security information. The internal index lookup also returns the existing
 `artifacts.id` (`INTEGER PRIMARY KEY AUTOINCREMENT`). The usage accumulator keys
 by that ID and combines count deltas and maximum hit time. All classifier/name
 coordinates remain correct; public artifact-gate interfaces need no new field.
+
+Admission never waits for accumulator capacity. An existing pending row can
+continue coalescing while the map is full; a new row with no free slot loses
+only that incoming hit and increments the usage-loss counter. Do not remove
+another row or fall back to a synchronous UPDATE/flush. Admission while closing
+is likewise rejected and counted. Cache lookup/security data remains unchanged.
 
 Use one index transaction per usage batch. Each row update changes only
 `hit_count = hit_count + delta` and `last_hit = MAX(last_hit, observed_time)`,
@@ -121,6 +137,8 @@ The telemetry event for the request is still preserved separately.
 
 Cache counters exposed to callers may reflect committed data with the accepted
 normal lag. Security check timestamps and verdicts never use this accumulator.
+Dropped usage may leave a valid entry with an older last_hit, changing eviction
+efficiency; it cannot grant permission or renew a security check timestamp.
 
 ### Cache cleanup consistency
 
@@ -132,6 +150,14 @@ from known-stale last_hit values. The wait must not hold the index connection
 or accumulator lock. Concurrent hits after the barrier retain the existing
 concurrent-cleanup semantics; no stronger global snapshot is introduced.
 
+These barriers belong only to maintenance selection. Package handlers must not
+call them from Get, Put, verification, or observational admission. Lost usage
+cannot be reconstructed by a barrier; cleanup can therefore evict a recently
+used entry whose hit was dropped. This is an efficiency tradeoff, not permission
+to serve an unchecked entry. Required cache/security SQL keeps its own existing
+semantics; nonblocking observation admission does not eliminate ordinary CPU,
+lock or storage contention, which must be bounded/measured separately.
+
 Read-only stale-size/statistics displays may use committed values and lag within
 the normal target. Do not make statistics/metrics collection wait indefinitely
 for a failed writer. Bound its database reads; pressure metrics use in-memory
@@ -142,9 +168,11 @@ state and must remain observable during storage failure.
 Normal-operation write failure must not silently discard the active batch.
 Keep it, expose the error, and retry in order with a one-second delay while the
 service is running. Repeated warnings should be rate-limited, with error counts
-and time since successful commit visible in metrics. A full pending queue then
-blocks new admissions. Caller cancellation is not permission to discard an
-already produced audit event.
+and time since successful commit visible in metrics. When the pending queue
+fills, discard/count new incoming observations and return immediately. Retrying
+the active batch must never hold an admission lock or cause a synchronous
+fallback. Caller cancellation must not remove an already admitted event; a
+full/closed-buffer rejection is an explicitly counted loss, not an admission.
 
 Retry must not double-count a commit whose acknowledgement was ambiguous.
 Add a small `async_write_state` table in each database, keyed by component, with
@@ -167,15 +195,16 @@ Healthy shutdown stops accepting new HTTP work, drains existing producers,
 flushes both writers without waiting for the normal timer, then closes each
 database. Preserve startup-failure cleanup and idempotent Close behavior.
 
-Make blocked admissions and writers service-owned rather than tied to the
-client's request context. Closing sockets does not mean an event was committed.
+Make admitted work and writers service-owned rather than tied to the client's
+request context. Closing sockets does not mean an event was committed. New
+observations rejected during close are counted without waiting.
 Coordinate the queues with the existing HTTP shutdown path: no send-on-closed
-channel, premature database close, blocked producer leak or infinite Close.
+channel, premature database close, admission race or infinite Close.
 
 **Approved failure boundary:** keep shutdown bounded by the
 configured service shutdown budget (30 seconds by default). If storage remains
 unwritable and the budget expires, report an explicit unsuccessful drain and
-the remaining event/usage counts, release blocked handlers, and terminate. Treat
+the remaining event/usage counts, stop workers, and terminate. Treat
 this forced stop like the accepted crash-loss case; do not report it as a clean,
 fully flushed shutdown. The owner approved this forced-stop exception together
 with the design on 2026-11-07.
@@ -187,9 +216,12 @@ loop can discard returned errors.
 
 ## Observability
 
-Expose queue occupancy/capacity, oldest pending age, blocked producers and their
-wait duration, batch sizes/commit duration, failures/retries and last successful
-commit age separately for telemetry and cache usage. Use bounded component
+Expose queue occupancy/capacity, oldest pending age, attempted/admitted/dropped
+items, batch sizes/commit duration, failures/retries and last successful commit
+age separately for telemetry and cache usage. Loss reasons are bounded to
+`queue_full` and `closed`; forced-stop abandonment of admitted work is reported
+separately. Do not log synchronously for each dropped observation: use in-memory
+counters and optional rate-limited background summaries. Use bounded component
 labels, not package/request-ID labels. Include in-flight work when reporting
 unsaved counts. Saturation and write failures must be visible without waiting
 for those same telemetry events to reach SQLite. No new console dashboard is
@@ -204,17 +236,20 @@ required; existing operational logs and Prometheus are sufficient for this task.
    interchangeable baseline.
 2. Measure sustainable rps, p50/p95/p99, CPU/request, allocation bytes/count,
    SQLite operations/commits and connection waits, queue age/occupancy,
-   outstanding events and sampled RSS. Include serialization/writer CPU and
+   outstanding events, drop coverage and sampled RSS. Include serialization/writer CPU and
    drain queued work before claiming throughput: accepting events faster than
    the writer can persist them is not a sustainable gain.
 3. Verify per-request events and counter totals after flush, UTC midnight,
    repeated keys/classifiers, FIFO publication and immutability under race
    checks. Inject pre-commit failures and ambiguous commit acknowledgements;
    retries must not duplicate events or either set of counters.
-4. Fill each buffer deliberately. Verify producers block, memory/work remains
-   bounded as documented, no per-event goroutines are spawned, cancellation
-   does not silently discard an event, and pressure metrics remain readable.
-5. Exercise healthy and failed shutdown with blocked admissions, pending work,
+4. Fill each buffer deliberately. Hold the writer stalled and prove package
+   handling and observation admission return without releasing it: excess
+   incoming items are dropped and counted, admitted items remain in order,
+   no synchronous logging/SQL fallback or per-item goroutines are created,
+   and pressure metrics remain readable. Test nested event ownership only for
+   successfully reserved slots; do not allocate copies for rejected events.
+5. Exercise healthy and failed shutdown with concurrent admissions, pending work,
    DB failure and expired budget. Assert no worker/handler leaks or use-after-
    close; verify the final-drain outcome is reported truthfully.
 6. Pin cache deletion/reinsertion, UPSERT, in-flight usage, stale/LRU barriers,
@@ -228,6 +263,12 @@ required; existing operational logs and Prometheus are sufficient for this task.
    gofmt and golangci-lint. Performance runs also use Docker and omit race
    instrumentation. Record event sizes, limits and all commands/results in the
    external Codex measurement archive, preserving previous experiment data.
+
+Reconcile persisted accounting against admitted observations, with rejected
+items and forced abandonment reported separately. Ordinary headline benchmark
+gains must use healthy no-drop cases; do not present faster responses obtained
+by silently omitting accounting as a batching speedup. Report overloaded/drop
+cases separately, including the fraction of requests represented in history.
 
 Require repeatable lower write/transaction cost and useful sustainable
 throughput or latency improvement on the target cache-hit workload, correct
