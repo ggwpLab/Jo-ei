@@ -235,8 +235,10 @@ Key technical decisions:
   budget.
 - **Capped concurrent malware scans** (`max_concurrent_scans`, 8 by default):
   a burst of downloads doesn't overwhelm the clamd worker pool.
-- **Exactly one telemetry event per intercepted request.** A telemetry failure
-  can never break the request path.
+- **Best-effort outcome recording.** Bounded telemetry and cache-usage buffers
+  drop/count incoming observations when full or closed, without waiting on the
+  package path. Committed console history normally lags by up to 30 seconds.
+  Observation loss cannot bypass checks or authorize an unchecked artifact.
 
 Three files make a good starting point for reading the code:
 `internal/gate/gate.go` (the vocabulary), `internal/proxy/handler.go` (the

@@ -54,8 +54,9 @@ type DailyMetric struct {
 // Retention is measured in days, so hourly is ample and cheap.
 const pruneInterval = time.Hour
 
-// Store is a thin façade over a Repo. All telemetry state lives in the Repo
-// (SQLite). Store adds the process start time (for uptime) and a periodic prune.
+// Store admits owned observations to a bounded writer. Committed state lives
+// in the Repo (SQLite); reads never flush pending work. Store also owns uptime
+// and periodic retention pruning.
 type Store struct {
 	repo    Repo
 	logger  zerolog.Logger
