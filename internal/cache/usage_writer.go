@@ -42,6 +42,7 @@ type usageWriter struct {
 func newUsageWriter(apply func(context.Context, string, []UsageDelta) error, opts usageWriterOptions) *usageWriter {
 	w := &usageWriter{opts: opts, pending: make(map[int64]*pendingUsage), order: make([]int64, 0, opts.PendingCapacity), wake: make(chan struct{}, 1), done: make(chan struct{}), changed: make(chan struct{})}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.lastSuccess = time.Now()
 	go w.run(apply)
 	return w
 }

@@ -129,6 +129,43 @@ inflated and its p95 is low.
 `error` or `other`. `gate` is the deciding gate: `cache`, `supply`, `cve`,
 `malware`, `image_scan`, `none` or `other`.
 
+### Asynchronous accounting
+
+`component` is `telemetry` or `cache_usage`. Item counters mean original events
+or original cache hits, including hits coalesced into one row update. Capacity,
+queue depth, in-flight size and last batch size count events or distinct usage
+rows. These snapshots read memory and never flush or query SQLite. Cache-size
+statistics have a separate one-second read deadline and may be absent on error.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `jo_ei_async_write_capacity` | gauge | `component` | Pending buffer capacity. In-flight storage is additional. |
+| `jo_ei_async_write_queue_depth` | gauge | `component` | Pending events or distinct usage rows. |
+| `jo_ei_async_write_inflight_items` | gauge | `component` | Rows in the active batch, including retries. |
+| `jo_ei_async_write_unsaved_items` | gauge | `component` | Admitted events/hits awaiting confirmed commit. |
+| `jo_ei_async_write_oldest_age_seconds` | gauge | `component` | Age of the oldest unsaved observation; zero when empty. |
+| `jo_ei_async_write_last_success_age_seconds` | gauge | `component` | Time since confirmed commit, or writer start before first success. |
+| `jo_ei_async_write_attempted_items_total` | counter | `component` | Offered events/hits. |
+| `jo_ei_async_write_accepted_items_total` | counter | `component` | Admitted events/hits. |
+| `jo_ei_async_write_committed_items_total` | counter | `component` | Admitted events/hits acknowledged as committed. Retired cache rows count as resolved no-ops. |
+| `jo_ei_async_write_dropped_items_total` | counter | `component`, `reason` | Incoming observations rejected because `reason="queue_full"` or `reason="closed"`. |
+| `jo_ei_async_write_abandoned_items_total` | counter | `component` | Admitted events/hits unconfirmed at forced shutdown. |
+| `jo_ei_async_write_batches_total` | counter | `component` | Confirmed batches. |
+| `jo_ei_async_write_failures_total` | counter | `component` | Failed or unconfirmed transaction attempts. |
+| `jo_ei_async_write_retries_total` | counter | `component` | Repeated attempts of the same batch. |
+| `jo_ei_async_write_commit_seconds_total` | counter | `component` | Transaction-attempt time, including failures. |
+| `jo_ei_async_write_last_batch_size` | gauge | `component` | Rows in the last confirmed batch. |
+| `jo_ei_async_write_last_commit_seconds` | gauge | `component` | Duration of its successful transaction attempt. |
+
+Full and closed buffers drop incoming observations immediately. A gap between
+immediate verdict counters and committed console history is therefore expected:
+normally it is a flush delay (up to 30 seconds); under saturation it can be a
+permanent loss visible in the drop counters. Admitted batches retry in order.
+Shutdown shares the configured HTTP drain budget, normally 30 seconds; expiry
+reports unconfirmed admitted work as abandoned before closing storage. A process
+crash can lose its unsaved tail and in-memory loss counters. None of these
+observational failures authorizes serving an unchecked artifact.
+
 ### Build and runtime
 
 | Metric | Type | Labels | Meaning |

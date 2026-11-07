@@ -44,6 +44,7 @@ type telemetryWriter struct {
 func newTelemetryWriter(repo Repo, opts writerOptions) *telemetryWriter {
 	w := &telemetryWriter{opts: opts, queue: make([]queuedEvent, 0, opts.QueueCapacity), changed: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.lastSuccess = time.Now()
 	go w.run(repo)
 	return w
 }
