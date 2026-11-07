@@ -1,7 +1,7 @@
 // Package telemetry collects per-request events from the proxy handlers for the
 // admin console and persists them to SQLite, the single source of truth. Every
-// Record is durable at write time; reads query SQLite directly. There is no
-// in-memory mode.
+// admitted event is persisted in a background batch; reads query committed
+// SQLite state directly. Full or closed queues drop and count incoming events.
 package telemetry
 
 import (
@@ -67,10 +67,15 @@ type Store struct {
 	cancelPrune context.CancelFunc
 	wg          sync.WaitGroup
 	closeOnce   sync.Once
+	writer      *telemetryWriter
 }
 
 // New returns a Store backed by repo and starts its background prune loop.
 func New(repo Repo, logger zerolog.Logger) *Store {
+	return newWithWriterOptions(repo, logger, defaultWriterOptions)
+}
+
+func newWithWriterOptions(repo Repo, logger zerolog.Logger, opts writerOptions) *Store {
 	s := &Store{
 		repo:    repo,
 		logger:  logger.With().Str("component", "telemetry").Logger(),
@@ -78,6 +83,7 @@ func New(repo Repo, logger zerolog.Logger) *Store {
 		stop:    make(chan struct{}),
 	}
 	s.pruneCtx, s.cancelPrune = context.WithCancel(context.Background())
+	s.writer = newTelemetryWriter(repo, opts)
 	s.wg.Add(1)
 	go s.pruneLoop()
 	return s
@@ -93,14 +99,21 @@ func Open(db *storage.DB, eventRetentionDays, dailyRetentionDays int, logger zer
 	return New(repo, logger), nil
 }
 
-// Record durably persists ev (insert + counter/daily increments) synchronously.
-// Telemetry must never fail a proxy request: on error it logs and returns,
-// losing at most this one event (not a flush window).
+// Record admits an owned event without waiting for storage. Full or closed
+// queues reject the incoming event and increment in-memory loss counters.
 func (s *Store) Record(ev gate.Event) {
-	if err := s.repo.RecordEvent(ev); err != nil {
-		s.logger.Warn().Err(err).Str("request_id", ev.RequestID).Msg("recording event")
-	}
+	s.writer.record(ev)
 }
+
+// RequestFlush wakes the writer without waiting for it.
+func (s *Store) RequestFlush() { s.writer.requestFlush() }
+
+// Flush waits for all events accepted before this call, including publication.
+// Cancelling the waiter does not cancel admitted work.
+func (s *Store) Flush(ctx context.Context) error { return s.writer.flush(ctx) }
+
+// WriterStats reads only in-memory counters, even when SQLite is unavailable.
+func (s *Store) WriterStats() storage.WriterStats { return s.writer.stats() }
 
 // Snapshot returns the cumulative counters. A read error logs and yields a
 // zero snapshot (the overview must not 500 on a transient read failure).
@@ -182,12 +195,20 @@ func (s *Store) pruneLoop() {
 	}
 }
 
-// Close stops the prune loop. Safe to call multiple times.
-func (s *Store) Close() error {
+// Shutdown stops admissions, drains within ctx, and joins both workers. On
+// expiry the error reports admitted events whose commit was not confirmed.
+func (s *Store) Shutdown(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.cancelPrune()
 		close(s.stop)
 		s.wg.Wait()
 	})
-	return nil
+	return s.writer.shutdown(ctx)
+}
+
+// Close uses a bounded drain when application shutdown has not run already.
+func (s *Store) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.Shutdown(ctx)
 }

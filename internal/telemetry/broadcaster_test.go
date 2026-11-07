@@ -67,11 +67,12 @@ func TestBroadcasterSlowSubscriberLosesEventsWithoutBlocking(t *testing.T) {
 func TestHubRecordsAndPublishes(t *testing.T) {
 	store := newStore(t)
 	b := telemetry.NewBroadcaster()
-	hub := &telemetry.Hub{Store: store, Broadcaster: b}
+	hub := telemetry.NewHub(store, b)
 	ch, cancel := b.Subscribe()
 	defer cancel()
 
 	hub.Record(evt("r1", gate.VerdictCache, gate.GateCache, "cache_hit"))
+	require.NoError(t, store.Flush(context.Background()))
 
 	require.Len(t, store.Recent(context.Background(), 0), 1)
 	select {

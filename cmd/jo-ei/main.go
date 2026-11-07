@@ -105,7 +105,7 @@ func run(ctx context.Context, cfgPath string) error {
 		filter:         st.policy,
 		cache:          cache.AsArtifactCache(st.cache),
 		logger:         logger,
-		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: st.store, Broadcaster: st.broadcaster}),
+		recorder:       mx.WrapRecorder(telemetry.NewHub(st.store, st.broadcaster)),
 		adapterClient:  up.adapter,
 		downloadClient: up.download,
 		throttles:      up.breaker,

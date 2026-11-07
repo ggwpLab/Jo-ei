@@ -22,7 +22,7 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 	path := filepath.Join(storagetest.TempDir(t), "jo-ei.db")
 	now := time.Now().UTC()
 
-	// First "process": record (durable at write time), then close.
+	// First "process": admit events, then close with a healthy drain.
 	{
 		db, err := storage.Open(path)
 		require.NoError(t, err)

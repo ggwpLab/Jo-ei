@@ -100,7 +100,7 @@ func newFixture(t *testing.T) *fixture {
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &fixture{store: store, hub: &telemetry.Hub{Store: store, Broadcaster: bcast}, runtime: runtime, srv: srv}
+	return &fixture{store: store, hub: telemetry.NewHub(store, bcast), runtime: runtime, srv: srv}
 }
 
 func getJSON(t *testing.T, url string, into any) int {
@@ -126,6 +126,7 @@ func blockEvent(id string, until time.Time) gate.Event {
 func TestOverview(t *testing.T) {
 	f := newFixture(t)
 	f.store.Record(gate.Event{Verdict: gate.VerdictCache, Gate: gate.GateCache, Time: time.Now()})
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	var body struct {
 		StartedAt time.Time `json:"started_at"`
@@ -167,6 +168,7 @@ func TestRequests(t *testing.T) {
 	f := newFixture(t)
 	for _, id := range []string{"r1", "r2", "r3"} {
 		f.store.Record(gate.Event{RequestID: id, Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
+		require.NoError(t, f.store.Flush(context.Background()))
 	}
 
 	var body struct {
@@ -191,7 +193,9 @@ func TestRequests(t *testing.T) {
 func TestQuarantine(t *testing.T) {
 	f := newFixture(t)
 	f.store.Record(blockEvent("r1", time.Now().Add(6*time.Hour)))
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(blockEvent("r2", time.Now().Add(-time.Hour))) // expired duplicate, newest — replaces r1 (same pkg) and is expired
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	var body struct {
 		Quarantine []struct {
@@ -205,6 +209,8 @@ func TestQuarantine(t *testing.T) {
 	require.Len(t, body.Quarantine, 0, "newest record for the package is expired")
 
 	f.store.Record(blockEvent("r3", time.Now().Add(6*time.Hour)))
+
+	require.NoError(t, f.store.Flush(context.Background()))
 	getJSON(t, f.srv.URL+"/api/quarantine", &body)
 	require.Len(t, body.Quarantine, 1)
 	assert.Equal(t, "npm", body.Quarantine[0].Eco)
@@ -296,7 +302,7 @@ func TestRegistries(t *testing.T) {
 func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
-	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
+	hub := telemetry.NewHub(store, bcast)
 	h := newHandler(console.Config{
 		Store: store, Broadcaster: bcast, Logger: zerolog.Nop(),
 	})
@@ -324,6 +330,7 @@ func TestEventsSSE_OutlivesServerTimeouts(t *testing.T) {
 	// Outlive both server deadlines, then publish.
 	time.Sleep(600 * time.Millisecond)
 	hub.Record(gate.Event{RequestID: "req_late", Verdict: gate.VerdictPass, Gate: gate.GateCache, Time: time.Now()})
+	require.NoError(t, store.Flush(context.Background()))
 
 	line, err = reader.ReadString('\n')
 	require.NoError(t, err, "stream died after the server write deadline")
@@ -422,6 +429,8 @@ func TestEventsSSE(t *testing.T) {
 
 	f.hub.Record(gate.Event{RequestID: "req_sse", Verdict: gate.VerdictPass, Gate: gate.GateMalware, Time: time.Now()})
 
+	require.NoError(t, f.store.Flush(context.Background()))
+
 	line, err := reader.ReadString('\n')
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(line, "data: "), "got %q", line)
@@ -431,7 +440,9 @@ func TestEventsSSE(t *testing.T) {
 func TestDailyMetrics(t *testing.T) {
 	f := newFixture(t)
 	f.store.Record(gate.Event{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC), Verdict: gate.VerdictCache, Gate: gate.GateCache})
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(gate.Event{Time: time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC), Verdict: gate.VerdictCache, Gate: gate.GateCache})
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	var body struct {
 		Daily []telemetry.DailyMetric `json:"daily"`
@@ -476,8 +487,11 @@ func TestPutPolicyLogsWithoutUserWhenContextEmpty(t *testing.T) {
 func TestRequestsFilterByVerdictAndPage(t *testing.T) {
 	f := newFixture(t)
 	f.store.Record(gate.Event{RequestID: "pass1", Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: time.Now(), Ecosystem: "pypi", Package: "p", Version: "1"})
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(gate.Event{RequestID: "block1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: time.Now().Add(time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(gate.Event{RequestID: "block2", Verdict: gate.VerdictBlock, Gate: gate.GateSupply, Time: time.Now().Add(2 * time.Second), Ecosystem: "pypi", Package: "p", Version: "1"})
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	var page1 struct {
 		Requests []struct {
@@ -508,8 +522,11 @@ func TestRequestsSearchByText(t *testing.T) {
 	f := newFixture(t)
 	now := time.Now()
 	f.store.Record(gate.Event{RequestID: "a1", Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: now, Ecosystem: "npm", Package: "lodash", Version: "4.17.21"})
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(gate.Event{RequestID: "b1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: now.Add(time.Second), Ecosystem: "npm", Package: "express", Version: "4.0.0"})
+	require.NoError(t, f.store.Flush(context.Background()))
 	f.store.Record(gate.Event{RequestID: "c1", Verdict: gate.VerdictBlock, Gate: gate.GateCVE, Time: now.Add(2 * time.Second), Ecosystem: "npm", Package: "lodash", Version: "3.0.0"})
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	ids := func(query string) []string {
 		t.Helper()
@@ -548,6 +565,7 @@ func TestRequestsClampsLimit(t *testing.T) {
 	base := time.Now()
 	for i := 0; i < 505; i++ {
 		f.store.Record(gate.Event{RequestID: fmt.Sprintf("r%d", i), Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: base.Add(time.Duration(i) * time.Millisecond), Ecosystem: "npm", Package: "p", Version: "1"})
+		require.NoError(t, f.store.Flush(context.Background()))
 	}
 
 	var body struct {

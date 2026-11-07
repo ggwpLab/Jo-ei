@@ -52,7 +52,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, userStore auth.Us
 	)
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
-	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
+	hub := telemetry.NewHub(store, bcast)
 
 	handler := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:  adapters.NewPyPIAdapter([]string{upstream.URL}),
