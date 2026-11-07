@@ -1,6 +1,6 @@
 # PERF-02: asynchronous telemetry and cache-usage batching
 
-Date: 2026-11-07. Status: proposed; full scope selected, design approval pending.
+Date: 2026-11-07. Status: approved by the owner; implementation plan in preparation.
 Starting source: `0b5e669`. Design branch: `perf/async-telemetry-batching`.
 
 ## Intent
@@ -172,13 +172,13 @@ client's request context. Closing sockets does not mean an event was committed.
 Coordinate the queues with the existing HTTP shutdown path: no send-on-closed
 channel, premature database close, blocked producer leak or infinite Close.
 
-**Proposed failure boundary for owner approval:** keep shutdown bounded by the
+**Approved failure boundary:** keep shutdown bounded by the
 configured service shutdown budget (30 seconds by default). If storage remains
 unwritable and the budget expires, report an explicit unsuccessful drain and
 the remaining event/usage counts, release blocked handlers, and terminate. Treat
 this forced stop like the accepted crash-loss case; do not report it as a clean,
-fully flushed shutdown. This is an implementation proposal, not an additional
-loss mode already approved by the owner.
+fully flushed shutdown. The owner approved this forced-stop exception together
+with the design on 2026-11-07.
 
 The budget must be coordinated across HTTP drain and the two writers, rather
 than giving every closer a new full budget. Keep logging available until the
