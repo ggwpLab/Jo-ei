@@ -95,6 +95,9 @@ func TestDockerSupplyBlockReachesQuarantine(t *testing.T) {
 		t.Fatalf("pull status = %d, body=%s (expected 403 supply block)", w.Code, w.Body.String())
 	}
 
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	q := store.Quarantine(context.Background(), time.Now())
 	if len(q) != 1 {
 		t.Fatalf("Quarantine returned %d entries, want 1: %+v", len(q), q)
@@ -268,6 +271,9 @@ func TestDockerMultiArchSupplyBlockReachesQuarantine(t *testing.T) {
 		t.Fatalf("child pull status = %d, body=%s (expected 403 supply block)", wChild.Code, wChild.Body.String())
 	}
 
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	q := store.Quarantine(context.Background(), time.Now())
 	if len(q) != 1 {
 		t.Fatalf("Quarantine returned %d entries, want 1: %+v", len(q), q)
