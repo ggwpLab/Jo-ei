@@ -358,3 +358,54 @@ func TestLocalCache_StatsUsesOneReadDeadline(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Zero(t, lc.UsageWriterStats().AttemptedItems)
 }
+
+func TestLocalCache_ShutdownCancelsUsageBeforeJoiningMaintenance(t *testing.T) {
+	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	// Place maintenance at the continuation after its barrier and selection.
+	// The real invalidate below shares the actual single index connection.
+	lc.stopWorker()
+	lc.workerWG.Wait()
+	require.NoError(t, lc.usage.shutdown(context.Background()))
+	defer func() {
+		lc.usage.cancel() // also releases the deliberately held SQL on a failed test
+		_ = lc.Close()
+	}()
+	ref := &gate.PackageRef{Ecosystem: "npm", Name: "selected", Version: "1"}
+	require.NoError(t, lc.Put(ref, writeTemp(t, "checked"), true, ""))
+	entered := make(chan struct{})
+	opts := usageOptions()
+	opts.BatchSize = 1
+	lc.usage = newUsageWriter(func(ctx context.Context, _ string, _ []UsageDelta) error {
+		tx, err := lc.index.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}, opts)
+	_, found := lc.Get(ref)
+	require.True(t, found)
+	usageSignal(t, entered)
+	waits := lc.index.db.Stats().WaitCount
+	lc.workerWG.Add(1)
+	go func() {
+		defer lc.workerWG.Done()
+		_, _ = lc.invalidate(ref)
+	}()
+	require.Eventually(t, func() bool { return lc.index.db.Stats().WaitCount > waits }, time.Second, time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- lc.Shutdown(ctx) }()
+	select {
+	case err := <-stopped:
+		require.Error(t, err)
+		assert.Equal(t, uint64(1), lc.UsageWriterStats().AbandonedItems)
+		assert.Zero(t, lc.UsageWriterStats().UnsavedItems)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("shutdown joined maintenance before activating usage deadline cancellation")
+	}
+}

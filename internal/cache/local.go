@@ -306,11 +306,13 @@ func (lc *LocalCache) FlushUsage(ctx context.Context) error { return lc.usage.fl
 // UsageWriterStats reads only in-memory observational state.
 func (lc *LocalCache) UsageWriterStats() storage.WriterStats { return lc.usage.stats() }
 
-// Shutdown stops maintenance, then drains usage under the caller's budget.
+// Shutdown cancels maintenance and drains usage before joining maintenance:
+// an already selected invalidation may be waiting on the writer's connection.
 func (lc *LocalCache) Shutdown(ctx context.Context) error {
 	lc.stopWorker()
+	err := lc.usage.shutdown(ctx)
 	lc.workerWG.Wait()
-	return lc.usage.shutdown(ctx)
+	return err
 }
 
 // Close stops the workers before closing the index. Safe to call twice.
