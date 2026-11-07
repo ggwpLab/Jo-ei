@@ -143,7 +143,7 @@ func (w *telemetryWriter) stats() storage.WriterStats {
 	s.Capacity = int64(w.opts.QueueCapacity)
 	s.Queued = int64(len(w.queue))
 	s.InFlight = int64(len(w.inFlight))
-	s.UnsavedItems = int64(s.AcceptedItems - s.CommittedItems - s.AbandonedItems)
+	s.UnsavedItems = int64(len(w.queue) + len(w.inFlight))
 	var oldest time.Time
 	if len(w.inFlight) > 0 {
 		oldest = w.inFlight[0].admitted
@@ -239,7 +239,7 @@ func (w *telemetryWriter) run(repo Repo) {
 						}
 					}
 					w.mu.Lock()
-					w.counts.CommittedItems += uint64(n)
+					w.counts.CommittedItems += uint64(len(batch))
 					w.counts.Batches++
 					w.counts.LastBatchSize = int64(n)
 					w.counts.LastCommitDuration = elapsed

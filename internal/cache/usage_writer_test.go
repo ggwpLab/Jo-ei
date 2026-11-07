@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func usageOptions() usageWriterOptions {

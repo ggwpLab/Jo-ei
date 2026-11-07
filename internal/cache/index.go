@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -310,7 +311,7 @@ func (idx *Index) ApplyUsageBatch(ctx context.Context, token string, deltas []Us
 	defer func() { _ = tx.Rollback() }()
 	var last string
 	err = tx.QueryRowContext(ctx, `SELECT last_batch_token FROM async_write_state WHERE component='cache_usage'`).Scan(&last)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if last == token {

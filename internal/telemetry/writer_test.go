@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 type batchDecorator struct {

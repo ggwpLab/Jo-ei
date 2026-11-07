@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
-	"github.com/rs/zerolog"
 )
 
 // shutdownGroup fixes one process-wide budget at the first shutdown trigger.

@@ -3,8 +3,9 @@ package metrics
 import (
 	"errors"
 
-	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 type asyncSeries struct {

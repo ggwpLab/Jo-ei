@@ -3,13 +3,15 @@ package cache_test
 import (
 	"context"
 	"database/sql"
-	"github.com/ggwpLab/Jo-ei/internal/cache"
-	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ggwpLab/Jo-ei/internal/cache"
+	"github.com/ggwpLab/Jo-ei/internal/gate"
 )
 
 func TestIndex_UsageBatchReplayAndRowIdentity(t *testing.T) {

@@ -143,7 +143,7 @@ func (w *usageWriter) stats() storage.WriterStats {
 	s.Capacity = int64(w.opts.PendingCapacity)
 	s.Queued = int64(len(w.pending))
 	s.InFlight = int64(len(w.inFlight))
-	s.UnsavedItems = int64(s.AcceptedItems - s.CommittedItems - s.AbandonedItems)
+	s.UnsavedItems = int64(s.AcceptedItems - s.CommittedItems - s.AbandonedItems) // #nosec G115 -- overflow would require over 9e18 pending hits
 	var oldest time.Time
 	if len(w.inFlight) > 0 {
 		oldest = w.inFlight[0].admitted
@@ -209,7 +209,7 @@ func (w *usageWriter) run(apply func(context.Context, string, []UsageDelta) erro
 				p := w.pending[id]
 				deltas[i] = p.UsageDelta
 				w.inFlight[i] = *p
-				hits += uint64(p.Hits)
+				hits += uint64(p.Hits) // #nosec G115 -- positive writer-owned count; SQLite stores hit counts as int64
 				delete(w.pending, id)
 			}
 			copy(w.order, w.order[n:])
