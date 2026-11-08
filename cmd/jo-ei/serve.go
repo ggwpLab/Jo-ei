@@ -84,11 +84,15 @@ const (
 // cancelled. On cancellation it drains in-flight requests for up to drain,
 // then closes whatever is still open: a client that never finishes is not a
 // failure of the process, so running out the deadline still returns nil.
-func serveListener(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Duration, log zerolog.Logger) error {
-	return serveWith(ctx, srv, drain, log, func() error { return srv.Serve(ln) })
+func serveListener(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Duration, log zerolog.Logger, group *shutdownGroup) error {
+	return serveWith(ctx, srv, drain, log, func() error { return srv.Serve(ln) }, group)
 }
 
-func serveWith(ctx context.Context, srv *http.Server, drain time.Duration, log zerolog.Logger, run func() error) error {
+func serveWith(ctx context.Context, srv *http.Server, drain time.Duration, log zerolog.Logger, run func() error, group *shutdownGroup) error {
+	if group == nil {
+		group = newShutdownGroup(drain, nil)
+		defer group.Close()
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		err := run()
@@ -100,9 +104,10 @@ func serveWith(ctx context.Context, srv *http.Server, drain time.Duration, log z
 
 	select {
 	case err := <-errCh:
+		group.Begin()
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), drain)
+		shutdownCtx, cancel := group.httpContext(drain)
 		defer cancel()
 		err := srv.Shutdown(shutdownCtx)
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -115,10 +120,10 @@ func serveWith(ctx context.Context, srv *http.Server, drain time.Duration, log z
 
 // serveAll runs every server until ctx is cancelled or one of them fails; the
 // first failure shuts the others down and is returned.
-func serveAll(ctx context.Context, servers ...boundServer) error {
+func serveAll(ctx context.Context, group *shutdownGroup, servers ...boundServer) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, s := range servers {
-		g.Go(func() error { return serveListener(gctx, s.srv, s.ln, s.drain, s.log) })
+		g.Go(func() error { return serveListener(gctx, s.srv, s.ln, s.drain, s.log, group) })
 	}
 	return g.Wait()
 }

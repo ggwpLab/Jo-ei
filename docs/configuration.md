@@ -65,7 +65,7 @@ process exits non-zero.
 | `upstream_rate_per_second` | `10` | Max request **rate** per upstream host (token bucket, burst = 2×). The primary defense against upstream HTTP 429. Set high to effectively disable. |
 | `metadata_filter_max_mb` | `256` | Max decompressed size (MB) of an npm metadata document the proxy buffers to hide policy-blocked versions and point its tarball links at the proxy. A larger document fails with `502 metadata_rewrite_failed`; raise the cap if a package hits it. The largest public packuments run to tens of MB (`vite` ~37, `renovate` ~70), and each request in flight holds a few copies of one. `0` = no cap. |
 | `max_artifact_mb` | `2048` | Largest package artifact (MB) the proxy downloads; a larger one is refused with `403 artifact_too_large`. `0` = unlimited. Docker layers use `image_scan.max_layer_bytes`. |
-| `shutdown_timeout_seconds` | `30` | How long a stopping server drains in-flight requests before closing the rest. |
+| `shutdown_timeout_seconds` | `30` | Shared budget for draining HTTP requests and admitted telemetry/cache usage. Expiry closes remaining connections, cancels writers and reports unconfirmed work. |
 | `trusted_proxies` | `[]` | Reverse proxies (CIDRs or bare IPs) whose forwarding header is believed when resolving the client IP. Invalid entries stop startup. |
 | `client_ip_header` | `X-Forwarded-For` | Header read from a trusted proxy: `X-Forwarded-For`, `X-Real-IP` or `Forwarded`. |
 | `public_url` | — | Base URL clients reach the proxy at (e.g. `https://registry.example.com/joei`), written into npm tarball links. Empty derives it per request; see [Behind a reverse proxy](#behind-a-reverse-proxy). Must be an absolute `http`/`https` URL without query or fragment. |
@@ -365,6 +365,14 @@ both TTLs lapse, so keep `cve.cache_ttl_minutes` ≤ `cve_ttl_minutes`.
 
 Embedded SQLite (pure Go, no cgo). **Required** — telemetry, runtime policy
 edits, and registry toggles persist here and survive restarts.
+
+Telemetry is batched in the background; console history normally trails
+admitted observations by up to 30 seconds. Full/closed observation buffers drop
+incoming work immediately, with [loss metrics](metrics.md#asynchronous-accounting).
+Admitted work retries with atomic batch receipts. Healthy shutdown drains it
+within the shared shutdown budget; a forced stop or crash can lose unsaved
+observations. Runtime policy and artifact enforcement keep their existing
+synchronous persistence semantics.
 
 | Key | Default | Description |
 |---|---|---|

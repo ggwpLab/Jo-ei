@@ -19,6 +19,7 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 // newFullyWired returns a Metrics whose every metric has been touched so
@@ -51,6 +52,8 @@ func newFullyWired(t *testing.T) *Metrics {
 	}, nil)
 	m.WrapRecorder(&fakeRecorder{}).Record(gate.Event{Ecosystem: "npm", Verdict: gate.VerdictPass, Gate: gate.GateCVE})
 	m.RegisterCache(fakeStatter{stats: cache.CacheStats{SizeBytes: 1024}}, 4096)
+	m.RegisterAsyncWriter("telemetry", func() storage.WriterStats { return storage.WriterStats{Capacity: 1024} })
+	m.RegisterAsyncWriter("cache_usage", func() storage.WriterStats { return storage.WriterStats{Capacity: 4096} })
 	return m
 }
 

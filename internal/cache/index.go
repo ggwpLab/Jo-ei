@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,6 +35,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	UNIQUE(ecosystem, name, version, classifier)
 );
 CREATE INDEX IF NOT EXISTS idx_last_hit ON artifacts(last_hit);
+CREATE TABLE IF NOT EXISTS async_write_state (
+	component TEXT PRIMARY KEY,
+	last_batch_token TEXT NOT NULL
+);
 `
 
 // Index manages the SQLite-backed metadata index for the local cache.
@@ -51,10 +56,9 @@ func NewIndex(path string) (*Index, error) {
 	// busy_timeout first, so switching the journal mode tolerates brief
 	// contention too. WAL keeps another process's reads (a backup, an
 	// operator's sqlite3) from blocking this one's writes; within the process
-	// the single connection serializes anyway. synchronous=NORMAL drops the
-	// fsync from every commit, which otherwise caps cache hits (each bumps
-	// hit_count) at the disk's fsync rate; an OS crash or power loss can roll
-	// back only the last hit counts, never corrupt the index.
+	// the single connection serializes anyway. synchronous=NORMAL syncs WAL
+	// at checkpoints rather than every commit. Usage writes are batched;
+	// cache entries and security check timestamps retain synchronous writes.
 	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"} {
 		if _, err := db.Exec(pragma); err != nil {
 			_ = db.Close()
@@ -248,8 +252,14 @@ func (idx *Index) Insert(ref *gate.PackageRef, entry *CacheEntry) error {
 
 // Get retrieves a cache entry. Returns (nil, false) if not found.
 func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
+	entry, _, found := idx.GetWithID(ref)
+	return entry, found
+}
+
+// GetWithID returns the immutable row identity used for deferred usage updates.
+func (idx *Index) GetWithID(ref *gate.PackageRef) (*CacheEntry, int64, bool) {
 	row := idx.db.QueryRow(`
-		SELECT file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes,
+		SELECT id, file_path, scan_clean, scan_json, stored_at, hit_count, size_bytes,
 			last_cve_check, last_malware_check
 		FROM artifacts
 		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
@@ -262,31 +272,60 @@ func (idx *Index) Get(ref *gate.PackageRef) (*CacheEntry, bool) {
 		storedAtUnix int64
 		cveUnix      int64
 		avUnix       int64
+		rowID        int64
 	)
 	err := row.Scan(
+		&rowID,
 		&entry.ArtifactPath, &scanCleanInt, &entry.ScanJSON,
 		&storedAtUnix, &entry.HitCount, &entry.SizeBytes,
 		&cveUnix, &avUnix,
 	)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 
 	entry.ScanClean = scanCleanInt == 1
 	entry.StoredAt = time.Unix(storedAtUnix, 0).UTC()
 	entry.LastCVECheck = time.Unix(cveUnix, 0).UTC()
 	entry.LastMalwareCheck = time.Unix(avUnix, 0).UTC()
-	return &entry, true
+	return &entry, rowID, true
 }
 
-// IncrementHit bumps the hit counter and updates last_hit timestamp.
-func (idx *Index) IncrementHit(ref *gate.PackageRef) error {
-	_, err := idx.db.Exec(`
-		UPDATE artifacts SET hit_count=hit_count+1, last_hit=?
-		WHERE ecosystem=? AND name=? AND version=? AND classifier=?`,
-		time.Now().Unix(), ref.Ecosystem, ref.Name, ref.Version, ref.Classifier,
-	)
-	return err
+// UsageDelta contains observational data only, never a security verdict.
+type UsageDelta struct {
+	RowID   int64
+	Hits    int64
+	LastHit int64
+}
+
+// ApplyUsageBatch updates existing row identities and its latest retry receipt
+// atomically. A retired row is an acknowledged no-op; it cannot be recreated.
+func (idx *Index) ApplyUsageBatch(ctx context.Context, token string, deltas []UsageDelta) error {
+	if token == "" {
+		return fmt.Errorf("empty usage batch token")
+	}
+	tx, err := idx.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var last string
+	err = tx.QueryRowContext(ctx, `SELECT last_batch_token FROM async_write_state WHERE component='cache_usage'`).Scan(&last)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if last == token {
+		return nil
+	}
+	for _, delta := range deltas {
+		if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET hit_count=hit_count+?, last_hit=MAX(last_hit,?) WHERE id=?`, delta.Hits, delta.LastHit, delta.RowID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO async_write_state(component,last_batch_token) VALUES('cache_usage',?) ON CONFLICT(component) DO UPDATE SET last_batch_token=excluded.last_batch_token`, token); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Delete removes an entry from the index, reporting how many rows matched
@@ -363,17 +402,17 @@ func (idx *Index) TotalSizeBytes(ctx context.Context) (int64, error) {
 
 // StaleSizeBytes returns the sum of size_bytes for entries whose last_hit is
 // older than cutoff — the reclaimable portion surfaced in the console.
-func (idx *Index) StaleSizeBytes(cutoff int64) (int64, error) {
+func (idx *Index) StaleSizeBytes(ctx context.Context, cutoff int64) (int64, error) {
 	var total int64
-	err := idx.db.QueryRow(`SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
+	err := idx.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM artifacts WHERE last_hit < ?`,
 		cutoff).Scan(&total)
 	return total, err
 }
 
 // Count returns the total number of entries in the index.
-func (idx *Index) Count() (int64, error) {
+func (idx *Index) Count(ctx context.Context) (int64, error) {
 	var n int64
-	err := idx.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&n)
+	err := idx.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts`).Scan(&n)
 	return n, err
 }
 

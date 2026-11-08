@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +40,7 @@ func newTelemetryStore(t *testing.T) *telemetry.Store {
 
 // consoleStack mirrors the cmd/jo-ei wiring: handler + recorder hub +
 // runtime policy + console API behind one mux.
-func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *policy.Runtime) {
+func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *policy.Runtime, *telemetry.Store) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -59,7 +60,7 @@ func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *p
 	)
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
-	hub := &telemetry.Hub{Store: store, Broadcaster: bcast}
+	hub := telemetry.NewHub(store, bcast)
 
 	handler := proxy.NewHandler(proxy.HandlerConfig{
 		Adapter:  adapters.NewPyPIAdapter([]string{upstream.URL}),
@@ -78,7 +79,7 @@ func consoleStack(t *testing.T, upstream *httptest.Server) (*httptest.Server, *p
 
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
-	return srv, runtime
+	return srv, runtime, store
 }
 
 func TestConsole_EndToEnd(t *testing.T) {
@@ -86,7 +87,7 @@ func TestConsole_EndToEnd(t *testing.T) {
 	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
 	defer upstream.Close()
 
-	srv, runtime := consoleStack(t, upstream)
+	srv, runtime, store := consoleStack(t, upstream)
 	url := srv.URL + "/pypi/packages/py3/f/fresh-pkg/fresh_pkg-1.0.0-py3-none-any.whl"
 
 	// 1. Fresh package is blocked at the supply gate (423).
@@ -96,6 +97,8 @@ func TestConsole_EndToEnd(t *testing.T) {
 	assert.Equal(t, http.StatusLocked, resp.StatusCode)
 
 	// 2. The block shows up in the request feed…
+	require.Eventually(t, func() bool { return store.WriterStats().AcceptedItems == 1 }, time.Second, time.Millisecond)
+	require.NoError(t, store.Flush(context.Background()))
 	var feed struct {
 		Requests []struct {
 			Verdict string `json:"verdict"`
@@ -142,6 +145,8 @@ func TestConsole_EndToEnd(t *testing.T) {
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
+	require.Eventually(t, func() bool { return store.WriterStats().AcceptedItems == 3 }, time.Second, time.Millisecond)
+	require.NoError(t, store.Flush(context.Background()))
 	var overview struct {
 		KPIs struct {
 			RequestsTotal uint64 `json:"requests_total"`

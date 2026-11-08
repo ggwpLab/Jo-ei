@@ -73,15 +73,20 @@ func (b *Broadcaster) Publish(ev gate.Event) {
 	}
 }
 
-// Hub implements gate.Recorder by recording to Store and publishing to
-// Broadcaster. Both fields must be non-nil.
+// Hub records to Store; its writer publishes only confirmed commits.
 type Hub struct {
-	Store       *Store
-	Broadcaster *Broadcaster
+	store *Store
+}
+
+// NewHub binds post-commit publication before traffic is admitted.
+func NewHub(store *Store, b *Broadcaster) *Hub {
+	store.writer.mu.Lock()
+	store.writer.publish = b.Publish
+	store.writer.mu.Unlock()
+	return &Hub{store: store}
 }
 
 // Record implements gate.Recorder.
 func (h *Hub) Record(ev gate.Event) {
-	h.Store.Record(ev)
-	h.Broadcaster.Publish(ev)
+	h.store.Record(ev)
 }

@@ -2,9 +2,11 @@
 package cache
 
 import (
+	"context"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
+	"github.com/ggwpLab/Jo-ei/internal/storage"
 )
 
 // CacheEntry stores an artifact path and its scan results.
@@ -22,6 +24,15 @@ type CacheEntry struct {
 	// this entry clean; lazy re-validation compares them to the configured TTLs.
 	LastCVECheck     time.Time
 	LastMalwareCheck time.Time
+}
+
+// UsageBatcher is an optional observational capability. Package handlers need
+// only Cache; maintenance and application shutdown may fence accepted usage.
+type UsageBatcher interface {
+	RequestUsageFlush()
+	FlushUsage(context.Context) error
+	Shutdown(context.Context) error
+	UsageWriterStats() storage.WriterStats
 }
 
 // CacheStats holds aggregate statistics about the cache.

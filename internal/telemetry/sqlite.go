@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS counters (
 CREATE INDEX IF NOT EXISTS idx_events_verdict_gate ON events(verdict, gate);
 `, `
 CREATE INDEX IF NOT EXISTS idx_events_verdict_ts_id ON events(verdict, ts, id);
+`, `
+CREATE TABLE IF NOT EXISTS async_write_state (
+	component TEXT PRIMARY KEY,
+	last_batch_token TEXT NOT NULL
+);
 `}
 
 const defaultEventRetentionDays = 30
@@ -96,7 +101,7 @@ func NewSQLiteRepo(db *storage.DB, eventRetentionDays, dailyRetentionDays int) (
 // querier is the subset of *sql.DB / *sql.Tx used by the row helpers, so the
 // same read/write code works inside and outside a transaction.
 type querier interface {
-	Exec(query string, args ...any) (sql.Result, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
@@ -121,48 +126,82 @@ func parseGates(blob string) map[string]GateCounts {
 // RecordEvent inserts the event and folds its one-event delta into the
 // cumulative counters and the event's UTC-day row, all in one transaction.
 func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
-	delta := newAggregate()
-	delta.record(ev)
+	return r.recordBatch(context.Background(), "", []BatchEvent{{Event: ev, Day: dayKey(ev)}})
+}
 
-	tx, err := r.db.Begin()
+func (r *sqliteRepo) RecordBatch(ctx context.Context, token string, events []BatchEvent) error {
+	if token == "" {
+		return fmt.Errorf("empty telemetry batch token")
+	}
+	return r.recordBatch(ctx, token, events)
+}
+
+func (r *sqliteRepo) recordBatch(ctx context.Context, token string, events []BatchEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	blob, err := json.Marshal(ev)
-	if err != nil {
-		return fmt.Errorf("marshalling event: %w", err)
+	if token != "" {
+		var last string
+		err := tx.QueryRowContext(ctx, `SELECT last_batch_token FROM async_write_state WHERE component='telemetry'`).Scan(&last)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if last == token {
+			return nil
+		}
 	}
-	if _, err := tx.Exec(`
+	delta := newAggregate()
+	days := make(map[string]*aggregate)
+	for _, item := range events {
+		ev := item.Event
+		delta.record(ev)
+		if days[item.Day] == nil {
+			days[item.Day] = newAggregate()
+		}
+		days[item.Day].record(ev)
+
+		blob, err := json.Marshal(ev)
+		if err != nil {
+			return fmt.Errorf("marshalling event: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
 		INSERT INTO events
 			(ts, request_id, ecosystem, package, version, verdict, gate, reason,
 			 http_status, published_at, block_until, detail_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		unixNanoOrZero(ev.Time), ev.RequestID, ev.Ecosystem, ev.Package, ev.Version,
-		ev.Verdict, ev.Gate, ev.Reason, ev.HTTPStatus,
-		unixNanoOrZero(ev.PublishedAt), unixNanoOrZero(ev.BlockUntil), string(blob),
-	); err != nil {
-		return err
+			unixNanoOrZero(ev.Time), ev.RequestID, ev.Ecosystem, ev.Package, ev.Version,
+			ev.Verdict, ev.Gate, ev.Reason, ev.HTTPStatus,
+			unixNanoOrZero(ev.PublishedAt), unixNanoOrZero(ev.BlockUntil), string(blob),
+		); err != nil {
+			return err
+		}
 	}
 
-	counters, err := readCounters(context.Background(), tx)
+	counters, err := readCounters(ctx, tx)
 	if err != nil {
 		return err
 	}
 	counters.add(delta)
-	if err := upsertCounters(tx, counters.snapshot(time.Time{})); err != nil {
+	if err := upsertCounters(ctx, tx, counters.snapshot(time.Time{})); err != nil {
 		return err
 	}
 
-	day := dayKey(ev)
-	dailyAgg, err := readDaily(context.Background(), tx, day)
-	if err != nil {
-		return err
+	for day, dayDelta := range days {
+		dailyAgg, err := readDaily(ctx, tx, day)
+		if err != nil {
+			return err
+		}
+		dailyAgg.add(dayDelta)
+		if err := upsertDaily(ctx, tx, dailyAgg.dailyMetric(day)); err != nil {
+			return err
+		}
 	}
-	dailyAgg.add(delta)
-	if err := upsertDaily(tx, dailyAgg.dailyMetric(day)); err != nil {
-		return err
+	if token != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO async_write_state(component,last_batch_token) VALUES('telemetry',?) ON CONFLICT(component) DO UPDATE SET last_batch_token=excluded.last_batch_token`, token); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -188,12 +227,12 @@ func readCounters(ctx context.Context, q querier) (*aggregate, error) {
 	return aggregateFromSnapshot(snap), nil
 }
 
-func upsertCounters(q querier, s Snapshot) error {
+func upsertCounters(ctx context.Context, q querier, s Snapshot) error {
 	gatesBlob, err := json.Marshal(s.Gates)
 	if err != nil {
 		return err
 	}
-	_, err = q.Exec(`
+	_, err = q.ExecContext(ctx, `
 		INSERT INTO counters
 			(id, requests, cache_hits, blocked, errors, supply_blocked,
 			 cve_blocked, malware_blocked, denylisted, gates_json)
@@ -228,12 +267,12 @@ func readDaily(ctx context.Context, q querier, day string) (*aggregate, error) {
 	return aggregateFromDaily(d), nil
 }
 
-func upsertDaily(q querier, d DailyMetric) error {
+func upsertDaily(ctx context.Context, q querier, d DailyMetric) error {
 	gatesBlob, err := json.Marshal(d.Gates)
 	if err != nil {
 		return err
 	}
-	_, err = q.Exec(`
+	_, err = q.ExecContext(ctx, `
 		INSERT INTO daily_metrics
 			(day, requests, cache_hits, blocked, errors, supply_blocked,
 			 cve_blocked, malware_blocked, denylisted, gates_json)

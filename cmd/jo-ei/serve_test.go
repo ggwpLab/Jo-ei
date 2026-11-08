@@ -22,7 +22,7 @@ func TestServeListener_ShutsDownOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
-	go func() { done <- serveListener(ctx, srv, ln, 5*time.Second, zerolog.Nop()) }()
+	go func() { done <- serveListener(ctx, srv, ln, 5*time.Second, zerolog.Nop(), nil) }()
 
 	cancel()
 
@@ -49,7 +49,7 @@ func TestServeAll_OneFailureStopsOthers(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- serveAll(context.Background(), boundServer{srvA, lnA, time.Second, zerolog.Nop()}, boundServer{srvB, lnB, time.Second, zerolog.Nop()})
+		done <- serveAll(context.Background(), nil, boundServer{srvA, lnA, time.Second, zerolog.Nop()}, boundServer{srvB, lnB, time.Second, zerolog.Nop()})
 	}()
 
 	select {
@@ -77,7 +77,7 @@ func TestServeAll_CtxCancelShutsDownAll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
-	go func() { done <- serveAll(ctx, servers...) }()
+	go func() { done <- serveAll(ctx, nil, servers...) }()
 
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -133,7 +133,7 @@ func TestServeListener_ShutdownHooksRunAndDrain(t *testing.T) {
 	srv.RegisterOnShutdown(func() { close(streamDone) })
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- serveListener(ctx, srv, ln, 5*time.Second, zerolog.Nop()) }()
+	go func() { served <- serveListener(ctx, srv, ln, 5*time.Second, zerolog.Nop(), nil) }()
 
 	base := "http://" + ln.Addr().String()
 	slow := make(chan string, 1)
@@ -177,7 +177,7 @@ func TestServeListener_DeadlineClosesStragglers(t *testing.T) {
 	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- serveListener(ctx, srv, ln, 200*time.Millisecond, zerolog.Nop()) }()
+	go func() { served <- serveListener(ctx, srv, ln, 200*time.Millisecond, zerolog.Nop(), nil) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String())
 	require.NoError(t, err)
