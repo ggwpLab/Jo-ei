@@ -2,9 +2,10 @@ package telemetry_test
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -17,18 +18,20 @@ import (
 // failingRepo fails every write; reads are never reached by this test.
 type failingRepo struct{ telemetry.Repo }
 
-func (failingRepo) RecordEvent(gate.Event) error { return errors.New("disk full") }
+func (failingRepo) RecordBatch(context.Context, string, []telemetry.BatchEvent) error {
+	return errors.New("disk full")
+}
 
-func TestStore_RecordFailureLogsEventRequestID(t *testing.T) {
+func TestStore_RecordFailureDoesNotLogOnProducer(t *testing.T) {
 	var buf bytes.Buffer
 	s := telemetry.New(failingRepo{}, zerolog.New(&buf))
-	t.Cleanup(func() { _ = s.Close() })
 
 	s.Record(gate.Event{RequestID: "rid-tel"})
 
-	var line map[string]any
-	require.NoError(t, json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line), buf.String())
-	assert.Equal(t, "rid-tel", line["request_id"])
-	assert.Equal(t, "telemetry", line["component"])
-	assert.Equal(t, "recording event", line["message"])
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.Error(t, s.Shutdown(ctx))
+	// Join before inspecting the unsynchronized log buffer.
+	assert.Empty(t, buf.String())
+	assert.Equal(t, uint64(1), s.WriterStats().AbandonedItems)
 }

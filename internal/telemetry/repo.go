@@ -22,6 +22,9 @@ func (c Cursor) Zero() bool { return c.ID == 0 }
 // there is no in-memory implementation. Implementations are safe for concurrent
 // use (calls serialize on a single SQLite connection).
 type Repo interface {
+	// RecordBatch atomically applies a batch and its retry receipt. Only the
+	// latest unresolved token may be replayed; tokens must be unique per batch.
+	RecordBatch(ctx context.Context, token string, events []BatchEvent) error
 	// RecordEvent durably persists one event and applies its tallies to the
 	// cumulative counters and the event's UTC-day metrics row, atomically.
 	RecordEvent(ev gate.Event) error
@@ -45,4 +48,10 @@ type Repo interface {
 	DailyMetrics(ctx context.Context, days int) ([]DailyMetric, error)
 	// Prune deletes events and daily rows older than the configured retention.
 	Prune(ctx context.Context) error
+}
+
+// BatchEvent freezes the accounting day at admission, including for zero Time.
+type BatchEvent struct {
+	Event gate.Event
+	Day   string
 }

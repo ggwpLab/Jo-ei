@@ -45,11 +45,13 @@ func TestStoreRecentOrderAndLimit(t *testing.T) {
 		s.Record(evt(fmt.Sprintf("r%d", i), gate.VerdictPass, gate.GateSupply, "ok"))
 	}
 
+	require.NoError(t, s.Flush(context.Background()))
 	got := s.Recent(context.Background(), 10)
 	require.Len(t, got, 6, "all events are retained (no ring buffer)")
 	assert.Equal(t, "r6", got[0].RequestID, "newest first")
 	assert.Equal(t, "r5", got[1].RequestID)
 
+	require.NoError(t, s.Flush(context.Background()))
 	got = s.Recent(context.Background(), 2)
 	require.Len(t, got, 2)
 	assert.Equal(t, "r6", got[0].RequestID)
@@ -66,6 +68,7 @@ func TestStoreCounters(t *testing.T) {
 	s.Record(evt("r6", gate.VerdictBlock, gate.GateMalware, "malware_found"))
 	s.Record(evt("r7", gate.VerdictError, gate.GateSupply, "upstream_metadata_unavailable"))
 
+	require.NoError(t, s.Flush(context.Background()))
 	snap := s.Snapshot(context.Background())
 	assert.Equal(t, uint64(7), snap.Requests)
 	assert.Equal(t, uint64(1), snap.CacheHits)
@@ -87,6 +90,7 @@ func TestStoreCacheScanFailedBlockDoesNotCountPipelinePasses(t *testing.T) {
 	s := newStore(t)
 	s.Record(evt("r1", gate.VerdictBlock, gate.GateCache, "scan_failed"))
 
+	require.NoError(t, s.Flush(context.Background()))
 	snap := s.Snapshot(context.Background())
 	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateCache])
 	assert.Equal(t, telemetry.GateCounts{}, snap.Gates[gate.GateSupply])
@@ -112,6 +116,7 @@ func TestStoreQuarantine(t *testing.T) {
 
 	s.Record(evt("r4", gate.VerdictPass, gate.GateSupply, "ok"))
 
+	require.NoError(t, s.Flush(context.Background()))
 	q := s.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)
 	assert.Equal(t, "r3", q[0].RequestID, "newest duplicate wins")
@@ -121,6 +126,7 @@ func TestStoreQuarantine(t *testing.T) {
 	gone.RequestID = "r5"
 	gone.BlockUntil = now.Add(-time.Minute)
 	s.Record(gone)
+	require.NoError(t, s.Flush(context.Background()))
 	assert.Empty(t, s.Quarantine(context.Background(), now))
 }
 
@@ -146,7 +152,9 @@ func TestStoreConcurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-	assert.Equal(t, uint64(1600), s.Snapshot(context.Background()).Requests)
+	require.NoError(t, s.Flush(context.Background()))
+	assert.Equal(t, s.WriterStats().CommittedItems, s.Snapshot(context.Background()).Requests)
+	assert.Equal(t, uint64(1600), s.WriterStats().AcceptedItems+s.WriterStats().DroppedFullItems)
 }
 
 func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
@@ -157,6 +165,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	s.Record(gate.Event{Time: day1, Verdict: gate.VerdictPass, Gate: gate.GateMalware})
 	s.Record(gate.Event{Time: day2, Verdict: gate.VerdictCache, Gate: gate.GateCache})
 
+	require.NoError(t, s.Flush(context.Background()))
 	daily, err := s.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 2)
@@ -167,6 +176,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 	assert.Equal(t, uint64(1), daily[1].CacheHits)
 	assert.Equal(t, telemetry.GateCounts{Pass: 1, Block: 0}, daily[1].Gates[gate.GateCache])
 
+	require.NoError(t, s.Flush(context.Background()))
 	limited, err := s.DailyMetrics(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, limited, 1)
@@ -176,6 +186,7 @@ func TestDailyMetrics_BucketsByUTCDay(t *testing.T) {
 func TestDailyMetrics_ZeroTimeBucketsUnderToday(t *testing.T) {
 	s := newStore(t)
 	s.Record(gate.Event{Verdict: gate.VerdictError}) // zero Time
+	require.NoError(t, s.Flush(context.Background()))
 	daily, err := s.DailyMetrics(context.Background(), 0)
 	require.NoError(t, err)
 	require.Len(t, daily, 1)
@@ -237,11 +248,13 @@ func TestStorePageFiltersAndPages(t *testing.T) {
 	s.Record(evt("block1", gate.VerdictBlock, gate.GateCVE, "cve_found"))
 	s.Record(evt("block2", gate.VerdictBlock, gate.GateSupply, "young"))
 
+	require.NoError(t, s.Flush(context.Background()))
 	evs, next := s.Page(context.Background(), gate.VerdictBlock, "", telemetry.Cursor{}, 1)
 	require.Len(t, evs, 1)
 	assert.Equal(t, "block2", evs[0].RequestID, "newest first")
 	require.False(t, next.Zero(), "more pages remain")
 
+	require.NoError(t, s.Flush(context.Background()))
 	evs2, next2 := s.Page(context.Background(), gate.VerdictBlock, "", next, 1)
 	require.Len(t, evs2, 1)
 	assert.Equal(t, "block1", evs2[0].RequestID)

@@ -114,14 +114,14 @@ func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
 		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
 		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
 	}
-	before, err := lc.index.Count()
+	before, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(3), before)
 
 	// 1-byte budget forces eviction of everything over the limit.
 	lc.evictToSize(context.Background(), 1)
 
-	after, err := lc.index.Count()
+	after, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	require.Less(t, after, before)
 }
@@ -169,7 +169,7 @@ func TestLocalCache_ConcurrentPutsAreSafe(t *testing.T) {
 	}
 	wg.Wait()
 
-	count, err := lc.index.Count()
+	count, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(n), count)
 }
@@ -190,12 +190,12 @@ func TestLocalCache_EvictionsAreCounted(t *testing.T) {
 		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
 		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
 	}
-	before, err := lc.index.Count()
+	before, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 
 	lc.evictToSize(context.Background(), 1)
 
-	after, err := lc.index.Count()
+	after, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	evicted := before - after
 	require.Positive(t, evicted, "eviction must have removed entries")
@@ -254,7 +254,7 @@ func TestLocalCache_EvictToSizeBailsOnZeroProgress(t *testing.T) {
 		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
 		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
 	}
-	before, err := lc.index.Count()
+	before, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, int64(3), before)
 
@@ -278,7 +278,7 @@ func TestLocalCache_EvictToSizeBailsOnZeroProgress(t *testing.T) {
 		t.Fatal("evictToSize did not return — zero-progress bail is missing (infinite spin)")
 	}
 
-	after, err := lc.index.Count()
+	after, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "no rows should have been removed since every delete failed")
 }

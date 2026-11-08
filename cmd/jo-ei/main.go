@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -59,7 +60,7 @@ func runProxy(_ *cobra.Command, _ []string) error {
 
 // run loads the config at cfgPath, wires the proxy and serves it (plus the
 // metrics listener when enabled) until ctx is cancelled or a server fails.
-func run(ctx context.Context, cfgPath string) error {
+func run(ctx context.Context, cfgPath string) (runErr error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -86,6 +87,9 @@ func run(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	group := newShutdownGroup(time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second, st.requestWriterFlush)
+	defer group.Close()
+	defer func() { runErr = errors.Join(runErr, st.shutdownWriters(group.Begin(), serverLog)) }()
 
 	up, err := buildUpstream(cfg, mx, serverLog)
 	if err != nil {
@@ -105,7 +109,7 @@ func run(ctx context.Context, cfgPath string) error {
 		filter:         st.policy,
 		cache:          cache.AsArtifactCache(st.cache),
 		logger:         logger,
-		recorder:       mx.WrapRecorder(&telemetry.Hub{Store: st.store, Broadcaster: st.broadcaster}),
+		recorder:       mx.WrapRecorder(telemetry.NewHub(st.store, st.broadcaster)),
 		adapterClient:  up.adapter,
 		downloadClient: up.download,
 		throttles:      up.breaker,
@@ -184,5 +188,5 @@ func run(ctx context.Context, cfgPath string) error {
 		Str("api", "/api/").
 		Msg("Jōei starting")
 
-	return serveAll(ctx, servers...)
+	return serveAll(ctx, group, servers...)
 }

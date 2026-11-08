@@ -60,6 +60,8 @@ const ReasonScanIncomplete = "scan_incomplete"
 // Recorder receives telemetry events. Implementations must be safe for
 // concurrent use and must never block or fail the proxy data path: Record
 // returns nothing. telemetry.Hub satisfies it structurally.
+// Observation buffers may drop and count incoming events when full or closed;
+// losing an observation must never change checks or authorize an artifact.
 type Recorder interface {
 	Record(Event)
 }

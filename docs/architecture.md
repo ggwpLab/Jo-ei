@@ -96,9 +96,10 @@ Design invariants:
 - **Fail closed.** A scanner error blocks the request (503) rather than
   letting an unscanned artifact through. A cached entry with a failed scan
   serves 403.
-- **Exactly one telemetry event per intercepted request**, emitted at the
-  outcome; a nil `Recorder` is a no-op and telemetry can never fail the data
-  path.
+- **Best-effort outcome observations.** Recording never waits for observation
+  capacity or persistence. Full/closed buffers drop incoming observations and
+  count the loss; a nil `Recorder` is a no-op. Missing history never authorizes
+  an unchecked artifact.
 - **Block responses are JSON** with a machine-readable `reason` and
   `request_id` (see the README's block-response reference).
 
@@ -109,8 +110,9 @@ served. Verdicts are cached and trusted until the re-check TTL (`cache.revalidat
 
 ## Persistence
 
-One SQLite file (`database.path`) shared by three components, each with its
-own migration versioning (`internal/storage.ApplyMigrations`):
+SQLite stores request history and runtime settings in `database.path`, with
+component migration versioning (`internal/storage.ApplyMigrations`). The
+artifact index has its own database under `cache.local.path/index.db`:
 
 | Component | Data |
 |---|---|
@@ -120,6 +122,27 @@ own migration versioning (`internal/storage.ApplyMigrations`):
 
 Runtime edits from the console (policy, registries) win over YAML after first
 boot; YAML only seeds an empty store.
+
+Telemetry owns a FIFO queue of 1024 events and writes batches of up to 128.
+Cache usage owns up to 4096 pending row IDs, combining hit counts and maximum
+hit time into batches of up to 256 rows. Both flush every 10 seconds or on size
+or overflow signals; in-flight batches are additional storage. Limits count
+items, so large findings can use more memory. Each database atomically stores
+the last batch token with its changes; retrying the latest unconfirmed batch
+cannot duplicate committed history or counters. SSE publication follows commit.
+
+Console reads use committed data and can normally lag admitted observations by
+up to 30 seconds. Full/closed queues drop incoming work immediately and expose
+loss counters in [metrics](metrics.md#asynchronous-accounting). Admitted work
+retries independently of client cancellation. Healthy shutdown drains both
+writers under the same HTTP shutdown budget; expiry cancels them and reports
+unconfirmed work. A crash can lose the unsaved tail.
+
+Only observational hit counts and last-hit hints are deferred. Destructive
+LRU/stale selection fences accepted hits first, outside package handling;
+dropped hints can reduce eviction accuracy. Scan results, check timestamps,
+artifact publication/invalidation and Docker image/blob enforcement stay on
+their existing path.
 
 ## Concurrency discipline
 

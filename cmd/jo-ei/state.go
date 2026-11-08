@@ -89,6 +89,10 @@ func openState(a *app, cfg *config.Config, mx *metrics.Metrics, logger, serverLo
 	}
 	serverLog.Info().Str("path", cfg.Database.Path).Msg("telemetry persistence enabled")
 	a.onClose(store.Close)
+	mx.RegisterAsyncWriter("telemetry", store.WriterStats)
+	if usage, ok := artifactCache.(cache.UsageBatcher); ok {
+		mx.RegisterAsyncWriter("cache_usage", usage.UsageWriterStats)
+	}
 	broadcaster := telemetry.NewBroadcaster()
 
 	return state{
