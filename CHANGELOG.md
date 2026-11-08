@@ -7,14 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-08
+
+This release reduces the cost of serving cached packages and rewriting npm
+metadata. Request telemetry and cache-usage counters are now written in
+background batches; package checks and security verdicts remain on the
+enforcement path.
+
+### Upgrading from 1.0
+
+- **Console history, daily totals and persisted counters are eventually
+  consistent.** Admitted observations normally become visible within 30
+  seconds. The live event feed publishes only after the batch commits.
+- **Telemetry never waits for buffer space.** Full or closed buffers discard
+  and count incoming observations, including block and error events. A crash
+  can lose the unflushed tail; a shutdown that exhausts its shared budget
+  reports unconfirmed work. Monitor `jo_ei_async_write_*` for drops, pending
+  work, age and write failures. Missing observations never authorize an
+  unchecked package.
+- **Back up the state database before upgrading.** Startup applies the
+  telemetry receipt-table migration and creates the corresponding cache-index
+  table automatically. Existing configuration remains valid; no new service
+  or configuration key is required. Run one instance per database.
+
+### Added
+
+- **Background-writer metrics** under `jo_ei_async_write_*`, with separate
+  `telemetry` and `cache_usage` components. They expose admitted, committed,
+  dropped and abandoned observations, queue depth and age, batch size, write
+  latency, failures and retries. Drop reasons distinguish full buffers from
+  closed admission.
+
 ### Changed
 
+- **Telemetry uses bounded background batches.** Each transaction stores raw
+  events, daily and lifetime aggregates, and a retry receipt atomically.
+  Retries do not duplicate accounting. Already admitted observations survive
+  the request caller's cancellation, and the shutdown budget drains writers
+  alongside HTTP shutdown.
+- **Cache hits coalesce usage updates by cache-row identity.** Repeated hits
+  share a counter update; invalidated or replaced entries cannot inherit an
+  older row's pending hits. Maintenance waits for accepted usage before
+  selecting entries for cleanup. Cache publication, security verdicts and
+  check timestamps retain their required writes.
+- **npm metadata rewriting avoids intermediate JSON serialization.** Modified
+  version and tarball objects are assembled before the final encoding,
+  reducing CPU and allocated bytes while retaining existing filtering,
+  unknown fields, number precision and proxy-link behavior. There is no new
+  metadata cache or change to policy evaluation.
 - **SQLite commits no longer wait for fsync.** Both databases (telemetry,
   settings and users; the cache index) run WAL with `synchronous=NORMAL`.
-  Every cache hit commits twice (the hit count and the request event), and an
-  fsync per commit capped cache hits at the disk's sync rate (about 120 per
-  second on Docker Desktop). A process crash still loses nothing; an OS crash
-  or power loss can roll back the last commits, never corrupt the database.
+  WAL is synced at checkpoints rather than every commit. Committed
+  transactions survive a process crash; an OS crash or power loss can roll
+  back the most recent commits while preserving database consistency.
+  Unflushed background observations have the separate loss behavior above.
+- Updated `modernc.org/sqlite` to 1.61.1, `golang.org/x/net` to 0.62.0 and
+  `go.yaml.in/yaml/v3` to 3.0.6. The from-source Docker builder uses Go 1.27.3;
+  release binaries use the toolchain selected by `go.mod`.
+
+### Fixed
+
+- **Cache shutdown cancels or drains usage writes before joining maintenance.**
+  This prevents a selected maintenance operation waiting for the SQLite
+  connection from blocking shutdown behind an unfinished usage transaction.
 
 ## [1.0.0] - 2026-10-26
 
@@ -636,7 +691,8 @@ First public release.
 - Distroless non-root Docker image and a compose stack with ClamAV and Trivy
   sidecars.
 
-[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ggwpLab/Jo-ei/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ggwpLab/Jo-ei/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.6.0...v1.0.0
 [0.6.0]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/ggwpLab/Jo-ei/compare/v0.5.0...v0.5.1
