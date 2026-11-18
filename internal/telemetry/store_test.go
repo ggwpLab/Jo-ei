@@ -39,20 +39,20 @@ func newStore(t *testing.T) *telemetry.Store {
 	return s
 }
 
-func TestStoreRecentOrderAndLimit(t *testing.T) {
+func TestStorePageOrderAndLimit(t *testing.T) {
 	s := newStore(t)
 	for i := 1; i <= 6; i++ {
 		s.Record(evt(fmt.Sprintf("r%d", i), gate.VerdictPass, gate.GateSupply, "ok"))
 	}
 
 	require.NoError(t, s.Flush(context.Background()))
-	got := s.Recent(context.Background(), 10)
+	got, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 10)
 	require.Len(t, got, 6, "all events are retained (no ring buffer)")
 	assert.Equal(t, "r6", got[0].RequestID, "newest first")
 	assert.Equal(t, "r5", got[1].RequestID)
 
 	require.NoError(t, s.Flush(context.Background()))
-	got = s.Recent(context.Background(), 2)
+	got, _ = s.Page(context.Background(), "", "", telemetry.Cursor{}, 2)
 	require.Len(t, got, 2)
 	assert.Equal(t, "r6", got[0].RequestID)
 	assert.Equal(t, "r5", got[1].RequestID)
@@ -145,7 +145,7 @@ func TestStoreConcurrent(t *testing.T) {
 					ev.Version = fmt.Sprintf("1.0.%d", i)
 				}
 				s.Record(ev)
-				s.Recent(context.Background(), 10)
+				s.Page(context.Background(), "", "", telemetry.Cursor{}, 10)
 				s.Snapshot(context.Background())
 				s.Quarantine(context.Background(), time.Now())
 			}
@@ -224,7 +224,8 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.SupplyBlocked)
 	assert.Equal(t, telemetry.GateCounts{Pass: 0, Block: 1}, snap.Gates[gate.GateSupply])
 
-	require.Len(t, s2.Recent(context.Background(), 0), 2)
+	events, _ := s2.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
+	require.Len(t, events, 2)
 
 	q := s2.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)
@@ -275,7 +276,7 @@ func TestStore_CancelledReadIsNotAWarning(t *testing.T) {
 	cancel()
 
 	s.Page(ctx, "", "x", telemetry.Cursor{}, 10)
-	s.Recent(ctx, 10)
+	s.Page(ctx, "", "", telemetry.Cursor{}, 10)
 	s.Quarantine(ctx, time.Now())
 	s.Snapshot(ctx)
 

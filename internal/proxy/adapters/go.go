@@ -133,9 +133,7 @@ type goInfo struct {
 }
 
 // FetchMetadata fetches the module version's .info document from each upstream
-// in order, returning the first success. The .info Time is the publish date;
-// the Go protocol carries no license or (SHA256) checksum there, so those stay
-// empty.
+// in order, returning the first success. The .info Time is the publish date.
 func (a *GoAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
 	if len(a.upstreams) == 0 {
 		return nil, fmt.Errorf("no upstreams configured for go")

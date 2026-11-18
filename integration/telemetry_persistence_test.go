@@ -69,7 +69,8 @@ func TestTelemetryPersistsAcrossRestart(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.Blocked)
 	assert.Equal(t, uint64(1), snap.SupplyBlocked)
 
-	require.Len(t, s.Recent(context.Background(), 0), 2)
+	events, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
+	require.Len(t, events, 2)
 
 	q := s.Quarantine(context.Background(), now)
 	require.Len(t, q, 1)

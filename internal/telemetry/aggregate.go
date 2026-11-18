@@ -168,13 +168,3 @@ func aggregateFromDaily(d DailyMetric) *aggregate {
 		gates: gatesToPtr(d.Gates),
 	}
 }
-
-// dayKey is the UTC calendar-day bucket for an event. A zero event time falls
-// back to the current time so malformed events still bucket somewhere.
-func dayKey(ev gate.Event) string {
-	t := ev.Time
-	if t.IsZero() {
-		t = time.Now()
-	}
-	return t.UTC().Format("2006-01-02")
-}

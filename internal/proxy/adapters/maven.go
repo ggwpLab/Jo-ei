@@ -17,21 +17,17 @@ var mavenSidecarExts = []string{".pom", ".module", ".xml", ".md5", ".sha1", ".sh
 
 // MavenAdapter implements gate.RegistryAdapter for a Maven repository.
 type MavenAdapter struct {
-	upstreams  []string
-	httpClient *http.Client
+	upstreams []string
 }
 
 // NewMavenAdapter creates a Maven adapter over the given ordered upstream URLs
 // (e.g. "https://repo1.maven.org/maven2"). Upstreams are tried in order.
-func NewMavenAdapter(upstreams []string, opts ...Option) *MavenAdapter {
+func NewMavenAdapter(upstreams []string) *MavenAdapter {
 	trimmed := make([]string, len(upstreams))
 	for i, u := range upstreams {
 		trimmed[i] = strings.TrimRight(u, "/")
 	}
-	return &MavenAdapter{
-		upstreams:  trimmed,
-		httpClient: resolveClient(opts),
-	}
+	return &MavenAdapter{upstreams: trimmed}
 }
 
 // NormalizeRequest intercepts artifact downloads: any file in a version

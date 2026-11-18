@@ -76,7 +76,6 @@ func TestGoAdapter_FetchMetadata(t *testing.T) {
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.Equal(t, publishedAt, meta.PublishedAt)
-	assert.Empty(t, meta.License)
 }
 
 func TestGoAdapter_FetchMetadata_NotFound(t *testing.T) {

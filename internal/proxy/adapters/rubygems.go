@@ -14,10 +14,9 @@ import (
 
 // rubygemsVersion is one entry in the /api/v1/versions/<gem>.json array.
 type rubygemsVersion struct {
-	Number    string   `json:"number"`
-	Platform  string   `json:"platform"`
-	CreatedAt string   `json:"created_at"`
-	Licenses  []string `json:"licenses"`
+	Number    string `json:"number"`
+	Platform  string `json:"platform"`
+	CreatedAt string `json:"created_at"`
 }
 
 // RubyGemsAdapter implements gate.RegistryAdapter for a RubyGems repository.
@@ -153,10 +152,7 @@ func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, re
 			if err != nil {
 				return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing rubygems created_at %q: %w", v.CreatedAt, err)
 			}
-			return &gate.PackageMetadata{
-				PublishedAt: publishedAt.UTC(),
-				License:     strings.Join(v.Licenses, ", "),
-			}, apiURL, resp.StatusCode, nil
+			return &gate.PackageMetadata{PublishedAt: publishedAt.UTC()}, apiURL, resp.StatusCode, nil
 		}
 	}
 	return nil, apiURL, resp.StatusCode, fmt.Errorf("version %s (platform %s) not found for rubygems gem %s", number, platform, ref.Name)

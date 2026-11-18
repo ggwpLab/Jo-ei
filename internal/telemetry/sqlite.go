@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -123,34 +124,22 @@ func parseGates(blob string) map[string]GateCounts {
 	return g
 }
 
-// RecordEvent inserts the event and folds its one-event delta into the
-// cumulative counters and the event's UTC-day row, all in one transaction.
-func (r *sqliteRepo) RecordEvent(ev gate.Event) error {
-	return r.recordBatch(context.Background(), "", []BatchEvent{{Event: ev, Day: dayKey(ev)}})
-}
-
 func (r *sqliteRepo) RecordBatch(ctx context.Context, token string, events []BatchEvent) error {
 	if token == "" {
 		return fmt.Errorf("empty telemetry batch token")
 	}
-	return r.recordBatch(ctx, token, events)
-}
-
-func (r *sqliteRepo) recordBatch(ctx context.Context, token string, events []BatchEvent) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if token != "" {
-		var last string
-		err := tx.QueryRowContext(ctx, `SELECT last_batch_token FROM async_write_state WHERE component='telemetry'`).Scan(&last)
-		if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		if last == token {
-			return nil
-		}
+	var last string
+	err = tx.QueryRowContext(ctx, `SELECT last_batch_token FROM async_write_state WHERE component='telemetry'`).Scan(&last)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if last == token {
+		return nil
 	}
 	delta := newAggregate()
 	days := make(map[string]*aggregate)
@@ -198,10 +187,8 @@ func (r *sqliteRepo) recordBatch(ctx context.Context, token string, events []Bat
 			return err
 		}
 	}
-	if token != "" {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO async_write_state(component,last_batch_token) VALUES('telemetry',?) ON CONFLICT(component) DO UPDATE SET last_batch_token=excluded.last_batch_token`, token); err != nil {
-			return err
-		}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO async_write_state(component,last_batch_token) VALUES('telemetry',?) ON CONFLICT(component) DO UPDATE SET last_batch_token=excluded.last_batch_token`, token); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -294,33 +281,6 @@ func (r *sqliteRepo) Snapshot(ctx context.Context, started time.Time) (Snapshot,
 		return Snapshot{}, err
 	}
 	return agg.snapshot(started), nil
-}
-
-func (r *sqliteRepo) Recent(ctx context.Context, limit int) ([]gate.Event, error) {
-	query := `SELECT detail_json FROM events ORDER BY ts DESC, id DESC`
-	var args []any
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []gate.Event
-	for rows.Next() {
-		var blob string
-		if err := rows.Scan(&blob); err != nil {
-			return nil, err
-		}
-		var ev gate.Event
-		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
-			continue
-		}
-		out = append(out, ev)
-	}
-	return out, rows.Err()
 }
 
 func (r *sqliteRepo) Page(ctx context.Context, verdict, text string, cursor Cursor, limit int) ([]gate.Event, Cursor, error) {

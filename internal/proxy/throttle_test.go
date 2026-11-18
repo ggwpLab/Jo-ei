@@ -23,8 +23,8 @@ import (
 
 type proxyAdapter = gate.RegistryAdapter
 
-func mavenAdapter(upstreams []string, opts ...adapters.Option) proxyAdapter {
-	return adapters.NewMavenAdapter(upstreams, opts...)
+func mavenAdapter(upstreams []string, _ ...adapters.Option) proxyAdapter {
+	return adapters.NewMavenAdapter(upstreams)
 }
 
 func pypiAdapter(upstreams []string, opts ...adapters.Option) proxyAdapter {

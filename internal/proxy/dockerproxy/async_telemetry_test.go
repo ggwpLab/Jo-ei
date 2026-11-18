@@ -97,5 +97,6 @@ func TestAsyncTelemetry_DockerVerdictsRemainSynchronous(t *testing.T) {
 	require.True(t, found)
 	assert.False(t, allowed)
 	assert.Equal(t, "cve_found", reason)
-	assert.Empty(t, store.Recent(context.Background(), 0))
+	events, _ := store.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
+	assert.Empty(t, events)
 }

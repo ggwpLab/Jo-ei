@@ -16,12 +16,6 @@ import (
 
 // pypiJSONResponse represents the PyPI JSON API response for a specific version.
 type pypiJSONResponse struct {
-	Info struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-		License string `json:"license"`
-		Author  string `json:"author"`
-	} `json:"info"`
 	URLs []struct {
 		Filename      string `json:"filename"`
 		UploadTimeISO string `json:"upload_time_iso_8601"`
@@ -172,11 +166,7 @@ func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *g
 	if !found {
 		return nil, apiURL, resp.StatusCode, fmt.Errorf("file %s not listed in pypi release %s@%s", ref.Classifier, ref.Name, ref.Version)
 	}
-	return &gate.PackageMetadata{
-		PublishedAt: publishedAt.UTC(),
-		Maintainer:  info.Info.Author,
-		License:     info.Info.License,
-	}, apiURL, resp.StatusCode, nil
+	return &gate.PackageMetadata{PublishedAt: publishedAt.UTC()}, apiURL, resp.StatusCode, nil
 }
 
 // parsePyPIUploadTime parses upload_time_iso_8601, which PyPI writes with

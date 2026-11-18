@@ -74,7 +74,6 @@ func TestNPMAdapter_FetchMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.WithinDuration(t, publishedAt, meta.PublishedAt, time.Second)
-	assert.Equal(t, "MIT", meta.License)
 }
 
 func TestNPMAdapter_FetchMetadata_VersionMissing(t *testing.T) {
@@ -135,88 +134,29 @@ func TestNPMAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
 	assert.WithinDuration(t, published, meta.PublishedAt, time.Second)
 }
 
-// Regression: npm's "license" field is polymorphic. Modern versions use a
-// string, but legacy/historical versions in the SAME document use an object
-// {"type","url"}. FetchMetadata decodes the whole versions map, so an older,
-// unrequested version carrying the legacy object form must not fail the fetch
-// (the trigger for "decoding npm response: json: cannot unmarshal object into
-// Go struct field .versions.license of type string").
-func TestNPMAdapter_FetchMetadata_LegacyObjectLicenseInOtherVersion(t *testing.T) {
-	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"time": map[string]any{
-				"5.1.9": publishedAt.Format(time.RFC3339),
-			},
-			"versions": map[string]any{
-				// Requested version: modern string license.
-				"5.1.9": map[string]any{
-					"license": "ISC",
-					"dist":    map[string]any{"shasum": "deadbeef"},
-				},
-				// Historical version: legacy object license — must not break decode.
-				"0.2.0": map[string]any{
-					"license": map[string]any{"type": "MIT", "url": "https://example.com/LICENSE"},
-					"dist":    map[string]any{"shasum": "0ldsha"},
-				},
-			},
+func TestNPMAdapter_FetchMetadata_IgnoresLicenseShape(t *testing.T) {
+	tests := []struct {
+		name     string
+		versions string
+	}{
+		{"legacy object on another version", `{"1.0.0":{"license":"ISC"},"0.2.0":{"license":{"type":"MIT"}}}`},
+		{"object on requested version", `{"1.0.0":{"license":{"type":"MIT"}}}`},
+		{"array on requested version", `{"1.0.0":{"license":[{"type":"MIT"}]}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, `{"time":{"1.0.0":"2024-03-01T12:00:00Z"},"versions":%s}`, tt.versions)
+			}))
+			defer srv.Close()
+
+			a := adapters.NewNPMAdapter([]string{srv.URL})
+			ref := &gate.PackageRef{Ecosystem: "npm", Name: "minimatch", Version: "1.0.0"}
+			meta, err := a.FetchMetadata(context.Background(), ref)
+			require.NoError(t, err)
+			assert.Equal(t, time.Date(2024, 3, 1, 12, 0, 0, 0, time.UTC), meta.PublishedAt)
 		})
-	}))
-	defer srv.Close()
-
-	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &gate.PackageRef{Ecosystem: "npm", Name: "minimatch", Version: "5.1.9"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.Equal(t, "ISC", meta.License)
-}
-
-// The requested version itself may carry the legacy object license; extract the
-// "type" so the (informational) license is still populated.
-func TestNPMAdapter_FetchMetadata_ObjectLicenseOnRequestedVersion(t *testing.T) {
-	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"time": map[string]any{"1.0.0": publishedAt.Format(time.RFC3339)},
-			"versions": map[string]any{
-				"1.0.0": map[string]any{
-					"license": map[string]any{"type": "MIT", "url": "https://example.com"},
-					"dist":    map[string]any{"shasum": "abc"},
-				},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &gate.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.Equal(t, "MIT", meta.License)
-}
-
-// An unrecognized license shape (e.g. the legacy "licenses" array form embedded
-// under "license") must degrade to an empty license, never fail the decode.
-func TestNPMAdapter_FetchMetadata_UnknownLicenseShapeDegrades(t *testing.T) {
-	publishedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"time": map[string]any{"1.0.0": publishedAt.Format(time.RFC3339)},
-			"versions": map[string]any{
-				"1.0.0": map[string]any{
-					"license": []any{map[string]any{"type": "MIT"}, map[string]any{"type": "Apache-2.0"}},
-					"dist":    map[string]any{"shasum": "abc"},
-				},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	a := adapters.NewNPMAdapter([]string{srv.URL})
-	ref := &gate.PackageRef{Ecosystem: "npm", Name: "old-pkg", Version: "1.0.0"}
-	meta, err := a.FetchMetadata(context.Background(), ref)
-	require.NoError(t, err)
-	assert.Equal(t, "", meta.License)
+	}
 }
 
 // FetchMetadata must surface every mirror it tried, not just the last.

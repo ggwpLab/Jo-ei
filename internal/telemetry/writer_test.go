@@ -108,7 +108,7 @@ func TestWriter_FullQueueDropsIncomingWithoutWaiting(t *testing.T) {
 					t.Fatal("missing committed publication")
 				}
 			}
-			got, err := real.Recent(context.Background(), 0)
+			got, _, err := real.Page(context.Background(), "", "", Cursor{}, 0)
 			require.NoError(t, err)
 			assert.Len(t, got, 3)
 			stats = s.WriterStats()
@@ -132,7 +132,7 @@ func TestWriter_OwnsNestedEventDataAndDay(t *testing.T) {
 	ev.CVEs[0].Aliases[0] = "changed"
 	s.Record(gate.Event{RequestID: "zero"})
 	flushWriter(t, s)
-	got, err := real.Recent(context.Background(), 0)
+	got, _, err := real.Page(context.Background(), "", "", Cursor{}, 0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, []string{"cve"}, got[0].BlockedBy)
