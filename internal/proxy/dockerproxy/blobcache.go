@@ -39,20 +39,29 @@ func (v *verdictStore) PutBlob(digest, tmpPath string, clean bool) error {
 	return v.c.Put(blobRef(digest), tmpPath, clean, "")
 }
 
-// GetImageVerdict returns the cached gate verdict for an image digest, and
+// GetImageVerdict returns the cached gate verdict and manifest path, and
 // when the gates last confirmed it (the older of the two per-gate timestamps —
 // they move together for Docker, where one evaluation covers both gates). The
 // block reason is stored in the entry's ScanJSON field.
-func (v *verdictStore) GetImageVerdict(repo, digest string) (bool, string, time.Time, bool) {
+func (v *verdictStore) GetImageVerdict(repo, digest string) (GateVerdict, time.Time, bool) {
 	e, ok := v.c.Get(imageRefKey(repo, digest))
 	if !ok {
-		return false, "", time.Time{}, false
+		return GateVerdict{}, time.Time{}, false
 	}
 	checkedAt := e.LastCVECheck
 	if e.LastMalwareCheck.Before(checkedAt) {
 		checkedAt = e.LastMalwareCheck
 	}
-	return e.ScanClean, e.ScanJSON, checkedAt, true
+	verdict := GateVerdict{
+		Allowed: e.ScanClean, Reason: e.ScanJSON, FromCache: true,
+		Passthrough: isPassthroughReason(e.ScanJSON),
+	}
+	if e.ScanClean {
+		verdict.ManifestPath = e.ArtifactPath
+	} else {
+		verdict.BlockedBy = blockedByForReason(e.ScanJSON)
+	}
+	return verdict, checkedAt, true
 }
 
 // PutImageVerdict caches the gate verdict together with the manifest body.

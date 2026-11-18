@@ -11,17 +11,10 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // pypiJSONResponse represents the PyPI JSON API response for a specific version.
 type pypiJSONResponse struct {
-	Info struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-		License string `json:"license"`
-		Author  string `json:"author"`
-	} `json:"info"`
 	URLs []struct {
 		Filename      string `json:"filename"`
 		UploadTimeISO string `json:"upload_time_iso_8601"`
@@ -37,12 +30,8 @@ type PyPIAdapter struct {
 
 // NewPyPIAdapter creates a PyPI adapter over the given ordered upstream URLs.
 func NewPyPIAdapter(upstreams []string, opts ...Option) *PyPIAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &PyPIAdapter{
-		upstreams:  trimmed,
+		upstreams:  trimUpstreams(upstreams),
 		httpClient: resolveClient(opts),
 	}
 }
@@ -104,19 +93,9 @@ func (a *PyPIAdapter) IsArtifactPath(r *http.Request) bool {
 // success. When every upstream fails, the returned error is an
 // upstream.Attempts carrying each mirror's own outcome.
 func (a *PyPIAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	if len(a.upstreams) == 0 {
-		return nil, fmt.Errorf("no upstreams configured for pypi")
-	}
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
-		if err == nil {
-			return meta, nil
-		}
-		atts.Add(url, status, err, time.Since(start))
-	}
-	return nil, atts
+	return firstMetadata(a.upstreams, "pypi", func(base string) (*gate.PackageMetadata, string, int, error) {
+		return a.fetchMetadataFrom(ctx, base, ref)
+	})
 }
 
 func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
@@ -172,11 +151,7 @@ func (a *PyPIAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *g
 	if !found {
 		return nil, apiURL, resp.StatusCode, fmt.Errorf("file %s not listed in pypi release %s@%s", ref.Classifier, ref.Name, ref.Version)
 	}
-	return &gate.PackageMetadata{
-		PublishedAt: publishedAt.UTC(),
-		Maintainer:  info.Info.Author,
-		License:     info.Info.License,
-	}, apiURL, resp.StatusCode, nil
+	return &gate.PackageMetadata{PublishedAt: publishedAt.UTC()}, apiURL, resp.StatusCode, nil
 }
 
 // parsePyPIUploadTime parses upload_time_iso_8601, which PyPI writes with
@@ -194,11 +169,7 @@ func parsePyPIUploadTime(s string) (time.Time, error) {
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 func (a *PyPIAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }
 
 // sdistExts are the source-distribution suffixes pip accepts, longest first so

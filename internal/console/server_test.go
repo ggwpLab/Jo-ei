@@ -565,8 +565,8 @@ func TestRequestsClampsLimit(t *testing.T) {
 	base := time.Now()
 	for i := 0; i < 505; i++ {
 		f.store.Record(gate.Event{RequestID: fmt.Sprintf("r%d", i), Verdict: gate.VerdictPass, Gate: gate.GateSupply, Time: base.Add(time.Duration(i) * time.Millisecond), Ecosystem: "npm", Package: "p", Version: "1"})
-		require.NoError(t, f.store.Flush(context.Background()))
 	}
+	require.NoError(t, f.store.Flush(context.Background()))
 
 	var body struct {
 		Requests   []json.RawMessage `json:"requests"`

@@ -12,43 +12,12 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
-
-// npmLicense decodes npm's polymorphic "license" field. Modern packages use a
-// string (an SPDX expression, e.g. "ISC"); legacy/historical versions use an
-// object {"type":"MIT","url":"..."} or other shapes. The value is purely
-// informational (no policy decision reads it), and FetchMetadata decodes every
-// version in the document, so decoding must never fail the whole response — an
-// unrecognized shape yields an empty license.
-type npmLicense string
-
-func (l *npmLicense) UnmarshalJSON(data []byte) error {
-	// Modern form: a plain string (also handles JSON null → "").
-	var s string
-	if json.Unmarshal(data, &s) == nil {
-		*l = npmLicense(s)
-		return nil
-	}
-	// Legacy object form: {"type":"MIT","url":"..."}.
-	var obj struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(data, &obj) == nil {
-		*l = npmLicense(obj.Type)
-		return nil
-	}
-	// Anything else (e.g. an array of license objects): drop it, do not error.
-	*l = ""
-	return nil
-}
 
 // npmMetadata is the subset of the npm registry document we consume.
 type npmMetadata struct {
-	Time     map[string]string `json:"time"`
-	Versions map[string]struct {
-		License npmLicense `json:"license"`
-	} `json:"versions"`
+	Time     map[string]string   `json:"time"`
+	Versions map[string]struct{} `json:"versions"`
 }
 
 // NPMAdapter implements gate.RegistryAdapter for the npm registry.
@@ -63,12 +32,8 @@ var _ gate.MetadataFilterer = (*NPMAdapter)(nil)
 
 // NewNPMAdapter creates an npm adapter over the given ordered upstream URLs.
 func NewNPMAdapter(upstreams []string, opts ...Option) *NPMAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &NPMAdapter{
-		upstreams:  trimmed,
+		upstreams:  trimUpstreams(upstreams),
 		httpClient: resolveClient(opts),
 	}
 }
@@ -122,19 +87,9 @@ func parseNPMVersion(name, filename string) (string, bool) {
 // success. When every upstream fails, the returned error is an
 // upstream.Attempts carrying each mirror's own outcome.
 func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	if len(a.upstreams) == 0 {
-		return nil, fmt.Errorf("no upstreams configured for npm")
-	}
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
-		if err == nil {
-			return meta, nil
-		}
-		atts.Add(url, status, err, time.Since(start))
-	}
-	return nil, atts
+	return firstMetadata(a.upstreams, "npm", func(base string) (*gate.PackageMetadata, string, int, error) {
+		return a.fetchMetadataFrom(ctx, base, ref)
+	})
 }
 
 func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
@@ -165,23 +120,15 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *ga
 	if err != nil {
 		return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing npm publish time %q: %w", publishedStr, err)
 	}
-	versionInfo, ok := doc.Versions[ref.Version]
-	if !ok {
+	if _, ok := doc.Versions[ref.Version]; !ok {
 		return nil, apiURL, resp.StatusCode, fmt.Errorf("version %s missing from npm versions map for %s", ref.Version, ref.Name)
 	}
-	return &gate.PackageMetadata{
-		PublishedAt: publishedAt.UTC(),
-		License:     string(versionInfo.License),
-	}, apiURL, resp.StatusCode, nil
+	return &gate.PackageMetadata{PublishedAt: publishedAt.UTC()}, apiURL, resp.StatusCode, nil
 }
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 func (a *NPMAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }
 
 // NormalizeMetadataRequest reports whether r asks for an npm metadata document:

@@ -384,6 +384,9 @@ synchronous persistence semantics.
 
 Named profiles; `active_profile` selects one at boot.
 
+Supply-chain age enforcement is controlled by `supply_chain.mode`, independently
+of the selected profile. The console can change that mode after first boot.
+
 | Key (per profile) | Description |
 |---|---|
 | `cve_block` | Enforce the CVE gate. |

@@ -127,17 +127,6 @@ func (s *Store) Snapshot(ctx context.Context) Snapshot {
 	return snap
 }
 
-// Recent returns up to limit events, newest first (limit ≤ 0 → all). A read
-// error logs and yields nil.
-func (s *Store) Recent(ctx context.Context, limit int) []gate.Event {
-	evs, err := s.repo.Recent(ctx, limit)
-	if err != nil {
-		s.readFailed(err, "reading recent events")
-		return nil
-	}
-	return evs
-}
-
 // Page returns up to limit events matching verdict (empty = any) and text (a
 // case-insensitive substring of "package@version" or request_id; empty = any), newest-first,
 // older than cursor (zero cursor = newest), plus the cursor for the next call

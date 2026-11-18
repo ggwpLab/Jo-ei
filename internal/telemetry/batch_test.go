@@ -23,7 +23,7 @@ func TestSQLiteRepo_RecordBatchAtomicCountersAndDays(t *testing.T) {
 	}
 	for range 2 {
 		require.NoError(t, r.RecordBatch(ctx, "batch-1", events))
-		got, err := r.Recent(ctx, 0)
+		got, _, err := r.Page(ctx, "", "", telemetry.Cursor{}, 0)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 		s, err := r.Snapshot(ctx, time.Time{})
@@ -48,7 +48,7 @@ func TestSQLiteRepo_BatchReceiptSurvivesPrune(t *testing.T) {
 	require.NoError(t, r.RecordBatch(ctx, "old", ev))
 	require.NoError(t, r.Prune(ctx))
 	require.NoError(t, r.RecordBatch(ctx, "old", ev))
-	got, err := r.Recent(ctx, 0)
+	got, _, err := r.Page(ctx, "", "", telemetry.Cursor{}, 0)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 	snap, err := r.Snapshot(ctx, time.Time{})
@@ -67,7 +67,7 @@ func TestSQLiteRepo_BatchRollback(t *testing.T) {
 	require.NoError(t, err)
 	events := []telemetry.BatchEvent{{Event: gate.Event{RequestID: "first", Verdict: gate.VerdictCache}, Day: "2026-11-07"}, {Event: gate.Event{RequestID: "second", Verdict: gate.VerdictBlock}, Day: "2026-11-07"}}
 	require.Error(t, r.RecordBatch(ctx, "retry", events))
-	got, err := r.Recent(ctx, 0)
+	got, _, err := r.Page(ctx, "", "", telemetry.Cursor{}, 0)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 	snap, err := r.Snapshot(ctx, time.Time{})
@@ -79,7 +79,7 @@ func TestSQLiteRepo_BatchRollback(t *testing.T) {
 	_, err = db.SQL().Exec(`DROP TRIGGER fail_second`)
 	require.NoError(t, err)
 	require.NoError(t, r.RecordBatch(ctx, "retry", events))
-	got, err = r.Recent(ctx, 0)
+	got, _, err = r.Page(ctx, "", "", telemetry.Cursor{}, 0)
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 }

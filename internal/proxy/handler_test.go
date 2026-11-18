@@ -58,7 +58,7 @@ func TestHandler_MavenFallsBackToMirrorOnThrottle(t *testing.T) {
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
 
 	h := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:    adapters.NewMavenAdapter([]string{primary.URL, mirror.URL}, adapters.WithHTTPClient(client)),
+		Adapter:    adapters.NewMavenAdapter([]string{primary.URL, mirror.URL}),
 		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
 		Cache:      newFakeCache(),
 		Logger:     zerolog.Nop(),
@@ -103,7 +103,7 @@ func TestHandler_MavenSingleDownloadThroughProductionTransport(t *testing.T) {
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
 
 	h := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:    adapters.NewMavenAdapter([]string{srv.URL}, adapters.WithHTTPClient(client)),
+		Adapter:    adapters.NewMavenAdapter([]string{srv.URL}),
 		Filter:     supplychain.NewFilter(config.SupplyChainConfig{MinAgeHours: 24, Mode: "enforce"}, nil),
 		Cache:      newFakeCache(),
 		Logger:     zerolog.Nop(),

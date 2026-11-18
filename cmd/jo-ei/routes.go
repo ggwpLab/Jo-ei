@@ -133,7 +133,7 @@ func buildHandlers(cfg *config.Config, shared sharedDeps) map[string]*proxy.Hand
 		handlers["yarn"] = npmHandler
 	}
 	if cfg.Registries.Maven.Enabled {
-		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams, client), shared)
+		handlers["maven"] = buildHandler(adapters.NewMavenAdapter(cfg.Registries.Maven.Upstreams), shared)
 	}
 	if cfg.Registries.RubyGems.Enabled {
 		handlers["rubygems"] = buildHandler(adapters.NewRubyGemsAdapter(cfg.Registries.RubyGems.Upstreams, client), shared)
