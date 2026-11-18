@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,13 +23,16 @@ import (
 
 func TestIntegration_RubyGemsFallsBackToSecondUpstream(t *testing.T) {
 	createdAt := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339)
+	visits := make(chan string, 8)
 
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visits <- "first " + r.URL.Path
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer down.Close()
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visits <- "second " + r.URL.Path
 		if strings.HasPrefix(r.URL.Path, "/api/v1/versions/") {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`[{"number":"7.0.4","platform":"ruby","created_at":"` + createdAt + `","licenses":["MIT"],"sha":"abc123"}]`))
@@ -57,4 +61,12 @@ func TestIntegration_RubyGemsFallsBackToSecondUpstream(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "gem-bytes", string(body))
+	require.Len(t, visits, 4)
+	assert.Equal(t, []string{
+		"first /api/v1/versions/rails.json", "second /api/v1/versions/rails.json",
+		"first /gems/rails-7.0.4.gem", "second /gems/rails-7.0.4.gem",
+	}, []string{<-visits, <-visits, <-visits, <-visits})
 }

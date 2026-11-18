@@ -73,7 +73,6 @@ function YamlView({ p }) {
   );
 }
 
-const SETTINGS_KEYS = ["mode", "min_age_hours", "cve_block_on"];
 const pickSettings = (p) => ({ mode: p.mode, min_age_hours: p.min_age_hours, cve_block_on: p.cve_block_on });
 
 function Policy({ notify }) {

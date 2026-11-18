@@ -23,11 +23,7 @@ type MavenAdapter struct {
 // NewMavenAdapter creates a Maven adapter over the given ordered upstream URLs
 // (e.g. "https://repo1.maven.org/maven2"). Upstreams are tried in order.
 func NewMavenAdapter(upstreams []string) *MavenAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
-	return &MavenAdapter{upstreams: trimmed}
+	return &MavenAdapter{upstreams: trimUpstreams(upstreams)}
 }
 
 // NormalizeRequest intercepts artifact downloads: any file in a version
@@ -142,9 +138,5 @@ func (a *MavenAdapter) MetadataFromHeader(h http.Header) *gate.PackageMetadata {
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 func (a *MavenAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }

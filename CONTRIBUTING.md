@@ -5,7 +5,7 @@ need to get a change from idea to merged PR.
 
 ## Development Setup
 
-**Prerequisites:** Go 1.25+ and git. That's it — the admin console is built by
+**Prerequisites:** the Go toolchain from `go.mod` and git. The admin console is built by
 a Go program ([`internal/uibuild`](internal/uibuild/main.go), esbuild via its
 Go API), so there is **no Node/npm toolchain** to install.
 
@@ -55,6 +55,10 @@ go test ./...                                  # unit tests
 go test -tags integration ./integration/...   # integration tests (in-process mocks, no external services)
 go test ./... -race                            # what CI runs (needs cgo; skip -race on Windows without a C toolchain)
 ```
+
+Console behavior tests use Node 22+ with its built-in test runner and no npm
+dependencies. Run them with `node --test web/console/behavior.test.cjs`, or
+use the `node:22-alpine` Docker image. Node is not needed to build the console.
 
 Test helpers worth knowing:
 

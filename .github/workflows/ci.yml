@@ -35,6 +35,11 @@ jobs:
           fi
       - name: Build
         run: go build ./...
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Console behavior tests
+        run: node --test web/console/behavior.test.cjs
       - name: Unit tests (race)
         run: go test ./... -race
       - name: Integration tests

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // npmMetadata is the subset of the npm registry document we consume.
@@ -33,12 +32,8 @@ var _ gate.MetadataFilterer = (*NPMAdapter)(nil)
 
 // NewNPMAdapter creates an npm adapter over the given ordered upstream URLs.
 func NewNPMAdapter(upstreams []string, opts ...Option) *NPMAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &NPMAdapter{
-		upstreams:  trimmed,
+		upstreams:  trimUpstreams(upstreams),
 		httpClient: resolveClient(opts),
 	}
 }
@@ -92,19 +87,9 @@ func parseNPMVersion(name, filename string) (string, bool) {
 // success. When every upstream fails, the returned error is an
 // upstream.Attempts carrying each mirror's own outcome.
 func (a *NPMAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	if len(a.upstreams) == 0 {
-		return nil, fmt.Errorf("no upstreams configured for npm")
-	}
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
-		if err == nil {
-			return meta, nil
-		}
-		atts.Add(url, status, err, time.Since(start))
-	}
-	return nil, atts
+	return firstMetadata(a.upstreams, "npm", func(base string) (*gate.PackageMetadata, string, int, error) {
+		return a.fetchMetadataFrom(ctx, base, ref)
+	})
 }
 
 func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
@@ -143,11 +128,7 @@ func (a *NPMAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *ga
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 func (a *NPMAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }
 
 // NormalizeMetadataRequest reports whether r asks for an npm metadata document:

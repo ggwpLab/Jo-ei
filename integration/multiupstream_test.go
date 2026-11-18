@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,9 +25,11 @@ import (
 // the second upstream and serves the artifact with HTTP 200.
 func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	lastModified := time.Now().UTC().Add(-72 * time.Hour)
+	visits := make(chan string, 8)
 
 	// First upstream: always 404.
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visits <- "first"
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer down.Close()
@@ -34,6 +37,7 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	// Second upstream: serves the .jar body with a Last-Modified that satisfies
 	// the 24h age check (the supply-chain date comes from the download response).
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visits <- "second"
 		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("jar-bytes"))
@@ -59,4 +63,9 @@ func TestIntegration_MavenFallsBackToSecondUpstream(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "jar-bytes", string(body))
+	require.Len(t, visits, 2)
+	assert.Equal(t, []string{"first", "second"}, []string{<-visits, <-visits})
 }
