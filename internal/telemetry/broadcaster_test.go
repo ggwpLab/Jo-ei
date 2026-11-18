@@ -74,7 +74,8 @@ func TestHubRecordsAndPublishes(t *testing.T) {
 	hub.Record(evt("r1", gate.VerdictCache, gate.GateCache, "cache_hit"))
 	require.NoError(t, store.Flush(context.Background()))
 
-	require.Len(t, store.Recent(context.Background(), 0), 1)
+	events, _ := store.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
+	require.Len(t, events, 1)
 	select {
 	case got := <-ch:
 		assert.Equal(t, "r1", got.RequestID)

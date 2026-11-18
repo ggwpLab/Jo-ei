@@ -68,12 +68,8 @@ type GoAdapter struct {
 
 // NewGoAdapter creates a Go module adapter over the given ordered upstream URLs.
 func NewGoAdapter(upstreams []string, opts ...Option) *GoAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &GoAdapter{
-		upstreams:  trimmed,
+		upstreams:  trimUpstreams(upstreams),
 		httpClient: resolveClient(opts),
 	}
 }
@@ -118,11 +114,7 @@ func (a *GoAdapter) IsArtifactPath(r *http.Request) bool {
 // The client already sent case-encoded paths, so RequestURI() is forwarded
 // verbatim.
 func (a *GoAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }
 
 // goInfo is the subset of the GOPROXY .info document we consume. encoding/json
@@ -133,25 +125,13 @@ type goInfo struct {
 }
 
 // FetchMetadata fetches the module version's .info document from each upstream
-// in order, returning the first success. The .info Time is the publish date;
-// the Go protocol carries no license or (SHA256) checksum there, so those stay
-// empty.
+// in order, returning the first success. The .info Time is the publish date.
 func (a *GoAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	if len(a.upstreams) == 0 {
-		return nil, fmt.Errorf("no upstreams configured for go")
-	}
 	encModule := encodeGoPath(ref.Name)
 	encVersion := encodeGoPath(ref.Version)
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		meta, url, status, err := a.fetchInfoFrom(ctx, base, encModule, encVersion)
-		if err == nil {
-			return meta, nil
-		}
-		atts.Add(url, status, err, time.Since(start))
-	}
-	return nil, atts
+	return firstMetadata(a.upstreams, "go", func(base string) (*gate.PackageMetadata, string, int, error) {
+		return a.fetchInfoFrom(ctx, base, encModule, encVersion)
+	})
 }
 
 func (a *GoAdapter) fetchInfoFrom(ctx context.Context, base, encModule, encVersion string) (*gate.PackageMetadata, string, int, error) {

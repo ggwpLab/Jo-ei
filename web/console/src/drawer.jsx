@@ -1,22 +1,28 @@
 /* 浄衛 Jōei :: THREAT DETAIL DRAWER */
 
+const BLOCK_REASON_LABEL = {
+  __proto__: null,
+  scan_failed: "Scan failed",
+  cve_found: "CVE threshold exceeded",
+  malware_found: "Malware signature matched",
+  scan_incomplete: "Malware scan could not cover the whole artifact",
+  package_younger_than_min_age: "Supply-chain maturity hold",
+  denylisted: "Package is denylisted",
+};
+
 function jsonLines(r) {
   // build a beautified verdict object
   const obj = {
     verdict: "BLOCKED",
     http_status: r.http,
-    reason: r.blocked_by.includes("cve") ? "cve_threshold_exceeded"
-      : r.blocked_by.includes("malware") ? "malware_signature_match"
-      : r.blocked_by.includes("scan_incomplete") ? "malware_scan_incomplete"
-      : r.blocked_by.includes("supply_chain") ? "supply_chain_min_age"
-      : "denylisted",
+    reason: r.reason,
     package: `${r.eco}/${r.pkg}`,
     version: r.ver,
     blocked_by: r.blocked_by,
     request_id: r.request_id,
-    gate: GATE_LABEL[r.blocked_by[0]],
+    gate: GATE_LABEL[r.gate] || r.gate,
   };
-  if (r.cves) obj.cve_ids = r.cves;
+  if (r.cves) obj.cve_ids = r.cves.map((c) => c.id);
   if (r.malware) { obj.engine = r.malware.engine; obj.signature = r.malware.signature; }
   if (r.supply) { obj.published_at = r.supply.published_at.toISOString(); obj.age_hours = r.supply.age_hours; obj.min_age_hours = r.supply.min_age_hours; }
   return obj;
@@ -56,11 +62,7 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
   if (!r) return null;
 
   const verdict = jsonLines(r);
-  const reasonText = r.blocked_by.includes("cve") ? "CVE threshold exceeded"
-    : r.blocked_by.includes("malware") ? "Malware signature matched"
-    : r.blocked_by.includes("scan_incomplete") ? "Malware scan could not cover the whole artifact"
-    : r.blocked_by.includes("supply_chain") ? "Supply-chain maturity hold"
-    : "Package is denylisted";
+  const reasonText = BLOCK_REASON_LABEL[r.reason] || r.reason;
 
   const target = `${r.eco}/${r.pkg}`;
   const allowGate = r.blocked_by.includes("cve") ? "cve"
@@ -90,7 +92,7 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
           {/* key facts */}
           <dl className="kv">
             <dt>request_id</dt><dd>{r.request_id}</dd>
-            <dt>gate</dt><dd>{GATE_LABEL[r.blocked_by[0]]}</dd>
+            <dt>gate</dt><dd>{verdict.gate}</dd>
             <dt>latency</dt><dd>{r.lat}ms</dd>
             <dt>timestamp</dt><dd>{r.ts.toISOString()}</dd>
           </dl>
@@ -100,22 +102,19 @@ function ThreatDrawer({ r, onClose, onAllowlist, onDenylist }) {
             <>
               <div className="label-h">Vulnerabilities · blocking ≥ {JOEI.policy.cve_block_on}</div>
               <div className="col" style={{ gap: 10 }}>
-                {r.cves.map((id) => {
-                  const c = JOEI.CVES[id] || { id, severity: "UNKNOWN", cvss: 0, summary: "" };
-                  return (
-                    <div className="cve-card" key={id}>
-                      <div className="cve-top">
-                        <span className={`sev ${c.severity}`}>{c.severity}</span>
-                        <span className="cve-id">{c.id}</span>
-                        <span className="right mono muted" style={{ fontSize: 11.5 }}>CVSS {(c.cvss || 0).toFixed(1)}</span>
-                      </div>
-                      <div className="cve-sum">{c.summary}</div>
-                      <a className="cve-link" href={`https://osv.dev/vulnerability/${c.id}`} target="_blank" rel="noreferrer">
-                        osv.dev/vulnerability/{c.id} <Icons.ext />
-                      </a>
+                {r.cves.map((c) => (
+                  <div className="cve-card" key={c.id}>
+                    <div className="cve-top">
+                      <span className={`sev ${c.severity}`}>{c.severity}</span>
+                      <span className="cve-id">{c.id}</span>
+                      <span className="right mono muted" style={{ fontSize: 11.5 }}>CVSS {(c.cvss || 0).toFixed(1)}</span>
                     </div>
-                  );
-                })}
+                    <div className="cve-sum">{c.summary}</div>
+                    <a className="cve-link" href={`https://osv.dev/vulnerability/${c.id}`} target="_blank" rel="noreferrer">
+                      osv.dev/vulnerability/{c.id} <Icons.ext />
+                    </a>
+                  </div>
+                ))}
               </div>
             </>
           )}

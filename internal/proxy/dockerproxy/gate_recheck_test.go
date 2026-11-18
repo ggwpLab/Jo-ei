@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
 	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
@@ -79,6 +80,32 @@ func TestGateRecheck_FreshVerdictShortCircuits(t *testing.T) {
 	}
 	if calls != before {
 		t.Fatalf("fresh cached verdict must not re-scan (calls %d→%d)", before, calls)
+	}
+}
+
+func TestGateRecheck_CachedManifestRecordsOneHit(t *testing.T) {
+	c, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	url, repo, _ := newGateTestServer(t)
+	g := newManifestGate(gateDeps{
+		adapter: NewAdapter([]string{url}, nil), scanner: stubScanner{}, av: stubAV{},
+		filter: allowFilter{}, policy: findingPolicy{}, store: newVerdictStore(c),
+		recheckTTL: time.Hour, logger: zerolog.Nop(),
+	})
+	digest, seeded, err := g.Evaluate(t.Context(), repo, "latest")
+	require.NoError(t, err)
+	require.True(t, seeded.Allowed)
+	for _, ref := range []string{"latest", digest} {
+		t.Run(ref, func(t *testing.T) {
+			before := c.UsageWriterStats().AcceptedItems
+			_, v, err := g.Evaluate(t.Context(), repo, ref)
+			require.NoError(t, err)
+			require.True(t, v.Allowed && v.FromCache)
+			require.NotEmpty(t, v.ManifestPath)
+			require.NotEmpty(t, v.ContentType)
+			require.Equal(t, uint64(1), c.UsageWriterStats().AcceptedItems-before)
+		})
 	}
 }
 

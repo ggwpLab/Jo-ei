@@ -9,15 +9,13 @@ import (
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/upstream"
 )
 
 // rubygemsVersion is one entry in the /api/v1/versions/<gem>.json array.
 type rubygemsVersion struct {
-	Number    string   `json:"number"`
-	Platform  string   `json:"platform"`
-	CreatedAt string   `json:"created_at"`
-	Licenses  []string `json:"licenses"`
+	Number    string `json:"number"`
+	Platform  string `json:"platform"`
+	CreatedAt string `json:"created_at"`
 }
 
 // RubyGemsAdapter implements gate.RegistryAdapter for a RubyGems repository.
@@ -29,12 +27,8 @@ type RubyGemsAdapter struct {
 // NewRubyGemsAdapter creates a RubyGems adapter over the given ordered upstream
 // URLs (e.g. "https://rubygems.org"). Upstreams are tried in order.
 func NewRubyGemsAdapter(upstreams []string, opts ...Option) *RubyGemsAdapter {
-	trimmed := make([]string, len(upstreams))
-	for i, u := range upstreams {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &RubyGemsAdapter{
-		upstreams:  trimmed,
+		upstreams:  trimUpstreams(upstreams),
 		httpClient: resolveClient(opts),
 	}
 }
@@ -99,30 +93,16 @@ func parseGemFilename(filename string) (name, version string, ok bool) {
 
 // UpstreamURLs returns one candidate URL per configured upstream, in order.
 func (a *RubyGemsAdapter) UpstreamURLs(r *http.Request) []string {
-	urls := make([]string, len(a.upstreams))
-	for i, base := range a.upstreams {
-		urls[i] = base + r.URL.RequestURI()
-	}
-	return urls
+	return upstreamURLs(a.upstreams, r)
 }
 
 // FetchMetadata walks the configured upstreams in order, returning the first
 // success. When every upstream fails, the returned error is an
 // upstream.Attempts carrying each mirror's own outcome.
 func (a *RubyGemsAdapter) FetchMetadata(ctx context.Context, ref *gate.PackageRef) (*gate.PackageMetadata, error) {
-	if len(a.upstreams) == 0 {
-		return nil, fmt.Errorf("no upstreams configured for rubygems")
-	}
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		meta, url, status, err := a.fetchMetadataFrom(ctx, base, ref)
-		if err == nil {
-			return meta, nil
-		}
-		atts.Add(url, status, err, time.Since(start))
-	}
-	return nil, atts
+	return firstMetadata(a.upstreams, "rubygems", func(base string) (*gate.PackageMetadata, string, int, error) {
+		return a.fetchMetadataFrom(ctx, base, ref)
+	})
 }
 
 func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, ref *gate.PackageRef) (*gate.PackageMetadata, string, int, error) {
@@ -153,10 +133,7 @@ func (a *RubyGemsAdapter) fetchMetadataFrom(ctx context.Context, base string, re
 			if err != nil {
 				return nil, apiURL, resp.StatusCode, fmt.Errorf("parsing rubygems created_at %q: %w", v.CreatedAt, err)
 			}
-			return &gate.PackageMetadata{
-				PublishedAt: publishedAt.UTC(),
-				License:     strings.Join(v.Licenses, ", "),
-			}, apiURL, resp.StatusCode, nil
+			return &gate.PackageMetadata{PublishedAt: publishedAt.UTC()}, apiURL, resp.StatusCode, nil
 		}
 	}
 	return nil, apiURL, resp.StatusCode, fmt.Errorf("version %s (platform %s) not found for rubygems gem %s", number, platform, ref.Name)

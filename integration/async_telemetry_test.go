@@ -170,7 +170,8 @@ func TestAsyncTelemetry_OverflowDoesNotWaitOrChangeEnforcement(t *testing.T) {
 	}
 	require.Equal(t, before.DroppedFullItems+uint64(len(cases)), s.WriterStats().DroppedFullItems)
 	assert.Zero(t, s.Snapshot(context.Background()).Requests)
-	assert.Empty(t, s.Recent(context.Background(), 0))
+	events, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
+	assert.Empty(t, events)
 	select {
 	case <-ch:
 		t.Fatal("uncommitted event published")
@@ -192,7 +193,7 @@ func TestAsyncTelemetry_OverflowDoesNotWaitOrChangeEnforcement(t *testing.T) {
 	snapshot := s.Snapshot(context.Background())
 	assert.Equal(t, before.AcceptedItems, snapshot.Requests)
 	assert.Equal(t, before.AcceptedItems, s.WriterStats().CommittedItems)
-	history := s.Recent(context.Background(), 0)
+	history, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
 	require.Len(t, history, int(before.AcceptedItems))
 	for _, ev := range history {
 		assert.True(t, strings.HasPrefix(ev.RequestID, "seed-"), "dropped request entered durable history")
@@ -246,7 +247,7 @@ func TestAsyncTelemetry_CancelledClientKeepsAdmittedEvent(t *testing.T) {
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	release()
 	require.NoError(t, s.Flush(context.Background()))
-	events := s.Recent(context.Background(), 0)
+	events, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
 	require.Len(t, events, 2)
 	found := false
 	for _, ev := range events {
@@ -268,7 +269,8 @@ func TestAsyncTelemetry_CrashChild(t *testing.T) {
 	require.NoError(t, err)
 	repo, err := telemetry.NewSQLiteRepo(db, 30, 365)
 	require.NoError(t, err)
-	require.NoError(t, repo.RecordEvent(gate.Event{RequestID: "committed", Time: time.Now(), Verdict: gate.VerdictCache}))
+	committed := gate.Event{RequestID: "committed", Time: time.Now(), Verdict: gate.VerdictCache}
+	require.NoError(t, repo.RecordBatch(t.Context(), "committed", []telemetry.BatchEvent{{Event: committed, Day: committed.Time.UTC().Format(time.DateOnly)}}))
 	held := &asyncHeldRepo{Repo: repo, entered: make(chan struct{}), release: make(chan struct{})}
 	store := telemetry.New(held, zerolog.Nop())
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: filepath.Join(root, "cache")})
@@ -338,7 +340,7 @@ func TestAsyncTelemetry_CrashTailDoesNotAuthorizeArtifact(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 	assert.Equal(t, uint64(1), s.Snapshot(context.Background()).Requests)
-	events := s.Recent(context.Background(), 0)
+	events, _ := s.Page(context.Background(), "", "", telemetry.Cursor{}, 0)
 	require.Len(t, events, 1)
 	assert.Equal(t, "committed", events[0].RequestID)
 	lc, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: filepath.Join(root, "cache")})

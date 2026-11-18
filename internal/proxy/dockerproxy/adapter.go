@@ -129,6 +129,12 @@ func (a *Adapter) fetchToken(ctx context.Context, challenge string) (string, err
 	return tok.AccessToken, nil
 }
 
+// isIndexMediaType reports whether ct is a multi-arch image index / manifest
+// list, which lists per-platform child manifests rather than image content.
+func isIndexMediaType(ct string) bool {
+	return ct == mediaTypeOCIIndex || ct == mediaTypeSchema2List
+}
+
 // FetchManifest fetches the raw manifest for ref (a tag or digest) and returns
 // its body, content type, and canonical digest. A multi-arch index is returned
 // as-is, NOT resolved to a platform: the Docker client performs platform
@@ -136,17 +142,6 @@ func (a *Adapter) fetchToken(ctx context.Context, challenge string) (string, err
 // the proxy then gates on its own. This guarantees the image the client
 // actually pulls is the one scanned, on any host architecture.
 func (a *Adapter) FetchManifest(ctx context.Context, repo, ref string) ([]byte, string, string, error) {
-	return a.getManifest(ctx, repo, ref)
-}
-
-// isIndexMediaType reports whether ct is a multi-arch image index / manifest
-// list, which lists per-platform child manifests rather than image content.
-func isIndexMediaType(ct string) bool {
-	return ct == mediaTypeOCIIndex || ct == mediaTypeSchema2List
-}
-
-// getManifest GETs a manifest by ref/digest from the first working upstream.
-func (a *Adapter) getManifest(ctx context.Context, repo, ref string) ([]byte, string, string, error) {
 	path := "/v2/" + repo + "/manifests/" + ref
 	var atts upstream.Attempts
 	for _, base := range a.upstreams {

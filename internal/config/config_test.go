@@ -81,27 +81,6 @@ func writeTempConfig(t *testing.T, content string) string {
 	return f.Name()
 }
 
-func TestLoadConfig_MalwareScannersSection(t *testing.T) {
-	path := writeTempConfig(t, `
-server:
-  listen: ":8080"
-malware:
-  scanners:
-    - type: clamav
-      address: "unix:///var/run/clamav/clamd.sock"
-      timeout_seconds: 45
-database:
-  path: "/var/lib/jo-ei/jo-ei.db"
-`)
-	cfg, err := config.Load(path)
-	require.NoError(t, err)
-
-	require.Len(t, cfg.Malware.Scanners, 1)
-	assert.Equal(t, "clamav", cfg.Malware.Scanners[0].Type)
-	assert.Equal(t, "unix:///var/run/clamav/clamd.sock", cfg.Malware.Scanners[0].Address)
-	assert.Equal(t, 45, cfg.Malware.Scanners[0].TimeoutSeconds)
-}
-
 func TestLoad_ParsesMavenUpstreamsList(t *testing.T) {
 	path := writeTempConfig(t, `
 server:
@@ -360,7 +339,6 @@ policy:
     production:
       cve_block: true
       cve_min_severity: "HIGH"
-      supply_chain_block: true
       allowlist:
         - "pypi/requests"
       denylist:
@@ -770,13 +748,10 @@ func TestConfig_ShutdownTimeoutDefault(t *testing.T) {
 	assert.Equal(t, 30, cfg.Server.ShutdownTimeoutSeconds)
 }
 
-// viper overrides only keys the file contains, so the shipped config must
-// carry server.trusted_proxies for JOEI_SERVER_TRUSTED_PROXIES to work — the
-// setting a reverse-proxy deployment needs.
-func TestShippedConfig_HasTrustedProxiesKey(t *testing.T) {
+func TestLoad_TrustedProxiesEnvSeparators(t *testing.T) {
 	for _, env := range []string{"10.0.0.1 10.0.0.0/8", "10.0.0.1,10.0.0.0/8", " 10.0.0.1 , 10.0.0.0/8 "} {
 		t.Setenv("JOEI_SERVER_TRUSTED_PROXIES", env)
-		cfg, err := config.Load(filepath.Join("..", "..", "config.yaml"))
+		cfg, err := config.Load(writeTempConfig(t, minimalYAML))
 		require.NoError(t, err, env)
 		assert.Equal(t, []string{"10.0.0.1", "10.0.0.0/8"}, cfg.Server.TrustedProxies, env)
 	}

@@ -23,15 +23,10 @@ func (c Cursor) Zero() bool { return c.ID == 0 }
 // use (calls serialize on a single SQLite connection).
 type Repo interface {
 	// RecordBatch atomically applies a batch and its retry receipt. Only the
-	// latest unresolved token may be replayed; tokens must be unique per batch.
+	// latest unresolved token may be replayed; tokens must be nonempty and unique per batch.
 	RecordBatch(ctx context.Context, token string, events []BatchEvent) error
-	// RecordEvent durably persists one event and applies its tallies to the
-	// cumulative counters and the event's UTC-day metrics row, atomically.
-	RecordEvent(ev gate.Event) error
 	// Snapshot returns the cumulative counters, stamped with started as StartedAt.
 	Snapshot(ctx context.Context, started time.Time) (Snapshot, error)
-	// Recent returns up to limit events, newest first. limit <= 0 means all.
-	Recent(ctx context.Context, limit int) ([]gate.Event, error)
 	// Page returns up to limit events with the given verdict (empty = any)
 	// whose "package@version" or request_id contains text (case-insensitive,
 	// literal substring; empty = any), newest-first, strictly older than cursor. A zero cursor starts at the

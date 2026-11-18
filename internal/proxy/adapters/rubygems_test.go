@@ -77,7 +77,6 @@ func TestRubyGemsAdapter_FetchMetadata_RubyPlatform(t *testing.T) {
 	meta, err := a.FetchMetadata(context.Background(), ref)
 	require.NoError(t, err)
 	assert.WithinDuration(t, created, meta.PublishedAt, time.Second)
-	assert.Equal(t, "MIT", meta.License)
 }
 
 func TestRubyGemsAdapter_FetchMetadata_MatchesPlatform(t *testing.T) {
