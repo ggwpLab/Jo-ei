@@ -138,12 +138,6 @@ cache:
     # them as reclaimable and its Clean up button deletes them. Verdict
     # freshness is handled separately by lazy re-validation (below).
     stale_after_days: 30
-  # S3 backend is reserved for a future release; setting backend: s3 currently
-  # fails fast at startup.
-  # s3:
-  #   endpoint: "https://s3.amazonaws.com"
-  #   bucket: "joei-cache"
-  #   region: "us-east-1"
   # Lazy re-validation: a cache hit whose CVE or malware check is older than
   # its TTL re-runs that gate (CVE by metadata, malware by re-scanning the
   # cached file; Docker re-runs the full image gate) before serving. An entry
@@ -169,19 +163,16 @@ policy:
   profiles:
     dev:
       cve_block: false
-      supply_chain_block: false
       allowlist: []
       denylist: []
     staging:
       cve_block: true
       cve_min_severity: "HIGH"
-      supply_chain_block: true
       allowlist: []
       denylist: []
     production:
       cve_block: true
       cve_min_severity: "HIGH"
-      supply_chain_block: true
       malware_block: true
       allowlist: []
       denylist: []

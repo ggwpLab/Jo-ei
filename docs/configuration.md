@@ -388,7 +388,6 @@ Named profiles; `active_profile` selects one at boot.
 |---|---|
 | `cve_block` | Enforce the CVE gate. |
 | `cve_min_severity` | Blocking threshold; overrides `cve.block_on` when non-empty. |
-| `supply_chain_block` | Enforce the min-age gate. |
 | `malware_block` | Enforce the malware gate. |
 | `allowlist` | Entries (`eco/name` or `eco/name@version`) that seed **both** per-gate allowlists (supply-chain and CVE). |
 | `denylist` | Always-blocked packages, same entry format. |

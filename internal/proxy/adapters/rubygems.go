@@ -39,8 +39,6 @@ func NewRubyGemsAdapter(upstreams []string, opts ...Option) *RubyGemsAdapter {
 	}
 }
 
-func (a *RubyGemsAdapter) Name() string { return "rubygems" }
-
 // NormalizeRequest intercepts gem downloads: /gems/<name>-<version>[-<platform>].gem.
 // API/index paths (/api/, /info/, /versions, /quick/, /specs*) are proxied transparently.
 func (a *RubyGemsAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {

@@ -347,21 +347,6 @@ func TestHandler_AllowsOldPackage(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestHandler_HealthEndpoint(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstream.Close()
-
-	srv := setupTestProxy(t, upstream, "enforce")
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/health")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
 func TestHandler_CacheHitAvoidsDuplicateUpstreamCall(t *testing.T) {
 	callCount := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

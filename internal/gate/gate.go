@@ -46,9 +46,6 @@ type PackageMetadata struct {
 
 // RegistryAdapter abstracts a specific package registry.
 type RegistryAdapter interface {
-	// Name returns the ecosystem identifier, e.g. "pypi".
-	Name() string
-
 	// NormalizeRequest extracts a PackageRef from an incoming HTTP request.
 	// Returns (ref, true) for download requests that should be intercepted.
 	// Returns (nil, false) for metadata/simple-API requests (proxied as-is).

@@ -73,8 +73,6 @@ func NewNPMAdapter(upstreams []string, opts ...Option) *NPMAdapter {
 	}
 }
 
-func (a *NPMAdapter) Name() string { return "npm" }
-
 // NormalizeRequest intercepts tarball downloads (path contains "/-/" and ends ".tgz").
 // Metadata documents (e.g. "/lodash") are proxied transparently.
 func (a *NPMAdapter) NormalizeRequest(r *http.Request) (*gate.PackageRef, bool) {
