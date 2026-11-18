@@ -122,13 +122,11 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// evaluation exactly as in the post-fetch check below.
 	var offlineStale *GateVerdict
 	if isDigestRef(ref) {
-		if clean, reason, checkedAt, found := g.store.GetImageVerdict(repo, ref); found && !isStaleSupplyBlock(clean, reason) {
-			v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
-			if !clean {
-				v.BlockedBy = blockedByForReason(reason)
-			} else if path, ok := g.store.GetManifestBody(repo, ref); ok {
-				if ct := manifestMediaType(path); ct != "" {
-					v.ManifestPath, v.ContentType = path, ct
+		if v, checkedAt, found := g.store.GetImageVerdict(repo, ref); found && !isStaleSupplyBlock(v.Allowed, v.Reason) {
+			if v.Allowed {
+				v.ContentType = manifestMediaType(v.ManifestPath)
+				if v.ContentType == "" {
+					v.ManifestPath = ""
 				}
 			}
 			fresh := g.recheckTTL <= 0 || time.Since(checkedAt) <= g.recheckTTL
@@ -183,12 +181,9 @@ func (g *manifestGate) Evaluate(ctx context.Context, repo, ref string) (string, 
 	// down) falls back to serving it — mirroring the package path's serve-stale
 	// rule — instead of failing the pull. nil when there was no cached verdict.
 	var staleVerdict *GateVerdict
-	if clean, reason, checkedAt, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(clean, reason) {
-		v := GateVerdict{Allowed: clean, Reason: reason, Passthrough: isPassthroughReason(reason), FromCache: true}
-		if !clean {
-			v.BlockedBy = blockedByForReason(reason)
-		} else if path, ok := g.store.GetManifestBody(repo, digest); ok {
-			v.ManifestPath, v.ContentType = path, contentType
+	if v, checkedAt, found := g.store.GetImageVerdict(repo, digest); found && !isStaleSupplyBlock(v.Allowed, v.Reason) {
+		if v.Allowed {
+			v.ContentType = contentType
 		}
 		if g.recheckTTL <= 0 || time.Since(checkedAt) <= g.recheckTTL {
 			return digest, v, nil

@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,344 +159,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check cache first
 	if entry, found := h.cfg.Cache.Get(ref); found {
-		if !entry.ScanClean {
-			// Fail-closed: cached entry has failed scan result
-			record(gate.VerdictBlock, gate.GateCache, "scan_failed", http.StatusForbidden, nil)
-			h.writeError(w, requestID, ref, http.StatusForbidden, "scan_failed")
-			return
-		}
-		if h.recheckExpired(r.Context(), w, requestID, ref, entry, record, log) {
-			return // blocked and evicted; response already written
-		}
-		if err := h.serveFromCache(w, entry, log); err != nil {
-			record(gate.VerdictError, gate.GateCache, "cache_read_error", http.StatusInternalServerError, nil)
-			return
-		}
-		record(gate.VerdictCache, gate.GateCache, "cache_hit", http.StatusOK, nil)
+		h.serveCached(r.Context(), w, requestID, ref, entry, record, log)
 		return
 	}
-
-	ctx := r.Context()
-
-	// Supply-chain check. Adapters that carry the publish date on the artifact
-	// download itself (Maven, via Last-Modified) defer the check until after the
-	// download, which avoids a separate metadata request; other adapters fetch
-	// metadata up front and check now.
-	extractor, deferSC := h.cfg.Adapter.(gate.DownloadMetadataExtractor)
-
-	var scResult gate.FilterResult
-	// checkSupplyChain runs the filter and, on a block, writes the response and
-	// records telemetry; it also emits the dry_run warning. It returns false when
-	// the request is finished (blocked) and the caller must return.
-	checkSupplyChain := func(meta *gate.PackageMetadata) bool {
-		scResult = h.cfg.Filter.Check(ctx, ref, meta)
-		if !scResult.Allowed {
-			record(gate.VerdictBlock, gate.GateSupply, scResult.Reason, http.StatusLocked, func(ev *gate.Event) {
-				ev.BlockedBy = []string{"supply_chain"}
-				ev.PublishedAt = scResult.PublishedAt
-				ev.BlockUntil = scResult.BlockUntil
-			})
-			h.writeBlockedResponse(w, requestID, ref, scResult)
-			return false
-		}
-		if scResult.Reason == "dry_run" {
-			log.Warn().
-				Time("published_at", scResult.PublishedAt).
-				Time("block_until", scResult.BlockUntil).
-				Msg("dry run: supply chain filter would block package")
-		}
-		return true
-	}
-
-	if !deferSC {
-		meta, err := h.cfg.Adapter.FetchMetadata(ctx, ref)
-		if err != nil {
-			atts, hasAtts := upstream.AttemptsFrom(err)
-			if status, retry, ok := atts.Throttled(h.cfg.Throttles); hasAtts && ok {
-				log.Warn().Array("upstream_attempts", atts).Msg("upstream metadata unavailable: mirrors throttled")
-				record(gate.VerdictError, gate.GateSupply, "upstream_throttled", status, nil)
-				httpx.SetRetryAfter(w.Header(), retry)
-				h.writeError(w, requestID, ref, status, "upstream_throttled")
-				return
-			}
-			ev := log.Error().Err(err)
-			if hasAtts {
-				ev = ev.Array("upstream_attempts", atts)
-			}
-			ev.Msg("failed to fetch upstream metadata")
-			record(gate.VerdictError, gate.GateSupply, "upstream_metadata_unavailable", http.StatusBadGateway, nil)
-			h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_metadata_unavailable")
-			return
-		}
-		if !checkSupplyChain(meta) {
-			return
-		}
-	}
-
-	// CVE scan — before downloading the artifact (fail-closed if scanner errors).
-	if h.cfg.CVEScanner != nil {
-		scanResult, err := h.cfg.CVEScanner.Scan(ctx, ref)
-		if err != nil {
-			log.Error().Err(err).Msg("cve scan failed")
-			record(gate.VerdictError, gate.GateCVE, "cve_scan_error", http.StatusServiceUnavailable, nil)
-			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "cve_scan_error")
-			return
-		}
-		if h.cfg.Policy != nil {
-			decision := h.cfg.Policy.Evaluate(ref, scanResult)
-			if !decision.Allowed {
-				blockedBy := "cve"
-				if decision.Reason == gate.ReasonDenylisted {
-					blockedBy = "denylist"
-				}
-				record(gate.VerdictBlock, gate.GateCVE, decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
-					ev.BlockedBy = []string{blockedBy}
-					ev.CVEs = decision.Findings
-				})
-				h.writeCVEBlockedResponse(w, requestID, ref, decision)
-				return
-			}
-		}
-	}
-
-	// Download artifact, trying each configured upstream in order.
-	upstreamURLs := h.cfg.Adapter.UpstreamURLs(r)
-	if len(upstreamURLs) == 0 {
-		log.Error().Msg("adapter returned no upstream URLs")
-		record(gate.VerdictError, gate.GateSupply, "no_upstream_configured", http.StatusInternalServerError, nil)
-		h.writeError(w, requestID, ref, http.StatusInternalServerError, "no_upstream_configured")
-		return
-	}
-	tmpPath, header, atts, err := h.downloadFromUpstreams(ctx, upstreamURLs)
-	if err != nil {
-		if errors.Is(err, errArtifactTooLarge) {
-			log.Warn().Err(err).Int64("max_bytes", h.cfg.MaxArtifactBytes).Msg("artifact over the size cap")
-			record(gate.VerdictError, gate.GateCache, "artifact_too_large", http.StatusForbidden, nil)
-			h.writeError(w, requestID, ref, http.StatusForbidden, "artifact_too_large")
-			return
-		}
-		if atts.AllNotFound() {
-			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on any upstream")
-			record(gate.VerdictError, gate.GateSupply, "artifact_not_found", http.StatusNotFound, nil)
-			h.writeError(w, requestID, ref, http.StatusNotFound, "artifact_not_found")
-			return
-		}
-		if status, retry, ok := atts.Throttled(h.cfg.Throttles); ok {
-			log.Warn().Array("upstream_attempts", atts).Msg("artifact not found on reachable upstreams; others throttled")
-			record(gate.VerdictError, gate.GateSupply, "upstream_throttled", status, nil)
-			httpx.SetRetryAfter(w.Header(), retry)
-			h.writeError(w, requestID, ref, status, "upstream_throttled")
-			return
-		}
-		log.Error().Err(err).Array("upstream_attempts", atts).Msg("failed to download artifact")
-		record(gate.VerdictError, gate.GateSupply, "upstream_unavailable", http.StatusBadGateway, nil)
-		h.writeError(w, requestID, ref, http.StatusBadGateway, "upstream_unavailable")
-		return
-	}
-	defer os.Remove(tmpPath)
-
-	// Deferred supply-chain: the artifact download carried the publish date
-	// (e.g. Maven's Last-Modified), so run the check now, before serving.
-	if deferSC {
-		if !checkSupplyChain(extractor.MetadataFromHeader(header)) {
-			return
-		}
-	}
-
-	// Antivirus scan — after download, before caching (fail-closed on error).
-	if h.cfg.AVScanner != nil {
-		avResult, err := h.cfg.AVScanner.Scan(ctx, tmpPath)
-		if err != nil {
-			log.Error().Err(err).Msg("malware scan failed")
-			record(gate.VerdictError, gate.GateMalware, "av_scan_error", http.StatusServiceUnavailable, nil)
-			h.writeError(w, requestID, ref, http.StatusServiceUnavailable, "av_scan_error")
-			return
-		}
-		if avResult.Incomplete {
-			// Not fully checked, so not served — but not malware either.
-			log.Warn().Str("engine", avResult.Engine).Str("signature", avResult.Signature).
-				Msg("malware scan incomplete; blocking")
-			record(gate.VerdictBlock, gate.GateMalware, gate.ReasonScanIncomplete, http.StatusForbidden, func(ev *gate.Event) {
-				ev.BlockedBy = []string{gate.ReasonScanIncomplete}
-				ev.MalwareEngine = avResult.Engine
-				ev.MalwareSignature = avResult.Signature
-			})
-			h.writeError(w, requestID, ref, http.StatusForbidden, gate.ReasonScanIncomplete)
-			return
-		}
-		if !avResult.Clean {
-			record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
-				ev.BlockedBy = []string{"malware"}
-				ev.MalwareEngine = avResult.Engine
-				ev.MalwareSignature = avResult.Signature
-			})
-			h.writeMalwareBlockedResponse(w, requestID, ref, avResult.Engine, avResult.Signature)
-			return
-		}
-	}
-
-	// Cache the artifact (scan passed).
-	if err := h.cfg.Cache.Put(ref, tmpPath, true, ""); err != nil {
-		log.Error().Err(err).Msg("failed to cache artifact")
-		// Fail-closed: don't serve if we cannot cache
-		record(gate.VerdictError, gate.GateCache, "cache_error", http.StatusInternalServerError, nil)
-		h.writeError(w, requestID, ref, http.StatusInternalServerError, "cache_error")
-		return
-	}
-
-	entry, found := h.cfg.Cache.Get(ref)
-	if !found {
-		// Should not happen — we just Put it
-		record(gate.VerdictError, gate.GateCache, "cache_error", http.StatusInternalServerError, nil)
-		h.writeError(w, requestID, ref, http.StatusInternalServerError, "cache_error")
-		return
-	}
-	// PASS gate = the deepest gate this artifact actually cleared.
-	lastGate := gate.GateSupply
-	if h.cfg.CVEScanner != nil && h.cfg.Policy != nil {
-		lastGate = gate.GateCVE
-	}
-	if h.cfg.AVScanner != nil {
-		lastGate = gate.GateMalware
-	}
-	if err := h.serveFromCache(w, entry, log); err != nil {
-		record(gate.VerdictError, gate.GateCache, "cache_read_error", http.StatusInternalServerError, nil)
-		return
-	}
-	record(gate.VerdictPass, lastGate, scResult.Reason, http.StatusOK, func(ev *gate.Event) {
-		ev.PublishedAt = scResult.PublishedAt
-	})
+	h.serveDownload(w, r, requestID, ref, record, log)
 }
 
-// recheckOutcome is the shared result of one coalesced re-check flight.
-// nil means "serve from cache": every check passed, was skipped, or failed
-// against an unreachable scanner (stale serve).
-type recheckOutcome struct {
-	gate      string              // gate.GateCVE | gate.GateMalware
-	blockedBy string              // "cve" | "denylist" | "malware"
-	decision  gate.PolicyDecision // CVE block details
-	av        *gate.AVResult      // malware block details
-}
-
-// recheckDue reports whether any gate's TTL has lapsed for this entry. Kept
-// outside the singleflight group so fresh hits pay zero coalescing overhead.
-func (h *Handler) recheckDue(entry *gate.ArtifactEntry) bool {
-	now := time.Now()
-	if h.cfg.CVERecheckTTL > 0 && h.cfg.CVEScanner != nil && h.cfg.Policy != nil &&
-		now.Sub(entry.LastCVECheck) > h.cfg.CVERecheckTTL {
-		return true
-	}
-	if h.cfg.MalwareRecheckTTL > 0 && h.cfg.AVScanner != nil &&
-		now.Sub(entry.LastMalwareCheck) > h.cfg.MalwareRecheckTTL {
-		return true
-	}
-	return false
-}
-
-// recheckExpired lazily re-runs each gate whose TTL has lapsed for a cache
-// hit. Concurrent requests for the same entry coalesce into one flight: the
-// leader scans (and evicts on a block), every waiter maps the shared outcome
-// to its own response and telemetry event. Returns true when the entry was
-// blocked (response already written). A scanner failure inside the flight
-// serves the previously clean entry to every waiter and leaves the check
-// timestamps untouched, so the next hit retries.
-func (h *Handler) recheckExpired(ctx context.Context, w http.ResponseWriter, requestID string, ref *gate.PackageRef, entry *gate.ArtifactEntry, record func(string, string, string, int, func(*gate.Event)), log zerolog.Logger) bool {
-	if !h.recheckDue(entry) {
-		return false
-	}
-	// WithoutCancel: the flight's scan serves every waiter — a leader whose
-	// client disconnects must not cancel it for the others.
-	flightCtx := context.WithoutCancel(ctx)
-	v, _, _ := h.recheckGroup.Do(ref.Key(), func() (any, error) {
-		return h.runRechecks(flightCtx, ref, entry, log), nil
-	})
-	out, _ := v.(*recheckOutcome)
-	if out == nil {
-		return false
-	}
-	switch out.gate {
-	case gate.GateCVE:
-		log.Warn().Str("gate", gate.GateCVE).Msg("cached artifact failed re-check; evicted")
-		record(gate.VerdictBlock, gate.GateCVE, out.decision.Reason, http.StatusForbidden, func(ev *gate.Event) {
-			ev.BlockedBy = []string{out.blockedBy}
-			ev.CVEs = out.decision.Findings
-		})
-		h.writeCVEBlockedResponse(w, requestID, ref, out.decision)
-	case gate.GateMalware:
-		log.Warn().Str("gate", gate.GateMalware).Msg("cached artifact failed re-check; evicted")
-		record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
-			ev.BlockedBy = []string{"malware"}
-			ev.MalwareEngine = out.av.Engine
-			ev.MalwareSignature = out.av.Signature
-		})
-		h.writeMalwareBlockedResponse(w, requestID, ref, out.av.Engine, out.av.Signature)
-	}
-	return true
-}
-
-// runRechecks executes the expired-gate re-checks once per flight: CVE+policy
-// against current metadata, then malware against the cached bytes (cheap
-// metadata check first). Evicts on a block; bumps a gate's timestamp only on
-// a passed check.
-func (h *Handler) runRechecks(ctx context.Context, ref *gate.PackageRef, entry *gate.ArtifactEntry, log zerolog.Logger) *recheckOutcome {
-	now := time.Now()
-
-	if h.cfg.CVERecheckTTL > 0 && h.cfg.CVEScanner != nil && h.cfg.Policy != nil &&
-		now.Sub(entry.LastCVECheck) > h.cfg.CVERecheckTTL {
-		res, err := h.cfg.CVEScanner.Scan(ctx, ref)
-		switch {
-		case err != nil:
-			log.Warn().Err(err).Msg("cve re-check failed; serving cached artifact")
-		default:
-			if decision := h.cfg.Policy.Evaluate(ref, res); !decision.Allowed {
-				h.evictRechecked(ref, log)
-				blockedBy := "cve"
-				if decision.Reason == gate.ReasonDenylisted {
-					blockedBy = "denylist"
-				}
-				return &recheckOutcome{gate: gate.GateCVE, blockedBy: blockedBy, decision: decision}
-			}
-			if err := h.cfg.Cache.MarkCVEChecked(ref, now); err != nil {
-				log.Warn().Err(err).Msg("marking CVE re-check")
-			}
-		}
-	}
-
-	if h.cfg.MalwareRecheckTTL > 0 && h.cfg.AVScanner != nil &&
-		now.Sub(entry.LastMalwareCheck) > h.cfg.MalwareRecheckTTL {
-		res, err := h.cfg.AVScanner.Scan(ctx, entry.ArtifactPath)
-		switch {
-		case err != nil:
-			log.Warn().Err(err).Msg("malware re-check failed; serving cached artifact")
-		case res.Incomplete:
-			// It scanned clean in full before; an engine giving up now (lower
-			// limits, a slow moment) is a failed re-check, retried next hit.
-			log.Warn().Str("signature", res.Signature).Msg("malware re-check incomplete; serving cached artifact")
-		case !res.Clean:
-			h.evictRechecked(ref, log)
-			return &recheckOutcome{gate: gate.GateMalware, blockedBy: "malware", av: res}
-		default:
-			if err := h.cfg.Cache.MarkMalwareChecked(ref, now); err != nil {
-				log.Warn().Err(err).Msg("marking malware re-check")
-			}
-		}
-	}
-	return nil
-}
-
-// evictRechecked removes a cached entry that failed a lazy re-check. Eviction
-// failure is logged but never blocks the block response.
-func (h *Handler) evictRechecked(ref *gate.PackageRef, log zerolog.Logger) {
-	if err := h.cfg.Cache.Invalidate(ref); err != nil {
-		log.Error().Err(err).Msg("evicting re-checked artifact")
-	}
-}
-
-// errArtifactTooLarge marks a download refused for exceeding
-// HandlerConfig.MaxArtifactBytes.
-var errArtifactTooLarge = errors.New("artifact exceeds the size cap")
+type recordOutcome func(verdict, gateName, reason string, status int, modify func(*gate.Event))
 
 // errNoUpstreams and errUnreadableRequestBody are local failures — nothing was
 // attempted upstream — so callers answer them directly instead of reporting an
@@ -617,72 +286,6 @@ func (h *Handler) proxyTransparent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// tryDownload downloads url to a temp file. Returns the temp path and the
-// response header on HTTP 200. statusCode is the upstream HTTP status (0 on
-// transport error). The caller removes the file.
-func (h *Handler) tryDownload(ctx context.Context, url string) (tmpPath string, header http.Header, statusCode int, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", nil, 0, err
-	}
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return "", nil, 0, fmt.Errorf("downloading %s: %w", upstream.SanitizeURL(url), err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("upstream returned HTTP %d for %s", resp.StatusCode, upstream.SanitizeURL(url))
-	}
-
-	max := h.cfg.MaxArtifactBytes
-	if max > 0 && resp.ContentLength > max {
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("%w: %d bytes", errArtifactTooLarge, resp.ContentLength)
-	}
-
-	tmp, err := os.CreateTemp(h.cfg.TempDir, "jo-ei-artifact-*")
-	if err != nil {
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("creating temp file: %w", err)
-	}
-	defer tmp.Close()
-	src := io.Reader(resp.Body)
-	if max > 0 {
-		src = io.LimitReader(resp.Body, max+1) // one byte over reveals an oversized body
-	}
-	written, err := io.Copy(tmp, src)
-	if err != nil {
-		os.Remove(tmp.Name())
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("writing temp file: %w", err)
-	}
-	if max > 0 && written > max {
-		os.Remove(tmp.Name())
-		return "", resp.Header, resp.StatusCode, fmt.Errorf("%w: over %d bytes", errArtifactTooLarge, max)
-	}
-	return tmp.Name(), resp.Header, resp.StatusCode, nil
-}
-
-// downloadFromUpstreams tries each candidate URL in order, returning the first
-// HTTP 200 with its response header. Every failed mirror is recorded in atts,
-// which is also returned as the error when no mirror succeeded — so the caller
-// can both log each attempt and ask atts.AllNotFound() whether the artifact was
-// merely absent (404) rather than unreachable (502). It does not itself guard
-// against an empty urls list — the caller owns that check — and an empty list
-// here simply returns a zero-length, non-nil atts as the error.
-func (h *Handler) downloadFromUpstreams(ctx context.Context, urls []string) (tmpPath string, header http.Header, atts upstream.Attempts, err error) {
-	for _, u := range urls {
-		start := time.Now()
-		path, hdr, status, derr := h.tryDownload(ctx, u)
-		if derr == nil {
-			return path, hdr, atts, nil
-		}
-		if errors.Is(derr, errArtifactTooLarge) {
-			// The same artifact is no smaller on another mirror.
-			return "", nil, atts, derr
-		}
-		atts.Add(u, status, derr, time.Since(start))
-	}
-	return "", nil, atts, atts
-}
-
 // serveFromCache streams the cached artifact to the response writer. It
 // returns an error only when the artifact cannot be opened (a 500 is written
 // in that case); streaming errors after headers are sent are logged only.
@@ -740,23 +343,36 @@ func (h *Handler) writeError(w http.ResponseWriter, requestID string, ref *gate.
 	h.writeJSON(w, requestID, status, body)
 }
 
-// writeMalwareBlockedResponse sends a 403 Forbidden response for a malware hit.
-func (h *Handler) writeMalwareBlockedResponse(w http.ResponseWriter, requestID string, ref *gate.PackageRef, engine, signature string) {
+// blockMalware records the finding and sends a 403 Forbidden response.
+func (h *Handler) blockMalware(w http.ResponseWriter, requestID string, ref *gate.PackageRef, result *gate.AVResult, record recordOutcome) {
+	record(gate.VerdictBlock, gate.GateMalware, "malware_found", http.StatusForbidden, func(ev *gate.Event) {
+		ev.BlockedBy = []string{"malware"}
+		ev.MalwareEngine = result.Engine
+		ev.MalwareSignature = result.Signature
+	})
 	body := map[string]any{
 		"error":      "package_blocked",
 		"package":    ref.Name,
 		"version":    ref.Version,
 		"reason":     "malware_found",
-		"engine":     engine,
-		"signature":  signature,
+		"engine":     result.Engine,
+		"signature":  result.Signature,
 		"blocked_by": []string{"malware_scanner"},
 		"request_id": requestID,
 	}
 	h.writeJSON(w, requestID, http.StatusForbidden, body)
 }
 
-// writeCVEBlockedResponse sends a 403 Forbidden response with CVE details.
-func (h *Handler) writeCVEBlockedResponse(w http.ResponseWriter, requestID string, ref *gate.PackageRef, d gate.PolicyDecision) {
+// blockCVE records the policy decision and sends a 403 Forbidden response.
+func (h *Handler) blockCVE(w http.ResponseWriter, requestID string, ref *gate.PackageRef, d gate.PolicyDecision, record recordOutcome) {
+	blockedBy := "cve"
+	if d.Reason == gate.ReasonDenylisted {
+		blockedBy = "denylist"
+	}
+	record(gate.VerdictBlock, gate.GateCVE, d.Reason, http.StatusForbidden, func(ev *gate.Event) {
+		ev.BlockedBy = []string{blockedBy}
+		ev.CVEs = d.Findings
+	})
 	type findingJSON struct {
 		ID       string  `json:"id"`
 		Severity string  `json:"severity"`

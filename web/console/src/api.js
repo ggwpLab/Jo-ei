@@ -31,7 +31,7 @@
   };
 
   const J = (window.JOEI = {
-    ECO, GATES, CVES: {},
+    ECO, GATES,
     requests: [],
     quarantine: [],
     daily: [], // per-UTC-day metric rows, oldest-first (for left→right sparklines)
@@ -168,16 +168,9 @@
     return res.json();
   }
 
-  /* Convert a wire event into the row shape the screens render. CVE details
-     are registered into J.CVES so the drawer can look them up by id. */
+  /* Convert a wire event into the row shape the screens render. */
   function reviveEvent(e) {
     const r = { ...e, ts: new Date(e.ts) };
-    if (r.cves) {
-      r.cves = r.cves.map((c) => {
-        J.CVES[c.id] = { id: c.id, severity: c.severity, cvss: c.cvss || 0, summary: c.summary || "", source: "osv.dev" };
-        return c.id;
-      });
-    }
     if (r.supply) {
       r.supply.published_at = new Date(r.supply.published_at);
       if (r.supply.block_until) r.supply.block_until = new Date(r.supply.block_until);

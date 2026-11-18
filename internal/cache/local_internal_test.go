@@ -105,27 +105,6 @@ func writeTemp(t *testing.T, content string) string {
 	return p
 }
 
-func TestLocalCache_EvictToSizeRemovesEntries(t *testing.T) {
-	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
-	require.NoError(t, err)
-	defer lc.Close()
-
-	for _, n := range []string{"a", "b", "c"} {
-		ref := &gate.PackageRef{Ecosystem: "pypi", Name: n, Version: "1.0"}
-		require.NoError(t, lc.Put(ref, writeTemp(t, "data-"+n), true, ""))
-	}
-	before, err := lc.index.Count(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, int64(3), before)
-
-	// 1-byte budget forces eviction of everything over the limit.
-	lc.evictToSize(context.Background(), 1)
-
-	after, err := lc.index.Count(context.Background())
-	require.NoError(t, err)
-	require.Less(t, after, before)
-}
-
 func TestLocalCache_StatsReportsStaleBytes(t *testing.T) {
 	lc, err := NewLocalCache(LocalCacheConfig{RootPath: t.TempDir(), MaxSizeGB: 1, StaleAfter: time.Hour})
 	require.NoError(t, err)
@@ -192,6 +171,7 @@ func TestLocalCache_EvictionsAreCounted(t *testing.T) {
 	}
 	before, err := lc.index.Count(context.Background())
 	require.NoError(t, err)
+	require.Equal(t, int64(3), before)
 
 	lc.evictToSize(context.Background(), 1)
 

@@ -1,7 +1,9 @@
 package proxy_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -48,30 +50,30 @@ func TestMux_StripsPrefixAndRoutesToPyPI(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestMux_UnknownPrefixReturns404(t *testing.T) {
-	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/rubygems/foo")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+func TestMux_UnknownPrefixes(t *testing.T) {
+	for _, tt := range []struct {
+		path string
+		warn bool
+	}{
+		{"/rubygems/foo", true},
+		{"/.well-known/appspecific/com.chrome.devtools.json", false},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			var logs bytes.Buffer
+			mux := proxy.NewMux(nil, nil, zerolog.New(&logs))
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			assert.Equal(t, http.StatusNotFound, w.Code)
+			lines := logLines(t, &logs)
+			if tt.warn {
+				require.Len(t, lines, 1)
+				assert.Equal(t, "warn", lines[0]["level"])
+			} else {
+				assert.Empty(t, lines)
+			}
+		})
+	}
 }
-
-func TestMux_BrowserNoiseReturns404Quietly(t *testing.T) {
-	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	// /favicon.ico is served at the site root by the parent mux (see web
-	// package) and never reaches here; /.well-known/ probes are answered quietly.
-	resp, err := http.Get(srv.URL + "/.well-known/appspecific/com.chrome.devtools.json")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
 func TestMux_HealthEndpoint(t *testing.T) {
 	mux := proxy.NewMux(map[string]*proxy.Handler{}, nil, zerolog.Nop())
 	srv := httptest.NewServer(mux)
@@ -81,6 +83,9 @@ func TestMux_HealthEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var body map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, map[string]string{"status": "ok"}, body)
 }
 
 func TestMux_SetsRoutePrefix(t *testing.T) {

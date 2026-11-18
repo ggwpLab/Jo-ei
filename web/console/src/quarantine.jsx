@@ -3,7 +3,6 @@
 function QuarantineCard({ q, onAllowlist }) {
   const [, tick] = useState(0);
   useEffect(() => {
-    const enabled = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);

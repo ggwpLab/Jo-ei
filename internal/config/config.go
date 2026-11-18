@@ -303,12 +303,11 @@ type PolicyConfig struct {
 }
 
 type PolicyProfile struct {
-	CVEBlock         bool     `mapstructure:"cve_block"`
-	CVEMinSeverity   string   `mapstructure:"cve_min_severity"` // overrides CVEConfig.BlockOn when non-empty
-	SupplyChainBlock bool     `mapstructure:"supply_chain_block"`
-	MalwareBlock     bool     `mapstructure:"malware_block"`
-	Allowlist        []string `mapstructure:"allowlist"` // "pypi/requests" or "pypi/requests@2.31.0"
-	Denylist         []string `mapstructure:"denylist"`
+	CVEBlock       bool     `mapstructure:"cve_block"`
+	CVEMinSeverity string   `mapstructure:"cve_min_severity"` // overrides CVEConfig.BlockOn when non-empty
+	MalwareBlock   bool     `mapstructure:"malware_block"`
+	Allowlist      []string `mapstructure:"allowlist"` // "pypi/requests" or "pypi/requests@2.31.0"
+	Denylist       []string `mapstructure:"denylist"`
 }
 
 // CVEConfig configures the CVE scanner (osv.dev).

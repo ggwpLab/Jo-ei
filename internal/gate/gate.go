@@ -40,8 +40,6 @@ func (r PackageRef) Key() string {
 // PackageMetadata contains resolved metadata from the upstream registry.
 type PackageMetadata struct {
 	PublishedAt time.Time
-	Maintainer  string
-	License     string
 }
 
 // RegistryAdapter abstracts a specific package registry.

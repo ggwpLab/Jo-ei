@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Console history keeps CVE details on their original events; paging older
+  assessments no longer changes an already selected event.
+- Threat details display the recorded reason and gate, including failed cache
+  scans and unfamiliar reason codes.
+- Cached Docker manifest requests record one cache hit per lookup.
+
+### Changed
+
+- Removed the nonfunctional `supply_chain_block` profile setting and unused
+  S3 connection settings. Supply-chain enforcement uses `supply_chain.mode`;
+  the unsupported S3 backend still fails at startup.
+- Aligned Docker and CI on Go 1.26.11, including the GO-2026-6859 fix.
+
 ## [1.1.0] - 2026-11-08
 
 This release reduces the cost of serving cached packages and rewriting npm

@@ -90,8 +90,6 @@ func TestPyPIAdapter_FetchMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.WithinDuration(t, uploadTime, meta.PublishedAt, time.Second)
-	assert.Equal(t, "Kenneth Reitz", meta.Maintainer)
-	assert.Equal(t, "Apache-2.0", meta.License)
 }
 
 func TestPyPIAdapter_FetchMetadata_FallsBackToSecondUpstream(t *testing.T) {
