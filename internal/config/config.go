@@ -276,7 +276,6 @@ type SupplyChainConfig struct {
 type CacheConfig struct {
 	Backend      string             `mapstructure:"backend"` // local | s3
 	Local        LocalCache         `mapstructure:"local"`
-	S3           S3Cache            `mapstructure:"s3"`
 	Revalidation RevalidationConfig `mapstructure:"revalidation"`
 }
 
@@ -286,12 +285,6 @@ type LocalCache struct {
 	// StaleAfterDays marks entries idle this long as stale (reclaimable via
 	// console cleanup). ≤0 uses the default (30) applied at wiring.
 	StaleAfterDays int `mapstructure:"stale_after_days"`
-}
-
-type S3Cache struct {
-	Endpoint string `mapstructure:"endpoint"`
-	Bucket   string `mapstructure:"bucket"`
-	Region   string `mapstructure:"region"`
 }
 
 // RevalidationConfig sets per-gate TTLs for lazy re-validation of cache hits.

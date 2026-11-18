@@ -78,8 +78,6 @@ func NewGoAdapter(upstreams []string, opts ...Option) *GoAdapter {
 	}
 }
 
-func (a *GoAdapter) Name() string { return "go" }
-
 // NormalizeRequest intercepts module zip downloads (path contains "/@v/" and
 // ends ".zip"). list/.info/.mod/@latest requests are proxied transparently.
 // The case-encoded module path and version are decoded to canonical coordinates

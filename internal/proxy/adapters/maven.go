@@ -34,8 +34,6 @@ func NewMavenAdapter(upstreams []string, opts ...Option) *MavenAdapter {
 	}
 }
 
-func (a *MavenAdapter) Name() string { return "maven" }
-
 // NormalizeRequest intercepts artifact downloads: any file in a version
 // directory except the sidecars in mavenSidecarExts, which are proxied
 // transparently.

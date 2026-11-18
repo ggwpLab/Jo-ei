@@ -59,10 +59,6 @@ func TestGoAdapter_UpstreamURLs(t *testing.T) {
 	assert.Equal(t, "https://mirror.example.org/go/github.com/stretchr/testify/@v/list", urls[1])
 }
 
-func TestGoAdapter_Name(t *testing.T) {
-	assert.Equal(t, "go", adapters.NewGoAdapter(nil).Name())
-}
-
 func TestGoAdapter_FetchMetadata(t *testing.T) {
 	publishedAt := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -129,34 +129,6 @@ func (a *Adapter) fetchToken(ctx context.Context, challenge string) (string, err
 	return tok.AccessToken, nil
 }
 
-// ResolveDigest HEADs the manifest and returns the canonical content digest.
-// When no upstream yields one, the error is an upstream.Attempts carrying each
-// mirror's own outcome.
-func (a *Adapter) ResolveDigest(ctx context.Context, repo, ref string) (string, error) {
-	path := "/v2/" + repo + "/manifests/" + ref
-	var atts upstream.Attempts
-	for _, base := range a.upstreams {
-		start := time.Now()
-		resp, err := a.do(ctx, http.MethodHead, base, path, manifestAccept)
-		if err != nil {
-			atts.Add(base+path, 0, err, time.Since(start))
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			if dg := resp.Header.Get("Docker-Content-Digest"); dg != "" {
-				return dg, nil
-			}
-			atts.Add(base+path, resp.StatusCode,
-				fmt.Errorf("upstream omitted Docker-Content-Digest for %s/%s", repo, ref), time.Since(start))
-			continue
-		}
-		atts.Add(base+path, resp.StatusCode,
-			fmt.Errorf("HEAD manifest %s/%s: HTTP %d", repo, ref, resp.StatusCode), time.Since(start))
-	}
-	return "", atts
-}
-
 // FetchManifest fetches the raw manifest for ref (a tag or digest) and returns
 // its body, content type, and canonical digest. A multi-arch index is returned
 // as-is, NOT resolved to a platform: the Docker client performs platform

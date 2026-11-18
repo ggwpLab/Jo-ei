@@ -166,16 +166,3 @@ func TestIntegration_DryRunPassesNewPackage(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
-
-func TestIntegration_HealthEndpointAvailable(t *testing.T) {
-	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	defer registry.Close()
-
-	srv := newTestProxy(t, registry, "enforce")
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/health")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}

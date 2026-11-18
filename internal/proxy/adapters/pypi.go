@@ -47,8 +47,6 @@ func NewPyPIAdapter(upstreams []string, opts ...Option) *PyPIAdapter {
 	}
 }
 
-func (a *PyPIAdapter) Name() string { return "pypi" }
-
 // packagePathRe matches PyPI artifact download paths (e.g. /packages/...).
 var packagePathRe = regexp.MustCompile(`^/packages/`)
 
