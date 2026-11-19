@@ -116,12 +116,6 @@ type Sessions struct {
 // Option configures a Sessions.
 type Option func(*Sessions)
 
-// WithLoginLimiter sets the limiter that throttles failed logins and failed
-// current-password checks. Without it, Sessions uses its own limiter.
-func WithLoginLimiter(l *LoginLimiter) Option {
-	return func(s *Sessions) { s.limiter = l }
-}
-
 // WithClientIP sets how the client IP is derived from a request, for the
 // login limiter and logs. The default is the host part of RemoteAddr, which
 // is right only when no reverse proxy sits in front.
@@ -149,9 +143,7 @@ func NewSessions(store UserStore, signer *Signer, accessTTL, refreshTTL time.Dur
 	for _, o := range opts {
 		o(s)
 	}
-	if s.limiter == nil {
-		s.limiter = NewLoginLimiter(nil)
-	}
+	s.limiter = NewLoginLimiter(nil)
 	return s
 }
 

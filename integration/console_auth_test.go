@@ -21,12 +21,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ggwpLab/Jo-ei/internal/auth"
-	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/console"
 	"github.com/ggwpLab/Jo-ei/internal/policy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
-	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/storage"
 	"github.com/ggwpLab/Jo-ei/internal/storage/storagetest"
 	"github.com/ggwpLab/Jo-ei/internal/telemetry"
@@ -38,13 +36,8 @@ import (
 // session endpoints are public, and sessions.Middleware gates the rest of
 // /api/. An empty user store yields the locked (fail-closed) state. The console
 // handler logs into logBuf so attribution can be asserted.
-func authConsoleStack(t *testing.T, upstream *httptest.Server, userStore auth.UserStore, logBuf *bytes.Buffer) *httptest.Server {
+func authConsoleStack(t *testing.T, userStore auth.UserStore, logBuf *bytes.Buffer) *httptest.Server {
 	t.Helper()
-
-	dir := t.TempDir()
-	localCache, err := cache.NewLocalCache(cache.LocalCacheConfig{RootPath: dir, MaxSizeGB: 1, StaleAfter: 24 * time.Hour})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = localCache.Close() })
 
 	runtime := policy.NewRuntime(
 		config.SupplyChainConfig{Mode: "enforce", MinAgeHours: 24},
@@ -52,16 +45,7 @@ func authConsoleStack(t *testing.T, upstream *httptest.Server, userStore auth.Us
 	)
 	store := newTelemetryStore(t)
 	bcast := telemetry.NewBroadcaster()
-	hub := telemetry.NewHub(store, bcast)
-
-	handler := proxy.NewHandler(proxy.HandlerConfig{
-		Adapter:  adapters.NewPyPIAdapter([]string{upstream.URL}),
-		Filter:   runtime,
-		Cache:    cache.AsArtifactCache(localCache),
-		Logger:   zerolog.Nop(),
-		Recorder: hub,
-	})
-	mux := proxy.NewMux(map[string]*proxy.Handler{"pypi": handler}, nil, zerolog.Nop())
+	mux := proxy.NewMux(nil, nil, zerolog.Nop())
 
 	consoleLogger := zerolog.New(logBuf)
 
@@ -105,9 +89,7 @@ func testUsers(t *testing.T) *users.Store {
 }
 
 func TestConsoleAuth_ShellIsPublicButAPIIsNot(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
-	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+	srv := authConsoleStack(t, testUsers(t), &bytes.Buffer{})
 
 	shell, err := http.Get(srv.URL + "/console/")
 	require.NoError(t, err)
@@ -127,9 +109,7 @@ func TestConsoleAuth_ShellIsPublicButAPIIsNot(t *testing.T) {
 }
 
 func TestConsoleAuth_LoginThenCookieAccess(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
-	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+	srv := authConsoleStack(t, testUsers(t), &bytes.Buffer{})
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
@@ -156,9 +136,7 @@ func TestConsoleAuth_LoginThenCookieAccess(t *testing.T) {
 }
 
 func TestConsoleAuth_LoginThenBearerAccess(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
-	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+	srv := authConsoleStack(t, testUsers(t), &bytes.Buffer{})
 
 	login, err := http.Post(srv.URL+"/api/auth/login", "application/json",
 		strings.NewReader(`{"username":"admin","password":"s3cret"}`))
@@ -181,9 +159,7 @@ func TestConsoleAuth_LoginThenBearerAccess(t *testing.T) {
 }
 
 func TestConsoleAuth_RefreshKeepsSessionAliveAndLogoutEndsIt(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
-	srv := authConsoleStack(t, upstream, testUsers(t), &bytes.Buffer{})
+	srv := authConsoleStack(t, testUsers(t), &bytes.Buffer{})
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
@@ -236,9 +212,7 @@ func TestConsoleAuth_RefreshKeepsSessionAliveAndLogoutEndsIt(t *testing.T) {
 }
 
 func TestConsoleAuth_LockedReturns503(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
-	srv := authConsoleStack(t, upstream, emptyUserStore(t), &bytes.Buffer{}) // no users
+	srv := authConsoleStack(t, emptyUserStore(t), &bytes.Buffer{}) // no users
 
 	res, err := http.Get(srv.URL + "/api/overview")
 	require.NoError(t, err)
@@ -258,10 +232,8 @@ func TestConsoleAuth_LockedReturns503(t *testing.T) {
 }
 
 func TestConsoleAuth_PolicyChangeAttributed(t *testing.T) {
-	upstream := newTestRegistry(t, "fresh-pkg", "1.0.0", 1)
-	defer upstream.Close()
 	var logBuf bytes.Buffer
-	srv := authConsoleStack(t, upstream, testUsers(t), &logBuf)
+	srv := authConsoleStack(t, testUsers(t), &logBuf)
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)

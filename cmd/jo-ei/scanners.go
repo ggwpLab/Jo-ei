@@ -114,21 +114,21 @@ func buildScanners(a *app, cfg *config.Config, profile config.PolicyProfile, mx 
 		if base == "" {
 			base = defaultOSVBaseURL
 		}
-		healthMon.AddPassive("osv.dev", base, true, osvScanner.Health)
+		healthMon.AddPassive("osv.dev", base, osvScanner.Health)
 	}
 	scannerTypes := map[string]string{} // display name → type, for metric labels
 	for i, scfg := range cfg.Malware.Scanners {
 		scannerTypes[scfg.DisplayName()] = scfg.Type
 		if profile.MalwareBlock && i < len(avScanners) {
 			if pr, ok := avScanners[i].(scanner.Prober); ok {
-				healthMon.AddActive(scfg.DisplayName(), scfg.Address, true, pr.Probe)
+				healthMon.AddActive(scfg.DisplayName(), scfg.Address, pr.Probe)
 				continue
 			}
 		}
 		healthMon.AddDisabled(scfg.DisplayName(), scfg.Address)
 	}
 	if cfg.ImageScan.Enabled && sc.trivy != nil {
-		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, true, sc.trivy.Probe)
+		healthMon.AddActive("trivy", cfg.ImageScan.TrivyServer, sc.trivy.Probe)
 	}
 	healthMon.Start()
 	a.onClose(healthMon.Close)

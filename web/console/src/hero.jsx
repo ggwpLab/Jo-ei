@@ -94,7 +94,7 @@ function useGateFlow(enabled) {
     return "idle";
   });
 
-  return { cur, idle, step, leftPct, atGate, tokenState, glow };
+  return { cur, idle, leftPct, tokenState, glow };
 }
 
 /* ---------- Treatment 1: PROCESSION ---------- */

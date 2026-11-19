@@ -18,7 +18,6 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
 )
 
@@ -62,8 +61,6 @@ type dockerOKScanner struct{}
 func (dockerOKScanner) ScanImage(context.Context, string) (*dockerproxy.ImageScanResult, error) {
 	return &dockerproxy.ImageScanResult{}, nil
 }
-
-func (dockerOKScanner) Health() health.Sample { return health.Sample{} }
 
 type dockerCleanAV struct{}
 

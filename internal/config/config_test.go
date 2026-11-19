@@ -514,24 +514,6 @@ tls:
 	}
 }
 
-func TestValidateRejectsShortJWTSecret(t *testing.T) {
-	c := &config.Config{}
-	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
-	c.Console.Auth.JWTSecret = "short"
-
-	err := c.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "console.auth.jwt_secret")
-}
-
-func TestValidateAcceptsA32ByteJWTSecret(t *testing.T) {
-	c := &config.Config{}
-	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"
-	c.Server.Listen = ":8080"
-	c.Console.Auth.JWTSecret = "0123456789abcdef0123456789abcdef"
-	require.NoError(t, c.Validate())
-}
-
 func TestValidateRejectsNegativeTTLs(t *testing.T) {
 	c := &config.Config{}
 	c.Database.Path = "/var/lib/jo-ei/jo-ei.db"

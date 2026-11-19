@@ -2,8 +2,8 @@
 
 const NAV = [
   { id: "overview", label: "Overview", icon: "overview" },
-  { id: "feed", label: "Live Feed", icon: "feed", badge: "live", live: true },
-  { id: "quarantine", label: "Quarantine", icon: "quar", gold: true },
+  { id: "feed", label: "Live Feed", icon: "feed", badge: "live" },
+  { id: "quarantine", label: "Quarantine", icon: "quar" },
   { id: "policy", label: "Policy", icon: "policy" },
   { id: "registries", label: "Registries & Cache", icon: "registry" },
   { id: "users", label: "Users", icon: "users", adminOnly: true },
@@ -255,9 +255,6 @@ function App() {
     window.addEventListener("joei:policy", onData);
     window.addEventListener("joei:connection", onConn);
     window.addEventListener("joei:auth", onAuth);
-    // The initial load can settle before this subscription exists (the
-    // fetches finish while Babel is still compiling the app), so the events
-    // above may already have fired into the void — sync from current state.
     if (JOEI.ready) onData();
     onConn();
     onAuth();
@@ -379,9 +376,7 @@ function App() {
             {Icons[n.icon]()}
             <span>{n.label}</span>
             {n.badge && (
-              n.live
-                ? <span className="nav-badge"><span className="dot live" style={{ display: "inline-block", width: 6, height: 6, borderRadius: 6, background: "var(--jade)", marginRight: 4 }}></span></span>
-                : <span className={`nav-badge ${n.gold ? "" : "danger"}`}>{n.badge}</span>
+              <span className="nav-badge"><span className="dot live" style={{ display: "inline-block", width: 6, height: 6, borderRadius: 6, background: "var(--jade)", marginRight: 4 }}></span></span>
             )}
           </button>
         ))}

@@ -16,7 +16,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 )
 
 // --- stubs ---
@@ -32,7 +31,6 @@ func (s stubScanner) ScanImage(_ context.Context, _ string) (*ImageScanResult, e
 	}
 	return &ImageScanResult{Findings: s.findings}, nil
 }
-func (s stubScanner) Health() health.Sample { return health.Sample{} }
 
 type stubAV struct{ infected bool }
 

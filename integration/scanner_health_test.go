@@ -27,7 +27,7 @@ func TestOverview_ReflectsDownScanner(t *testing.T) {
 	require.NoError(t, err)
 
 	mon := health.NewMonitor(20*time.Millisecond, 2*time.Second)
-	mon.AddActive("clamav", "tcp:127.0.0.1:1", true, sc.Probe)
+	mon.AddActive("clamav", "tcp:127.0.0.1:1", sc.Probe)
 	mon.Start()
 	defer mon.Close()
 
