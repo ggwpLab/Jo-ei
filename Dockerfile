@@ -1,5 +1,5 @@
 # Trivy CLI for the Docker registry image scanner (client/server mode).
-FROM aquasec/trivy:0.76.1 AS trivy
+FROM aquasec/trivy:0.76.2 AS trivy
 
 # Build stage
 # Pinned to go.mod's toolchain line, so the image is built with exactly the Go
