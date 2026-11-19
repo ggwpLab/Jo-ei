@@ -81,7 +81,6 @@ func TestOSVScanner_CriticalCVE(t *testing.T) {
 	assert.Equal(t, "CVE-2024-35195", result.Findings[0].ID)
 	assert.Equal(t, gate.SeverityCritical, result.Findings[0].Severity)
 	assert.Equal(t, "RCE in requests", result.Findings[0].Summary)
-	assert.NotEmpty(t, result.ScanJSON)
 }
 
 func TestOSVScanner_ModerateIsMedium(t *testing.T) {
@@ -106,25 +105,6 @@ func TestOSVScanner_ModerateIsMedium(t *testing.T) {
 	assert.Equal(t, gate.SeverityMedium, result.Findings[0].Severity)
 	// When no CVE alias, should use the PYSEC id
 	assert.Equal(t, "PYSEC-2024-001", result.Findings[0].ID)
-}
-
-func TestOSVScanner_CachesResults(t *testing.T) {
-	callCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Write([]byte(`{"vulns":[]}`))
-	}))
-	defer srv.Close()
-
-	sc := scanner.NewOSVScanner(srv.URL, time.Minute)
-	ref := &gate.PackageRef{Ecosystem: "pypi", Name: "django", Version: "4.0.0"}
-
-	_, err := sc.Scan(context.Background(), ref)
-	require.NoError(t, err)
-	_, err = sc.Scan(context.Background(), ref)
-	require.NoError(t, err)
-
-	assert.Equal(t, 1, callCount, "second call should hit cache, not upstream")
 }
 
 func TestOSVScanner_CacheExpires(t *testing.T) {

@@ -9,11 +9,9 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 )
 
 // commandRunner runs an external command and returns its stdout. Injectable for
@@ -46,11 +44,6 @@ type TrivyScanner struct {
 	timeout    time.Duration
 	run        commandRunner
 	httpClient *http.Client
-
-	healthMu      sync.Mutex
-	healthOK      bool
-	healthHasData bool
-	healthLatency time.Duration
 }
 
 // NewTrivyScanner creates a scanner that shells out to the real trivy binary.
@@ -97,9 +90,7 @@ func (s *TrivyScanner) ScanImage(ctx context.Context, imageRef string) (*ImageSc
 		"--scanners", s.scanners,
 		imageRef,
 	}
-	start := time.Now()
 	out, err := s.run(ctx, "trivy", args...)
-	s.recordHealth(time.Since(start), err)
 	if err != nil {
 		return nil, fmt.Errorf("running trivy for %s: %w", imageRef, err)
 	}
@@ -119,21 +110,6 @@ func (s *TrivyScanner) ScanImage(ctx context.Context, imageRef string) (*ImageSc
 		}
 	}
 	return &ImageScanResult{Findings: findings}, nil
-}
-
-func (s *TrivyScanner) recordHealth(latency time.Duration, err error) {
-	s.healthMu.Lock()
-	s.healthLatency = latency
-	s.healthOK = err == nil
-	s.healthHasData = true
-	s.healthMu.Unlock()
-}
-
-// Health reports the outcome of the last scan as a passive sample.
-func (s *TrivyScanner) Health() health.Sample {
-	s.healthMu.Lock()
-	defer s.healthMu.Unlock()
-	return health.Sample{OK: s.healthOK, Latency: s.healthLatency, HasData: s.healthHasData}
 }
 
 // Probe checks Trivy server liveness via its /healthz endpoint (returns "ok"

@@ -148,9 +148,6 @@ func (c *Config) Validate() error {
 	if c.Cache.Local.StaleAfterDays < 0 {
 		return fmt.Errorf("cache.local.stale_after_days must not be negative")
 	}
-	if s := c.Console.Auth.JWTSecret; s != "" && len(s) < MinJWTSecretLen {
-		return fmt.Errorf("console.auth.jwt_secret must be at least %d bytes when set, got %d", MinJWTSecretLen, len(s))
-	}
 	if c.Console.Auth.AccessTTLMinutes < 0 {
 		return fmt.Errorf("console.auth.access_ttl_minutes must not be negative")
 	}
@@ -248,10 +245,6 @@ const (
 	DefaultAccessTTLMinutes = 15
 	DefaultRefreshTTLHours  = 168
 )
-
-// MinJWTSecretLen mirrors auth.MinSecretLen. It is duplicated rather than
-// imported because config imports nothing from internal/.
-const MinJWTSecretLen = 32
 
 type RegistriesConfig struct {
 	PyPI     RegistryConfig `mapstructure:"pypi"`

@@ -231,7 +231,6 @@ type CVEFinding struct {
 type ScanResult struct {
 	Clean    bool         // true iff Findings is empty
 	Findings []CVEFinding // all findings regardless of threshold
-	ScanJSON string       // raw JSON for storage in cache audit log
 }
 
 // CVEScanner scans a package for known vulnerabilities.

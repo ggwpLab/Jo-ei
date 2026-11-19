@@ -141,10 +141,7 @@ func (i *instrumentedImageScanner) ScanImage(ctx context.Context, imageRef strin
 	return res, err
 }
 
-func (i *instrumentedImageScanner) Health() health.Sample { return i.inner.Health() }
-
-// WrapImageScanner instruments s as the given engine and forwards Health. A
-// nil *Metrics returns s unchanged.
+// WrapImageScanner instruments s as the given engine. A nil *Metrics returns s unchanged.
 func (m *Metrics) WrapImageScanner(engine string, s dockerproxy.ImageScanner) dockerproxy.ImageScanner {
 	if m == nil {
 		return s

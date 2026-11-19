@@ -39,9 +39,6 @@ func TestTrivyScannerParsesFindings(t *testing.T) {
 	if res.Findings[0].ID != "CVE-2021-1" || res.Findings[0].Severity != gate.SeverityHigh {
 		t.Errorf("finding[0] = %+v", res.Findings[0])
 	}
-	if !s.Health().OK || !s.Health().HasData {
-		t.Errorf("health after success = %+v", s.Health())
-	}
 }
 
 func TestTrivyScannerFailClosedOnError(t *testing.T) {
@@ -51,9 +48,6 @@ func TestTrivyScannerFailClosedOnError(t *testing.T) {
 	s := NewTrivyScannerWithRunner("http://trivy:4954", "vuln", time.Second, run)
 	if _, err := s.ScanImage(context.Background(), "x@sha256:y"); err == nil {
 		t.Fatal("expected error from failing trivy run")
-	}
-	if s.Health().OK {
-		t.Error("health should be not-OK after failure")
 	}
 }
 

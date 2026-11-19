@@ -51,7 +51,7 @@ func TestMonitor_DisabledIsOff(t *testing.T) {
 
 func TestMonitor_ActiveUnknownBeforeStart(t *testing.T) {
 	m := NewMonitor(time.Minute, 2*time.Second)
-	m.AddActive("clamav", "tcp:host:3310", true, func(context.Context) error { return nil })
+	m.AddActive("clamav", "tcp:host:3310", func(context.Context) error { return nil })
 	snap := m.Snapshot()
 	require.Len(t, snap, 1)
 	assert.Equal(t, StatusUnknown, snap[0].Status)
@@ -60,8 +60,8 @@ func TestMonitor_ActiveUnknownBeforeStart(t *testing.T) {
 
 func TestMonitor_ActiveOKAndDown(t *testing.T) {
 	m := NewMonitor(20*time.Millisecond, 2*time.Second)
-	m.AddActive("good", "a", true, func(context.Context) error { return nil })
-	m.AddActive("bad", "b", true, func(context.Context) error { return errFail })
+	m.AddActive("good", "a", func(context.Context) error { return nil })
+	m.AddActive("bad", "b", func(context.Context) error { return errFail })
 	m.Start()
 	defer m.Close()
 	require.Eventually(t, func() bool {
@@ -74,7 +74,7 @@ func TestMonitor_PassiveReadsLive(t *testing.T) {
 	m := NewMonitor(time.Minute, 2*time.Second)
 	var sample atomic.Value
 	sample.Store(Sample{HasData: false})
-	m.AddPassive("osv.dev", "https://api.osv.dev", true, func() Sample {
+	m.AddPassive("osv.dev", "https://api.osv.dev", func() Sample {
 		return sample.Load().(Sample)
 	})
 	assert.Equal(t, StatusUnknown, m.Snapshot()[0].Status)
@@ -87,7 +87,7 @@ func TestMonitor_PassiveReadsLive(t *testing.T) {
 func TestMonitor_Refreshes(t *testing.T) {
 	m := NewMonitor(20*time.Millisecond, 2*time.Second)
 	var ok atomic.Bool
-	m.AddActive("flappy", "a", true, func(context.Context) error {
+	m.AddActive("flappy", "a", func(context.Context) error {
 		if ok.Load() {
 			return nil
 		}
@@ -103,7 +103,7 @@ func TestMonitor_Refreshes(t *testing.T) {
 func TestMonitor_CloseStopsProbing(t *testing.T) {
 	m := NewMonitor(10*time.Millisecond, 2*time.Second)
 	var calls atomic.Int64
-	m.AddActive("x", "a", true, func(context.Context) error { calls.Add(1); return nil })
+	m.AddActive("x", "a", func(context.Context) error { calls.Add(1); return nil })
 	m.Start()
 	require.Eventually(t, func() bool { return calls.Load() > 0 }, time.Second, 5*time.Millisecond)
 	require.NoError(t, m.Close())
@@ -123,7 +123,7 @@ func TestMonitor_AddAfterStartPanics(t *testing.T) {
 
 func TestMonitor_DoubleStartIsSafe(t *testing.T) {
 	m := NewMonitor(time.Minute, time.Second)
-	m.AddActive("x", "a", true, func(context.Context) error { return nil })
+	m.AddActive("x", "a", func(context.Context) error { return nil })
 	m.Start()
 	m.Start() // must not spawn a second goroutine or panic
 	assert.NoError(t, m.Close())

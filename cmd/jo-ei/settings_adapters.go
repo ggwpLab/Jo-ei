@@ -67,11 +67,7 @@ func applyStoredRegistries(cfg *config.Config, st *settings.Store) error {
 		return err
 	}
 	if !ok {
-		seed, err := json.Marshal(registryInfo(cfg))
-		if err != nil {
-			return err
-		}
-		return st.Put("registries", seed)
+		return registrySettingsStore{s: st}.SaveRegistries(registryInfo(cfg))
 	}
 	for _, ri := range stored {
 		rc := config.RegistryConfig{Enabled: ri.Enabled, Upstreams: ri.Upstreams}

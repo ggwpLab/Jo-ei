@@ -31,7 +31,7 @@
   };
 
   const J = (window.JOEI = {
-    ECO, GATES,
+    ECO,
     requests: [],
     quarantine: [],
     daily: [], // per-UTC-day metric rows, oldest-first (for left→right sparklines)
@@ -558,7 +558,6 @@
     }
   }
 
-  J.load = load;
   J.savePolicy = savePolicy;
   J.editList = editList;
   J.changePassword = changePassword;

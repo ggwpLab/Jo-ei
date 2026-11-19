@@ -20,7 +20,6 @@ import (
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/config"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/proxy"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/adapters"
 	"github.com/ggwpLab/Jo-ei/internal/proxy/dockerproxy"
@@ -196,10 +195,6 @@ func (s *switchableImageScanner) ScanImage(context.Context, string) (*dockerprox
 		return &dockerproxy.ImageScanResult{Findings: []gate.CVEFinding{{ID: "CVE-2026-7", Severity: gate.SeverityCritical}}}, nil
 	}
 	return &dockerproxy.ImageScanResult{}, nil
-}
-
-func (s *switchableImageScanner) Health() health.Sample {
-	return health.Sample{OK: true, HasData: true}
 }
 
 type blockFindingsPolicy struct{}

@@ -208,7 +208,6 @@ input, select, textarea { font-family: inherit; }
   background: var(--gold-t);
   color: var(--gold-l);
 }
-.nav-badge.danger { background: var(--vermilion-t); color: var(--vermilion-l); }
 
 .sidebar-foot {
   margin-top: auto;

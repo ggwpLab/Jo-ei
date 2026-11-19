@@ -41,10 +41,6 @@ type fakeImage struct {
 func (f fakeImage) ScanImage(context.Context, string) (*dockerproxy.ImageScanResult, error) {
 	return f.res, f.err
 }
-func (f fakeImage) Health() health.Sample {
-	return health.Sample{OK: true, HasData: true, Latency: 7 * time.Millisecond}
-}
-
 func scanCount(t *testing.T, m *Metrics, scanner, engine, result string) float64 {
 	t.Helper()
 	return testutil.ToFloat64(m.scanner.scans.WithLabelValues(scanner, engine, result))
@@ -98,11 +94,10 @@ func TestWrapCVEScanner_Detected(t *testing.T) {
 	assert.Equal(t, 1.0, scanCount(t, m, "osv", "osv", "detected"))
 }
 
-func TestWrapImageScanner_ForwardsHealth(t *testing.T) {
+func TestWrapImageScanner_Detected(t *testing.T) {
 	m := New(BuildInfo{}, zerolog.Nop())
 	f := fakeImage{res: &dockerproxy.ImageScanResult{Findings: []gate.CVEFinding{{}}}}
 	w := m.WrapImageScanner("trivy", f)
-	assert.Equal(t, f.Health(), w.Health())
 	_, err := w.ScanImage(context.Background(), "alpine")
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, scanCount(t, m, "trivy", "trivy", "detected"))

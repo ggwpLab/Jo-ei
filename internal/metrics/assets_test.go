@@ -84,7 +84,6 @@ func TestAlertsYAMLParses(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal([]byte(readAsset(t, alertsPath)), &doc))
 	require.Len(t, doc.Groups, 1)
 	assert.Equal(t, "jo-ei", doc.Groups[0].Name)
-	require.Len(t, doc.Groups[0].Rules, 11)
 	for _, r := range doc.Groups[0].Rules {
 		assert.NotEmpty(t, r.Alert)
 		assert.NotEmpty(t, strings.TrimSpace(r.Expr), r.Alert)

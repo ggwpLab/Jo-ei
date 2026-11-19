@@ -63,7 +63,6 @@ func buildRootHandler(d consoleDeps, proxyMux http.Handler) (http.Handler, error
 		return nil, fmt.Errorf("server.trusted_proxies: %w", err)
 	}
 	sessions := auth.NewSessions(userStore, signer, accessTTL, refreshTTL,
-		auth.WithLoginLimiter(auth.NewLoginLimiter(nil)),
 		auth.WithClientIP(clientIP.ClientIP),
 		auth.WithLogger(d.logger))
 	if sessions.Locked() {

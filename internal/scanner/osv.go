@@ -213,13 +213,8 @@ func (s *OSVScanner) queryOSV(ctx context.Context, ref *gate.PackageRef) (*gate.
 		return nil, fmt.Errorf("decoding OSV response: %w", err)
 	}
 
-	return s.toScanResult(osvResp)
-}
-
-// toScanResult converts an OSV API response to a gate.ScanResult.
-func (s *OSVScanner) toScanResult(resp osvQueryResponse) (*gate.ScanResult, error) {
 	var findings []gate.CVEFinding
-	for _, v := range resp.Vulns {
+	for _, v := range osvResp.Vulns {
 		id := canonicalID(v.ID, v.Aliases)
 		findings = append(findings, gate.CVEFinding{
 			ID:       id,
@@ -229,15 +224,9 @@ func (s *OSVScanner) toScanResult(resp osvQueryResponse) (*gate.ScanResult, erro
 		})
 	}
 
-	scanJSON, err := json.Marshal(findings)
-	if err != nil {
-		return nil, fmt.Errorf("marshalling scan findings: %w", err)
-	}
-
 	return &gate.ScanResult{
 		Clean:    len(findings) == 0,
 		Findings: findings,
-		ScanJSON: string(scanJSON),
 	}, nil
 }
 

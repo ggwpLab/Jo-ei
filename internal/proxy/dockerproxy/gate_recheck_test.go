@@ -15,7 +15,6 @@ import (
 
 	"github.com/ggwpLab/Jo-ei/internal/cache"
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 	"github.com/ggwpLab/Jo-ei/internal/logx"
 )
 
@@ -37,8 +36,6 @@ type errScanner struct{}
 func (errScanner) ScanImage(context.Context, string) (*ImageScanResult, error) {
 	return nil, context.DeadlineExceeded
 }
-
-func (errScanner) Health() health.Sample { return health.Sample{} }
 
 // newRecheckGate builds a manifest gate over the shared fake registry with the
 // given TTL and scanner, returning the gate, its store, and the repo name.

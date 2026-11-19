@@ -85,8 +85,7 @@ type entry struct {
 	report Reporter // kindPassive
 
 	// kindActive only; guarded by Monitor.mu.
-	sample  Sample
-	sampled bool
+	sample Sample
 }
 
 // Monitor probes active scanners on a timer and classifies all registered
@@ -97,7 +96,7 @@ type Monitor struct {
 
 	entries []*entry // fixed after Start; safe to read without the lock
 
-	mu        sync.Mutex // guards each active entry's sample/sampled
+	mu        sync.Mutex // guards each active entry's sample
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -125,20 +124,20 @@ func (m *Monitor) assertNotStarted() {
 }
 
 // AddActive registers a socket scanner probed on the background timer.
-func (m *Monitor) AddActive(name, detail string, enabled bool, probe Probe) {
+func (m *Monitor) AddActive(name, detail string, probe Probe) {
 	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
-		meta:  ScannerHealth{Name: name, Detail: detail, Enabled: enabled},
+		meta:  ScannerHealth{Name: name, Detail: detail, Enabled: true},
 		kind:  kindActive,
 		probe: probe,
 	})
 }
 
 // AddPassive registers an engine that reports its own last outcome.
-func (m *Monitor) AddPassive(name, detail string, enabled bool, report Reporter) {
+func (m *Monitor) AddPassive(name, detail string, report Reporter) {
 	m.assertNotStarted()
 	m.entries = append(m.entries, &entry{
-		meta:   ScannerHealth{Name: name, Detail: detail, Enabled: enabled, Passive: true},
+		meta:   ScannerHealth{Name: name, Detail: detail, Enabled: true, Passive: true},
 		kind:   kindPassive,
 		report: report,
 	})
@@ -196,7 +195,7 @@ func (m *Monitor) probeAll() {
 		cancel()
 		s := Sample{OK: err == nil, Latency: time.Since(start), HasData: true}
 		m.mu.Lock()
-		e.sample, e.sampled = s, true
+		e.sample = s
 		m.mu.Unlock()
 	}
 }
@@ -214,13 +213,9 @@ func (m *Monitor) Snapshot() []ScannerHealth {
 			sh.Status, sh.LatencyMS = classify(e.report(), m.slow)
 		case kindActive:
 			m.mu.Lock()
-			sampled, sample := e.sampled, e.sample
+			sample := e.sample
 			m.mu.Unlock()
-			if !sampled {
-				sh.Status, sh.LatencyMS = StatusUnknown, 0
-			} else {
-				sh.Status, sh.LatencyMS = classify(sample, m.slow)
-			}
+			sh.Status, sh.LatencyMS = classify(sample, m.slow)
 		}
 		out = append(out, sh)
 	}

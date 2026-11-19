@@ -8,7 +8,6 @@ import (
 	"context"
 
 	"github.com/ggwpLab/Jo-ei/internal/gate"
-	"github.com/ggwpLab/Jo-ei/internal/health"
 )
 
 // ImageScanResult holds the vulnerability findings for a scanned image.
@@ -17,9 +16,7 @@ type ImageScanResult struct {
 }
 
 // ImageScanner scans a container image for vulnerabilities/secrets. imageRef is
-// "<host>/<repo>@<digest>". Implementations must be safe for concurrent use and
-// expose a passive health sample for the console.
+// "<host>/<repo>@<digest>". Implementations must be safe for concurrent use.
 type ImageScanner interface {
 	ScanImage(ctx context.Context, imageRef string) (*ImageScanResult, error)
-	Health() health.Sample
 }
