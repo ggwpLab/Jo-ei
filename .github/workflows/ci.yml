@@ -35,7 +35,7 @@ jobs:
           fi
       - name: Build
         run: go build ./...
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Console behavior tests
